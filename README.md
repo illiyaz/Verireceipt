@@ -315,44 +315,87 @@ This section documents the rules currently implemented in the VeriReceipt v1 eng
 
 ## 🗺 Roadmap
 
-### **Phase 1 — Core Foundations (In Progress)**
+### **Phase 1 — Core Foundations (✅ COMPLETE)**
 - [x] Project setup  
 - [x] Ingestion + OCR pipeline  
 - [x] Metadata extraction  
-- [ ] Feature engineering  
-- [ ] Rule engine v1  
+- [x] Feature engineering (14 fraud rules)
+- [x] Rule engine v1  
+- [x] FastAPI backend with 6 endpoints
+- [x] Docker deployment setup
+- [x] Human feedback loop & ML training
 
-### **Phase 2 — AI Integration**
-- [ ] Collect dataset (real + fake receipts)
-- [ ] Fine-tune DONUT model
+### **Phase 2 — AI Integration (In Progress)**
+- [x] Human-in-the-loop learning system
+- [x] ML model training from feedback
+- [ ] Collect diverse dataset (real + fake receipts)
+- [ ] Fine-tune DONUT model for document understanding
 - [ ] Evaluation + accuracy tuning
 - [ ] Introduce image forensics model
 
 ### **Phase 3 — Production System**
-- [ ] FastAPI backend
-- [ ] Docker deployment
-- [ ] Enterprise-grade logging & monitoring
+- [x] FastAPI backend
+- [x] Docker deployment
+- [x] Analysis logging & monitoring
 - [ ] Web dashboard for finance teams
+- [ ] Authentication & authorization
+- [ ] Rate limiting
 
 ### **Phase 4 — Commercialization**
 - [ ] Multi-tenant SaaS support
 - [ ] API rate limiting & auth
 - [ ] Billing & usage metering
+- [ ] Marketplace integrations (Expensify, Concur)
 
 ---
 
-## 📘 API Documentation (Placeholder)
+## 📘 API Documentation
 
-The API documentation for VeriReceipt will be added here.
+VeriReceipt provides a complete REST API for receipt analysis and feedback collection.
 
-This section will cover:
-- Receipt upload API
-- Fraud scoring API
-- Health check API
-- Authentication and rate limiting (future)
-- Response schemas and examples
+### Quick Start
 
-Coming soon.
+```bash
+# Start the API server
+python run_api.py
+
+# Access interactive documentation
+# Swagger UI: http://localhost:8080/docs
+# ReDoc: http://localhost:8080/redoc
+```
+
+### Key Endpoints
+
+- **POST /analyze** - Analyze single receipt
+- **POST /analyze/batch** - Batch analysis (up to 50 receipts)
+- **GET /stats** - Get aggregate statistics
+- **POST /feedback** - Submit human feedback for learning
+- **GET /health** - Health check
+
+### Documentation
+
+- **[API Guide](API_GUIDE.md)** - Complete API reference with examples
+- **[Human Feedback Guide](HUMAN_FEEDBACK_GUIDE.md)** - Learning system documentation
+
+### Example Usage
+
+```python
+import requests
+
+# Analyze a receipt
+with open("receipt.jpg", "rb") as f:
+    response = requests.post("http://localhost:8080/analyze", files={"file": f})
+    result = response.json()
+    print(f"Label: {result['label']}, Score: {result['score']}")
+
+# Submit feedback
+feedback = {
+    "analysis_ref": "receipt.jpg",
+    "given_label": "fake",
+    "comment": "Verified as fabricated"
+}
+requests.post("http://localhost:8080/feedback", json=feedback)
+```
 
 ---
 

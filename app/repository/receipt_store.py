@@ -128,15 +128,48 @@ class CsvReceiptStore(ReceiptStore):
         reason_code: Optional[str] = None,
     ) -> Any:
         """
-        Placeholder for CSV feedback logging.
-
-        For a minimal v1, we can append feedback into a separate CSV, e.g.,
-        data/logs/feedback.csv (not yet implemented).
-
-        For now, we simply no-op and return None.
+        Log human feedback to CSV for later ML training.
+        
+        Feedback is saved to data/logs/feedback.csv with:
+        - Original engine prediction
+        - Human-corrected label
+        - Reviewer information
+        - Comments and reason codes
         """
-        # TODO: implement feedback logging to CSV (similar to log_decision)
-        raise NotImplementedError("Feedback not yet implemented for CSV backend")
+        from app.utils.feedback_logger import log_feedback
+        
+        # Try to get original engine prediction from decisions.csv
+        engine_label = None
+        engine_score = None
+        
+        try:
+            import csv
+            from pathlib import Path
+            
+            decisions_file = Path("data/logs/decisions.csv")
+            if decisions_file.exists():
+                with open(decisions_file, "r", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        if row.get("file_path") == str(analysis_identifier):
+                            engine_label = row.get("label")
+                            engine_score = float(row.get("score", 0.0))
+                            break
+        except Exception:
+            pass
+        
+        timestamp = log_feedback(
+            analysis_ref=str(analysis_identifier),
+            given_label=given_label,
+            engine_label=engine_label,
+            engine_score=engine_score,
+            receipt_ref=str(receipt_identifier) if receipt_identifier else None,
+            reviewer_id=reviewer_id,
+            comment=comment,
+            reason_code=reason_code,
+        )
+        
+        return timestamp
 
     def get_statistics(self) -> dict:
         """
