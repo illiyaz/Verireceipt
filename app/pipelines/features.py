@@ -21,6 +21,17 @@ SUSPICIOUS_PRODUCERS = {
     "pdfescape",
     "dochub",
     "foxit",
+    # PDF generators (commonly used for fake invoices)
+    "tcpdf",           # PHP PDF library
+    "fpdf",            # Another PHP PDF library
+    "dompdf",          # PHP HTML to PDF
+    "wkhtmltopdf",     # HTML to PDF converter
+    # Invoice/receipt generators
+    "conta.com",       # Invoice generator
+    "invoice generator",
+    "receipt maker",
+    "fake receipt",
+    "invoice maker",
 }
 
 
@@ -134,6 +145,12 @@ _DATE_REGEXES = [
     re.compile(r"\b([0-3]?\d)[/-]([0-1]?\d)[/-]((?:20)?\d{2})\b"),
     # 2025-11-12
     re.compile(r"\b(20\d{2})[-/]([0-1]?\d)[-/]([0-3]?\d)\b"),
+    # Nov 14, 2025 or Nov 14 2025
+    re.compile(r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+([0-3]?\d),?\s+(20\d{2})\b", re.I),
+    # 14 Nov 2025
+    re.compile(r"\b([0-3]?\d)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(20\d{2})\b", re.I),
+    # November 14, 2025
+    re.compile(r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+([0-3]?\d),?\s+(20\d{2})\b", re.I),
 ]
 
 
@@ -158,7 +175,13 @@ def _extract_receipt_date(text: str) -> Optional[str]:
             # Try to parse and normalize the date
             try:
                 # Try various date formats
-                for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y", "%d.%m.%Y", "%d %b %Y", "%d %B %Y"]:
+                formats = [
+                    "%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y", "%d.%m.%Y",
+                    "%d %b %Y", "%d %B %Y",  # 14 Nov 2025, 14 November 2025
+                    "%b %d, %Y", "%b %d %Y",  # Nov 14, 2025, Nov 14 2025
+                    "%B %d, %Y", "%B %d %Y",  # November 14, 2025
+                ]
+                for fmt in formats:
                     try:
                         parsed = datetime.strptime(date_str, fmt)
                         return parsed.strftime("%Y-%m-%d")  # Normalize to YYYY-MM-DD

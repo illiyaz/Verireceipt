@@ -186,12 +186,25 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
                 if isinstance(creation_date_raw, str):
                     # Try to parse string date
                     creation_date = None
-                    for fmt in ["%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y%m%d%H%M%S"]:
+                    
+                    # Handle PDF date format: D:20251130082231+00'00'
+                    if creation_date_raw.startswith('D:'):
                         try:
-                            creation_date = datetime.strptime(creation_date_raw.split()[0], fmt)
-                            break
+                            # Extract YYYYMMDD from D:YYYYMMDDHHMMSS...
+                            date_part = creation_date_raw[2:10]  # Get YYYYMMDD
+                            creation_date = datetime.strptime(date_part, '%Y%m%d')
                         except:
-                            continue
+                            pass
+                    
+                    # Try standard formats if not PDF format or if parsing failed
+                    if not creation_date:
+                        for fmt in ["%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y%m%d%H%M%S"]:
+                            try:
+                                creation_date = datetime.strptime(creation_date_raw.split()[0], fmt)
+                                break
+                            except:
+                                continue
+                    
                     # If still None, try ISO format
                     if not creation_date:
                         try:
