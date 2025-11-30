@@ -10,7 +10,10 @@ from datetime import datetime
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+import asyncio
+import json as json_module
 
 from app.pipelines.rules import analyze_receipt
 from app.repository.receipt_store import get_receipt_store
@@ -496,3 +499,256 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         pass
     
     return HybridAnalyzeResponse(**results)
+
+
+# ---------- Streaming Analysis Endpoint ----------
+
+@app.post("/analyze/hybrid/stream", tags=["analysis"])
+async def analyze_hybrid_stream(file: UploadFile = File(...)):
+    """
+    Analyze receipt with real-time streaming updates.
+    
+    Returns Server-Sent Events (SSE) stream with updates as each engine completes:
+    - event: engine_start - When an engine starts
+    - event: engine_complete - When an engine finishes
+    - event: analysis_complete - Final hybrid verdict
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    import time as time_module
+    import queue
+    
+    # Save uploaded file
+    file_id = str(uuid.uuid4())
+    file_ext = Path(file.filename).suffix
+    temp_path = UPLOAD_DIR / f"{file_id}{file_ext}"
+    
+    try:
+        with open(temp_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save uploaded file: {str(e)}"
+        )
+    
+    # Queue for streaming updates
+    update_queue = queue.Queue()
+    
+    results = {
+        "rule_based": None,
+        "donut": None,
+        "vision_llm": None,
+        "hybrid_verdict": None,
+        "timing": {},
+        "engines_used": []
+    }
+    
+    def run_rule_based():
+        update_queue.put({"event": "engine_start", "engine": "rule-based"})
+        start = time_module.time()
+        try:
+            decision = analyze_receipt(str(temp_path))
+            elapsed = time_module.time() - start
+            result = {
+                "label": decision.label,
+                "score": decision.score,
+                "reasons": decision.reasons,
+                "minor_notes": decision.minor_notes,
+                "time_seconds": round(elapsed, 2)
+            }
+            update_queue.put({
+                "event": "engine_complete",
+                "engine": "rule-based",
+                "data": result
+            })
+            return result
+        except Exception as e:
+            error_result = {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
+            update_queue.put({
+                "event": "engine_complete",
+                "engine": "rule-based",
+                "data": error_result
+            })
+            return error_result
+    
+    def run_donut():
+        if not DONUT_AVAILABLE:
+            return {"error": "DONUT not available", "time_seconds": 0}
+        
+        update_queue.put({"event": "engine_start", "engine": "donut"})
+        start = time_module.time()
+        try:
+            data = extract_receipt_with_donut(str(temp_path))
+            elapsed = time_module.time() - start
+            result = {
+                "merchant": data.get("merchant"),
+                "total": data.get("total"),
+                "line_items_count": len(data.get("line_items", [])),
+                "data_quality": "good" if data.get("total") else "poor",
+                "time_seconds": round(elapsed, 2)
+            }
+            update_queue.put({
+                "event": "engine_complete",
+                "engine": "donut",
+                "data": result
+            })
+            return result
+        except Exception as e:
+            error_result = {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
+            update_queue.put({
+                "event": "engine_complete",
+                "engine": "donut",
+                "data": error_result
+            })
+            return error_result
+    
+    def run_vision():
+        if not VISION_AVAILABLE:
+            return {"error": "Vision LLM not available", "time_seconds": 0}
+        
+        update_queue.put({"event": "engine_start", "engine": "vision-llm"})
+        start = time_module.time()
+        try:
+            vision_results = analyze_receipt_with_vision(str(temp_path))
+            elapsed = time_module.time() - start
+            auth = vision_results.get("authenticity_assessment", {})
+            fraud = vision_results.get("fraud_detection", {})
+            result = {
+                "verdict": auth.get("verdict", "unknown"),
+                "confidence": auth.get("confidence", 0.0),
+                "authenticity_score": auth.get("authenticity_score", 0.0),
+                "fraud_indicators": fraud.get("fraud_indicators", []),
+                "reasoning": auth.get("reasoning", ""),
+                "time_seconds": round(elapsed, 2)
+            }
+            update_queue.put({
+                "event": "engine_complete",
+                "engine": "vision-llm",
+                "data": result
+            })
+            return result
+        except Exception as e:
+            error_result = {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
+            update_queue.put({
+                "event": "engine_complete",
+                "engine": "vision-llm",
+                "data": error_result
+            })
+            return error_result
+    
+    async def event_generator():
+        """Generate SSE events as engines complete."""
+        
+        # Send initial event
+        yield f"event: analysis_start\ndata: {json_module.dumps({'message': 'Starting 3-engine analysis'})}\n\n"
+        
+        # Start all engines in parallel
+        loop = asyncio.get_event_loop()
+        start_time = time_module.time()
+        
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            rule_future = loop.run_in_executor(executor, run_rule_based)
+            donut_future = loop.run_in_executor(executor, run_donut)
+            vision_future = loop.run_in_executor(executor, run_vision)
+            
+            # Stream updates as they come
+            engines_completed = 0
+            while engines_completed < 3:
+                try:
+                    # Check queue for updates (non-blocking with timeout)
+                    update = update_queue.get(timeout=0.1)
+                    
+                    event_type = update["event"]
+                    data = json_module.dumps(update)
+                    
+                    yield f"event: {event_type}\ndata: {data}\n\n"
+                    
+                    if event_type == "engine_complete":
+                        engines_completed += 1
+                        
+                except queue.Empty:
+                    # No updates, just continue
+                    await asyncio.sleep(0.1)
+            
+            # Wait for all futures to complete
+            results["rule_based"] = await rule_future
+            results["donut"] = await donut_future
+            results["vision_llm"] = await vision_future
+        
+        total_time = time_module.time() - start_time
+        results["timing"]["parallel_total_seconds"] = round(total_time, 2)
+        
+        # Track which engines were used
+        if not results["rule_based"].get("error"):
+            results["engines_used"].append("rule-based")
+        if not results["donut"].get("error"):
+            results["engines_used"].append("donut")
+        if not results["vision_llm"].get("error"):
+            results["engines_used"].append("vision-llm")
+        
+        # Generate hybrid verdict
+        hybrid = {
+            "final_label": "unknown",
+            "confidence": 0.0,
+            "recommended_action": "unknown",
+            "reasoning": []
+        }
+        
+        rule_label = results["rule_based"].get("label", "unknown")
+        rule_score = results["rule_based"].get("score", 0.5)
+        vision_verdict = results["vision_llm"].get("verdict", "unknown")
+        vision_confidence = results["vision_llm"].get("confidence", 0.0)
+        
+        # Simple hybrid logic
+        if rule_label == "real" and rule_score < 0.3:
+            if vision_verdict == "real" and vision_confidence > 0.7:
+                hybrid["final_label"] = "real"
+                hybrid["confidence"] = 0.95
+                hybrid["recommended_action"] = "approve"
+                hybrid["reasoning"].append("Both engines strongly indicate authentic receipt")
+            else:
+                hybrid["final_label"] = "real"
+                hybrid["confidence"] = 0.85
+                hybrid["recommended_action"] = "approve"
+                hybrid["reasoning"].append("Rule-based engine indicates real receipt")
+        elif rule_label == "fake" or rule_score > 0.7:
+            hybrid["final_label"] = "fake"
+            hybrid["confidence"] = 0.90
+            hybrid["recommended_action"] = "reject"
+            hybrid["reasoning"].append("High fraud score detected")
+        else:
+            if vision_verdict == "fake" and vision_confidence > 0.7:
+                hybrid["final_label"] = "fake"
+                hybrid["confidence"] = 0.85
+                hybrid["recommended_action"] = "reject"
+                hybrid["reasoning"].append("Vision model detected fraud indicators")
+            elif vision_verdict == "real" and vision_confidence > 0.8:
+                hybrid["final_label"] = "real"
+                hybrid["confidence"] = 0.80
+                hybrid["recommended_action"] = "approve"
+                hybrid["reasoning"].append("Vision model confirms authenticity")
+            else:
+                hybrid["final_label"] = "suspicious"
+                hybrid["confidence"] = 0.60
+                hybrid["recommended_action"] = "human_review"
+                hybrid["reasoning"].append("Uncertain - requires human review")
+        
+        results["hybrid_verdict"] = hybrid
+        
+        # Send final event with complete results
+        yield f"event: analysis_complete\ndata: {json_module.dumps(results)}\n\n"
+        
+        # Cleanup
+        try:
+            temp_path.unlink()
+        except:
+            pass
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no"
+        }
+    )
