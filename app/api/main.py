@@ -446,49 +446,78 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         "final_label": "unknown",
         "confidence": 0.0,
         "recommended_action": "unknown",
-        "reasoning": []
+        "reasoning": [],
+        "engines_completed": len(results["engines_used"]),
+        "total_engines": 3
     }
     
-    # Simple hybrid logic
-    rule_label = results["rule_based"].get("label", "unknown")
-    rule_score = results["rule_based"].get("score", 0.5)
-    vision_verdict = results["vision_llm"].get("verdict", "unknown")
-    vision_confidence = results["vision_llm"].get("confidence", 0.0)
+    # Check if all engines completed successfully
+    all_engines_completed = (
+        not results["rule_based"].get("error") and
+        not results["donut"].get("error") and
+        not results["vision_llm"].get("error")
+    )
     
-    # Combine signals
-    if rule_label == "real" and rule_score < 0.3:
-        if vision_verdict == "real" and vision_confidence > 0.7:
-            hybrid["final_label"] = "real"
-            hybrid["confidence"] = 0.95
-            hybrid["recommended_action"] = "approve"
-            hybrid["reasoning"].append("Both engines strongly indicate authentic receipt")
-        else:
-            hybrid["final_label"] = "real"
-            hybrid["confidence"] = 0.85
-            hybrid["recommended_action"] = "approve"
-            hybrid["reasoning"].append("Rule-based engine indicates real receipt")
-    elif rule_label == "fake" or rule_score > 0.7:
-        hybrid["final_label"] = "fake"
-        hybrid["confidence"] = 0.90
-        hybrid["recommended_action"] = "reject"
-        hybrid["reasoning"].append("High fraud score detected")
+    # If not all engines completed, flag for review
+    if not all_engines_completed:
+        hybrid["final_label"] = "incomplete"
+        hybrid["confidence"] = 0.0
+        hybrid["recommended_action"] = "retry_or_review"
+        
+        # Add reasoning for each failed engine
+        if results["rule_based"].get("error"):
+            hybrid["reasoning"].append(f"Rule-based engine failed: {results['rule_based']['error']}")
+        if results["donut"].get("error"):
+            hybrid["reasoning"].append(f"DONUT engine failed: {results['donut']['error']}")
+        if results["vision_llm"].get("error"):
+            hybrid["reasoning"].append(f"Vision LLM failed: {results['vision_llm']['error']}")
+        
+        if not hybrid["reasoning"]:
+            hybrid["reasoning"].append("One or more engines did not complete successfully")
     else:
-        # Suspicious case - use vision as tiebreaker
-        if vision_verdict == "fake" and vision_confidence > 0.7:
+        # All engines completed - generate hybrid verdict
+        rule_label = results["rule_based"].get("label", "unknown")
+        rule_score = results["rule_based"].get("score", 0.5)
+        vision_verdict = results["vision_llm"].get("verdict", "unknown")
+        vision_confidence = results["vision_llm"].get("confidence", 0.0)
+        donut_quality = results["donut"].get("data_quality", "unknown")
+        
+        # Combine signals from all 3 engines
+        if rule_label == "real" and rule_score < 0.3:
+            if vision_verdict == "real" and vision_confidence > 0.7:
+                hybrid["final_label"] = "real"
+                hybrid["confidence"] = 0.95
+                hybrid["recommended_action"] = "approve"
+                hybrid["reasoning"].append("All 3 engines indicate authentic receipt")
+                if donut_quality == "good":
+                    hybrid["reasoning"].append("DONUT confirmed good data quality")
+            else:
+                hybrid["final_label"] = "real"
+                hybrid["confidence"] = 0.85
+                hybrid["recommended_action"] = "approve"
+                hybrid["reasoning"].append("Rule-based engine indicates real receipt")
+        elif rule_label == "fake" or rule_score > 0.7:
             hybrid["final_label"] = "fake"
-            hybrid["confidence"] = 0.85
+            hybrid["confidence"] = 0.90
             hybrid["recommended_action"] = "reject"
-            hybrid["reasoning"].append("Vision model detected fraud indicators")
-        elif vision_verdict == "real" and vision_confidence > 0.8:
-            hybrid["final_label"] = "real"
-            hybrid["confidence"] = 0.80
-            hybrid["recommended_action"] = "approve"
-            hybrid["reasoning"].append("Vision model confirms authenticity")
+            hybrid["reasoning"].append("High fraud score detected by rule-based engine")
         else:
-            hybrid["final_label"] = "suspicious"
-            hybrid["confidence"] = 0.60
-            hybrid["recommended_action"] = "human_review"
-            hybrid["reasoning"].append("Uncertain - requires human review")
+            # Suspicious case - use vision as tiebreaker
+            if vision_verdict == "fake" and vision_confidence > 0.7:
+                hybrid["final_label"] = "fake"
+                hybrid["confidence"] = 0.85
+                hybrid["recommended_action"] = "reject"
+                hybrid["reasoning"].append("Vision model detected fraud indicators")
+            elif vision_verdict == "real" and vision_confidence > 0.8:
+                hybrid["final_label"] = "real"
+                hybrid["confidence"] = 0.80
+                hybrid["recommended_action"] = "approve"
+                hybrid["reasoning"].append("Vision model confirms authenticity")
+            else:
+                hybrid["final_label"] = "suspicious"
+                hybrid["confidence"] = 0.60
+                hybrid["recommended_action"] = "human_review"
+                hybrid["reasoning"].append("Uncertain - requires human review")
     
     results["hybrid_verdict"] = hybrid
     
