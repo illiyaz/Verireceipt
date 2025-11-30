@@ -247,7 +247,56 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
             # Date parsing failed - log but don't penalize
             minor_notes.append(f"Could not compare creation date vs receipt date: {str(e)}")
 
-    # --- 6. Normalize and classify ------------------------------------------
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 6: Visual quality indicators (computer-generated detection)
+    #
+    # These checks detect receipts that look too perfect to be real scans.
+    # Real scanned receipts have imperfections, while computer-generated ones
+    # (Canva, Photoshop, etc.) are too clean and uniform.
+    # ---------------------------------------------------------------------------
+
+    # R16: No metadata present (likely stripped by editing software)
+    # When images have EXIF but no useful metadata, it's suspicious
+    if source_type == "image":
+        exif_present = ff.get("exif_present", False)
+        exif_keys = ff.get("exif_keys_count", 0)
+        has_creator = bool(ff.get("creator") or ff.get("producer"))
+        
+        # Has EXIF but no creator/software info = metadata stripped
+        if exif_present and exif_keys > 0 and not has_creator:
+            score += 0.25
+            reasons.append(
+                "Image metadata appears stripped or minimal - common with edited/generated receipts."
+            )
+    
+    # R17: Extremely low OCR confidence / garbled text
+    # Computer-generated images often have poor OCR due to low resolution or compression
+    # Real scans usually have better OCR quality
+    avg_line_length = sum(len(line) for line in lf.get("lines", [])) / max(1, num_lines)
+    if avg_line_length < 10 and num_lines > 5:
+        score += 0.15
+        reasons.append(
+            "Very short average line length - may indicate low quality or synthetic image."
+        )
+    
+    # R18: No clear structure (missing merchant, total, date)
+    # Real receipts have clear structure, fake ones often miss key elements
+    missing_elements = []
+    if not tf.get("merchant_candidate"):
+        missing_elements.append("merchant")
+    if not tf.get("total_amount"):
+        missing_elements.append("total")
+    if not tf.get("has_date"):
+        missing_elements.append("date")
+    
+    if len(missing_elements) >= 2:
+        score += 0.20
+        reasons.append(
+            f"Missing multiple key elements ({', '.join(missing_elements)}) - "
+            f"unusual for legitimate receipts."
+        )
+
+    # --- 7. Normalize and classify ------------------------------------------
 
     # Clamp score to [0, 1]
     score = max(0.0, min(1.0, score))

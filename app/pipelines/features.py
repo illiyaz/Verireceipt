@@ -275,6 +275,7 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     file_features: Dict[str, Any] = {
         "file_size_bytes": raw.file_size_bytes,
         "num_pages": raw.num_pages,
+        "source_type": meta.get("source_type"),  # "pdf" or "image"
         "producer": producer,
         "creator": meta.get("creator"),
         "suspicious_producer": suspicious_producer,
@@ -328,6 +329,7 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         # Later we can add positional / block-based metrics.
         "num_lines": text_stats["num_lines"],
         "numeric_line_ratio": text_stats["numeric_line_ratio"],
+        "lines": lines,  # Store lines for visual quality checks
     }
 
     # --- Forensic-ish features ----------------------------------------------
