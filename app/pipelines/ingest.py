@@ -18,8 +18,34 @@ PDF_EXTS = {".pdf"}
 def _load_images_from_pdf(path: str, dpi: int = 300) -> List[Image.Image]:
     """
     Converts each page of a PDF into a PIL Image.
+    Tries pdf2image first (requires poppler), falls back to PyMuPDF if that fails.
     """
-    return convert_from_path(path, dpi=dpi)
+    try:
+        return convert_from_path(path, dpi=dpi)
+    except Exception as e:
+        # Fallback to PyMuPDF (fitz) if pdf2image fails
+        try:
+            import fitz  # PyMuPDF
+            doc = fitz.open(path)
+            images = []
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                # Render page to pixmap at specified DPI
+                zoom = dpi / 72  # 72 is default DPI
+                mat = fitz.Matrix(zoom, zoom)
+                pix = page.get_pixmap(matrix=mat)
+                # Convert to PIL Image
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                images.append(img)
+            doc.close()
+            return images
+        except ImportError:
+            raise Exception(
+                "Unable to process PDF. Please install either poppler (for pdf2image) "
+                "or PyMuPDF (pip install pymupdf). Error: " + str(e)
+            )
+        except Exception as e2:
+            raise Exception(f"Failed to load PDF with both pdf2image and PyMuPDF: {str(e2)}")
 
 
 def _load_image(path: str) -> Image.Image:
