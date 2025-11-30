@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 import time
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -449,8 +450,14 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         except Exception as e:
             return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
     
-    # Execute all 4 engines in parallel
+    # Execute all 4 engines in parallel with timeouts
     start_time = time_module.time()
+    
+    # Timeout configuration (seconds)
+    RULE_BASED_TIMEOUT = 30   # Fast engine
+    DONUT_TIMEOUT = 60        # Medium speed
+    LAYOUTLM_TIMEOUT = 60     # Medium speed
+    VISION_TIMEOUT = 90       # Slowest engine (Ollama can be slow)
     
     with ThreadPoolExecutor(max_workers=4) as executor:
         rule_future = executor.submit(run_rule_based)
@@ -458,10 +465,46 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         layoutlm_future = executor.submit(run_layoutlm)
         vision_future = executor.submit(run_vision)
         
-        results["rule_based"] = rule_future.result()
-        results["donut"] = donut_future.result()
-        results["layoutlm"] = layoutlm_future.result()
-        results["vision_llm"] = vision_future.result()
+        # Get results with timeouts to prevent hanging
+        try:
+            results["rule_based"] = rule_future.result(timeout=RULE_BASED_TIMEOUT)
+        except FuturesTimeoutError:
+            results["rule_based"] = {
+                "error": f"Timeout after {RULE_BASED_TIMEOUT}s - engine took too long",
+                "time_seconds": RULE_BASED_TIMEOUT
+            }
+        except Exception as e:
+            results["rule_based"] = {"error": str(e), "time_seconds": 0}
+        
+        try:
+            results["donut"] = donut_future.result(timeout=DONUT_TIMEOUT)
+        except FuturesTimeoutError:
+            results["donut"] = {
+                "error": f"Timeout after {DONUT_TIMEOUT}s - engine took too long",
+                "time_seconds": DONUT_TIMEOUT
+            }
+        except Exception as e:
+            results["donut"] = {"error": str(e), "time_seconds": 0}
+        
+        try:
+            results["layoutlm"] = layoutlm_future.result(timeout=LAYOUTLM_TIMEOUT)
+        except FuturesTimeoutError:
+            results["layoutlm"] = {
+                "error": f"Timeout after {LAYOUTLM_TIMEOUT}s - engine took too long",
+                "time_seconds": LAYOUTLM_TIMEOUT
+            }
+        except Exception as e:
+            results["layoutlm"] = {"error": str(e), "time_seconds": 0}
+        
+        try:
+            results["vision_llm"] = vision_future.result(timeout=VISION_TIMEOUT)
+        except FuturesTimeoutError:
+            results["vision_llm"] = {
+                "error": f"Timeout after {VISION_TIMEOUT}s - engine took too long",
+                "time_seconds": VISION_TIMEOUT
+            }
+        except Exception as e:
+            results["vision_llm"] = {"error": str(e), "time_seconds": 0}
     
     total_time = time_module.time() - start_time
     results["timing"]["parallel_total_seconds"] = round(total_time, 2)
