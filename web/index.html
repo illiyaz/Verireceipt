@@ -218,8 +218,10 @@
 
                 try {
                     addLog('📤 Uploading receipt...', 'info');
+                    addLog('🚀 Starting 3-engine analysis (this may take 10-20 seconds)...', 'info');
                     
-                    const response = await fetch(`${API_BASE_URL}/analyze/hybrid/stream`, {
+                    // Using regular endpoint for now (streaming has async issues)
+                    const response = await fetch(`${API_BASE_URL}/analyze/hybrid`, {
                         method: 'POST',
                         body: formData,
                     });
@@ -228,31 +230,39 @@
                         throw new Error(`Analysis failed: ${response.statusText}`);
                     }
 
-                    const reader = response.body.getReader();
-                    const decoder = new TextDecoder();
-                    let buffer = '';
-
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-
-                        buffer += decoder.decode(value, { stream: true });
-                        const lines = buffer.split('\n\n');
-                        buffer = lines.pop();
-
-                        for (const line of lines) {
-                            if (!line.trim()) continue;
-
-                            const eventMatch = line.match(/^event: (.+)$/m);
-                            const dataMatch = line.match(/^data: (.+)$/m);
-
-                            if (eventMatch && dataMatch) {
-                                const eventType = eventMatch[1];
-                                const data = JSON.parse(dataMatch[1]);
-
-                                handleSSEEvent(eventType, data);
-                            }
-                        }
+                    // Get JSON response (not streaming)
+                    const data = await response.json();
+                    
+                    // Simulate progress updates for better UX
+                    addLog('⏳ Analyzing with all 3 engines...', 'info');
+                    setProgress(33);
+                    
+                    // Show results for each engine
+                    if (data.rule_based && !data.rule_based.error) {
+                        setEngineStatus(prev => ({ ...prev, 'rule-based': 'completed' }));
+                        setEngineResults(prev => ({ ...prev, 'rule-based': data.rule_based }));
+                        addLog(`✅ Rule-Based completed in ${data.rule_based.time_seconds}s`, 'success');
+                    }
+                    setProgress(66);
+                    
+                    if (data.donut && !data.donut.error) {
+                        setEngineStatus(prev => ({ ...prev, 'donut': 'completed' }));
+                        setEngineResults(prev => ({ ...prev, 'donut': data.donut }));
+                        addLog(`✅ DONUT completed in ${data.donut.time_seconds}s`, 'success');
+                    }
+                    
+                    if (data.vision_llm && !data.vision_llm.error) {
+                        setEngineStatus(prev => ({ ...prev, 'vision-llm': 'completed' }));
+                        setEngineResults(prev => ({ ...prev, 'vision-llm': data.vision_llm }));
+                        addLog(`✅ Vision LLM completed in ${data.vision_llm.time_seconds}s`, 'success');
+                    }
+                    setProgress(100);
+                    
+                    // Show hybrid verdict
+                    if (data.hybrid_verdict) {
+                        setHybridVerdict(data.hybrid_verdict);
+                        addLog('🎉 Analysis complete!', 'success');
+                        addLog(`📊 Final verdict: ${data.hybrid_verdict.final_label.toUpperCase()}`, 'success');
                     }
 
                 } catch (err) {
