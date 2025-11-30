@@ -18,14 +18,22 @@ import json as json_module
 from app.pipelines.rules import analyze_receipt
 from app.repository.receipt_store import get_receipt_store
 
-# Import hybrid analysis
+# Import hybrid analysis engines
 try:
     from app.pipelines.vision_llm import analyze_receipt_with_vision
-    from app.pipelines.donut_extractor import extract_receipt_with_donut, DONUT_AVAILABLE
     VISION_AVAILABLE = True
 except ImportError:
     VISION_AVAILABLE = False
+
+try:
+    from app.pipelines.donut_extractor import extract_receipt_with_donut, DONUT_AVAILABLE
+except ImportError:
     DONUT_AVAILABLE = False
+
+try:
+    from app.pipelines.layoutlm_extractor import extract_receipt_with_layoutlm, LAYOUTLM_AVAILABLE
+except ImportError:
+    LAYOUTLM_AVAILABLE = False
 
 app = FastAPI(
     title="VeriReceipt API",
@@ -318,9 +326,10 @@ def get_stats():
 # ---------- Hybrid Analysis Endpoint ----------
 
 class HybridAnalyzeResponse(BaseModel):
-    """Response from hybrid 3-engine analysis."""
+    """Response from hybrid 4-engine analysis."""
     rule_based: dict = Field(..., description="Rule-based engine results")
     donut: Optional[dict] = Field(None, description="DONUT extraction results")
+    layoutlm: Optional[dict] = Field(None, description="LayoutLM extraction results")
     vision_llm: Optional[dict] = Field(None, description="Vision LLM results")
     hybrid_verdict: dict = Field(..., description="Combined verdict from all engines")
     timing: dict = Field(..., description="Timing information for each engine")
@@ -330,10 +339,11 @@ class HybridAnalyzeResponse(BaseModel):
 @app.post("/analyze/hybrid", response_model=HybridAnalyzeResponse, tags=["analysis"])
 async def analyze_hybrid(file: UploadFile = File(...)):
     """
-    Analyze receipt using all 3 engines in parallel:
-    1. Rule-Based (OCR + Metadata + Rules)
-    2. DONUT (Document Understanding Transformer)
-    3. Vision LLM (Ollama - Visual Fraud Detection)
+    Analyze receipt using all 4 engines in parallel:
+    1. Rule-Based (OCR + Metadata + Rules) - Fast, reliable baseline
+    2. DONUT (Document Understanding Transformer) - Specialized for receipts
+    3. LayoutLM (Multimodal Document Understanding) - Best for diverse formats
+    4. Vision LLM (Ollama) - Visual fraud detection
     
     Returns results from all engines plus a hybrid verdict.
     """
@@ -357,6 +367,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     results = {
         "rule_based": None,
         "donut": None,
+        "layoutlm": None,
         "vision_llm": None,
         "hybrid_verdict": None,
         "timing": {},
@@ -397,6 +408,26 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         except Exception as e:
             return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
     
+    def run_layoutlm():
+        if not LAYOUTLM_AVAILABLE:
+            return {"error": "LayoutLM not available", "time_seconds": 0}
+        
+        start = time_module.time()
+        try:
+            data = extract_receipt_with_layoutlm(str(temp_path), method="simple")
+            elapsed = time_module.time() - start
+            return {
+                "merchant": data.get("merchant"),
+                "total": data.get("total"),
+                "date": data.get("date"),
+                "words_extracted": data.get("words_extracted", 0),
+                "data_quality": data.get("data_quality", "unknown"),
+                "confidence": data.get("confidence", "unknown"),
+                "time_seconds": round(elapsed, 2)
+            }
+        except Exception as e:
+            return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
+    
     def run_vision():
         if not VISION_AVAILABLE:
             return {"error": "Vision LLM not available", "time_seconds": 0}
@@ -418,16 +449,18 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         except Exception as e:
             return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
     
-    # Execute in parallel
+    # Execute all 4 engines in parallel
     start_time = time_module.time()
     
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         rule_future = executor.submit(run_rule_based)
         donut_future = executor.submit(run_donut)
+        layoutlm_future = executor.submit(run_layoutlm)
         vision_future = executor.submit(run_vision)
         
         results["rule_based"] = rule_future.result()
         results["donut"] = donut_future.result()
+        results["layoutlm"] = layoutlm_future.result()
         results["vision_llm"] = vision_future.result()
     
     total_time = time_module.time() - start_time
@@ -438,6 +471,8 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         results["engines_used"].append("rule-based")
     if not results["donut"].get("error"):
         results["engines_used"].append("donut")
+    if not results["layoutlm"].get("error"):
+        results["engines_used"].append("layoutlm")
     if not results["vision_llm"].get("error"):
         results["engines_used"].append("vision-llm")
     
@@ -448,13 +483,14 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         "recommended_action": "unknown",
         "reasoning": [],
         "engines_completed": len(results["engines_used"]),
-        "total_engines": 3
+        "total_engines": 4
     }
     
     # Check if all engines completed successfully
     all_engines_completed = (
         not results["rule_based"].get("error") and
         not results["donut"].get("error") and
+        not results["layoutlm"].get("error") and
         not results["vision_llm"].get("error")
     )
     
@@ -469,6 +505,8 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             hybrid["reasoning"].append(f"Rule-based engine failed: {results['rule_based']['error']}")
         if results["donut"].get("error"):
             hybrid["reasoning"].append(f"DONUT engine failed: {results['donut']['error']}")
+        if results["layoutlm"].get("error"):
+            hybrid["reasoning"].append(f"LayoutLM engine failed: {results['layoutlm']['error']}")
         if results["vision_llm"].get("error"):
             hybrid["reasoning"].append(f"Vision LLM failed: {results['vision_llm']['error']}")
         
@@ -481,16 +519,17 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         vision_verdict = results["vision_llm"].get("verdict", "unknown")
         vision_confidence = results["vision_llm"].get("confidence", 0.0)
         donut_quality = results["donut"].get("data_quality", "unknown")
+        layoutlm_quality = results["layoutlm"].get("data_quality", "unknown")
         
-        # Combine signals from all 3 engines
+        # Combine signals from all 4 engines
         if rule_label == "real" and rule_score < 0.3:
             if vision_verdict == "real" and vision_confidence > 0.7:
                 hybrid["final_label"] = "real"
-                hybrid["confidence"] = 0.95
+                hybrid["confidence"] = 0.98  # Higher with 4 engines
                 hybrid["recommended_action"] = "approve"
-                hybrid["reasoning"].append("All 3 engines indicate authentic receipt")
-                if donut_quality == "good":
-                    hybrid["reasoning"].append("DONUT confirmed good data quality")
+                hybrid["reasoning"].append("All 4 engines indicate authentic receipt")
+                if donut_quality == "good" or layoutlm_quality == "good":
+                    hybrid["reasoning"].append("Document structure validated by extraction engines")
             else:
                 hybrid["final_label"] = "real"
                 hybrid["confidence"] = 0.85
