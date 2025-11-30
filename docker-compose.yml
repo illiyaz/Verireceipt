@@ -1,0 +1,59 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    container_name: verireceipt_app
+    env_file:
+      - .env                # optional: put secrets / overrides here
+    environment:
+      # Store backend: "csv" (default) or "db"
+      - VERIRECEIPT_STORE_BACKEND=${VERIRECEIPT_STORE_BACKEND:-csv}
+
+      # DB URL (used only if VERIRECEIPT_STORE_BACKEND=db)
+      - VERIRECEIPT_DATABASE_URL=${VERIRECEIPT_DATABASE_URL:-postgresql+psycopg2://verireceipt:verireceipt@db:5432/verireceipt}
+
+      # Redis URL for caching / jobs (we'll wire this in later)
+      - VERIRECEIPT_REDIS_URL=${VERIRECEIPT_REDIS_URL:-redis://redis:6379/0}
+
+      # Make Python output unbuffered (better logs)
+      - PYTHONUNBUFFERED=1
+
+    volumes:
+      # Mount current directory into container for live code changes in dev
+      - .:/app
+
+    depends_on:
+      - db
+      - redis
+    
+
+    # When we move to FastAPI, uncomment this to expose HTTP API
+    ports:
+      - "9001:9000"
+
+  db:
+    image: postgres:16-alpine
+    container_name: verireceipt_db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=verireceipt
+      - POSTGRES_PASSWORD=verireceipt
+      - POSTGRES_DB=verireceipt
+    volumes:
+      - verireceipt_db_data:/var/lib/postgresql/data
+    ports:
+      # Host 55432 -> Container 5432, so it doesn't clash with your local Postgres
+      - "55432:5432"
+      
+
+  redis:
+    image: redis:7-alpine
+    container_name: verireceipt_redis
+    restart: unless-stopped
+    #ports:
+      # Expose Redis for debugging / local connections if needed
+    #  - "6379:6379"
+
+volumes:
+  verireceipt_db_data:

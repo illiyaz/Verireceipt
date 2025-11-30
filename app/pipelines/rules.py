@@ -1,0 +1,204 @@
+# app/pipelines/rules.py
+
+from typing import List
+
+from app.schemas.receipt import (
+    ReceiptFeatures,
+    ReceiptDecision,
+    ReceiptInput,
+)
+from app.pipelines.ingest import ingest_and_ocr
+from app.pipelines.features import build_features
+
+
+def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
+    """
+    Convert ReceiptFeatures into a fraud score, label, and reasons.
+    v1 is fully rule-based, with transparent reasoning.
+    """
+
+    # ---------------------------------------------------------------------------
+    # The rule engine builds a fraud score in [0.0, 1.0] by adding weighted points
+    # for each triggered anomaly. See README "Rule Engine Specification" for the
+    # full documentation of all rules, weights, and reasoning.
+    # ---------------------------------------------------------------------------
+
+    score = 0.0
+    reasons: List[str] = []       # main/critical reasons
+    minor_notes: List[str] = []   # low-severity metadata observations
+
+    ff = feats.file_features
+    tf = feats.text_features
+    lf = feats.layout_features
+    fr = feats.forensic_features
+
+    source_type = ff.get("source_type")  # "pdf" or "image" (set by metadata pipelines)
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 1: Producer / metadata anomalies
+    #
+    # These checks inspect PDF/image metadata (producer, creator, creation date,
+    # modification date, EXIF data). Individually these are weak–medium signals,
+    # but in combination they strongly indicate manual editing or template usage.
+    # ---------------------------------------------------------------------------
+
+    # R1: Suspicious PDF producer/creator (e.g. Canva/Photoshop/WPS/etc.)
+    # High severity because many fake receipts originate from these tools.
+    if ff.get("suspicious_producer"):
+        score += 0.3
+        reasons.append(
+            f"PDF producer/creator ('{ff.get('producer') or ff.get('creator')}') "
+            "is commonly associated with edited or template-based documents."
+        )
+
+    # For PDFs: missing creation/modification dates are weak signals and logged as minor notes.
+    if source_type == "pdf":
+        if not ff.get("has_creation_date"):
+            score += 0.05
+            minor_notes.append("Document is missing a creation date in its metadata.")
+
+        if not ff.get("has_mod_date"):
+            score += 0.05
+            minor_notes.append("Document is missing a modification date in its metadata.")
+
+    # EXIF: for images, absence of EXIF is *slightly* suspicious for 'photos' of bills.
+    # Treated as a low-severity observation.
+    if source_type == "image":
+        exif_present = ff.get("exif_present")
+        if exif_present is False:
+            score += 0.05
+            minor_notes.append(
+                "Image has no EXIF data, which may indicate it was exported or edited rather than captured."
+            )
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 2: Text-based anomalies
+    #
+    # These are the strongest and most important checks. They analyze OCR text
+    # for totals, amounts, line items, dates, and merchant names. Errors in these
+    # areas often indicate tampering or synthetically generated receipts.
+    # ---------------------------------------------------------------------------
+
+    # R5: No detected currency/amount tokens — a strong indicator of invalid or
+    # template-generated receipts. Real receipts almost always contain amounts.
+    if not tf.get("has_any_amount"):
+        score += 0.4
+        reasons.append("No currency or numeric amount could be reliably detected in the receipt text.")
+
+    # No total line but there are amounts
+    if tf.get("has_any_amount") and not tf.get("total_line_present"):
+        score += 0.15
+        reasons.append("Amounts detected but no clear 'Total' line found on the receipt.")
+
+    # R7: Sum of line-item amounts does not match printed total — high severity.
+    # Often indicates manual tampering or altered totals.
+    if tf.get("total_mismatch"):
+        score += 0.4
+        reasons.append(
+            "Sum of detected line-item amounts does not match the printed total amount."
+        )
+
+    # R8: No date detected — most real receipts include a transaction date.
+    if not tf.get("has_date"):
+        score += 0.2
+        reasons.append("No valid date found on the receipt.")
+
+    # R9: Could not infer merchant/store name from header region.
+    # Real receipts nearly always show merchant identity clearly.
+    if not tf.get("merchant_candidate"):
+        score += 0.15
+        reasons.append("Could not confidently identify a merchant name in the header.")
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 3: Layout / structure anomalies
+    #
+    # These checks use high-level structural cues such as number of lines and the
+    # proportion of numeric lines. Useful for detecting receipts that are too short,
+    # too long, or unnaturally dominated by numeric values.
+    # ---------------------------------------------------------------------------
+
+    num_lines = lf.get("num_lines", 0)
+    numeric_ratio = lf.get("numeric_line_ratio", 0.0)
+
+    # R10: Very few lines — real receipts typically contain header, items, totals.
+    if num_lines < 5:
+        score += 0.15
+        reasons.append(
+            f"Very few text lines detected in the receipt ({num_lines}), which is atypical for real receipts."
+        )
+
+    # R11: Excessively high line count — may indicate noisy OCR or non-receipt pages.
+    if num_lines > 120:
+        score += 0.1
+        reasons.append(
+            f"Unusually high number of text lines detected in the receipt ({num_lines}), "
+            "which may indicate noisy or synthetic text."
+        )
+
+    # R12: Most lines are numeric — may indicate auto-generated tabular data.
+    if numeric_ratio > 0.8 and num_lines > 10:
+        score += 0.1
+        reasons.append(
+            "A very high proportion of lines consist mostly of numbers, which may indicate auto-generated content."
+        )
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 4: Forensic-ish cues
+    #
+    # These are weaker but additive indicators. They highlight repetitive, stylized,
+    # or template-like textual patterns (uppercase dominance, low character variety).
+    # ---------------------------------------------------------------------------
+
+    uppercase_ratio = fr.get("uppercase_ratio", 0.0)
+    unique_char_count = fr.get("unique_char_count", 0)
+
+    # R13: Very high uppercase ratio — template-like headings repeated excessively.
+    if uppercase_ratio > 0.8 and num_lines > 5:
+        score += 0.1
+        reasons.append(
+            "A large portion of alphabetic characters are uppercase, giving the text a template-like appearance."
+        )
+
+    # R14: Very low character variety — highly repetitive/synthetic content.
+    if unique_char_count < 15 and num_lines > 5:
+        score += 0.15
+        reasons.append(
+            "Low variety of characters detected in the text, which may indicate repetitive or template-generated content."
+        )
+
+    # --- 5. Normalize and classify ------------------------------------------
+
+    # Clamp score to [0, 1]
+    score = max(0.0, min(1.0, score))
+
+    if score < 0.3:
+        label = "real"
+    elif score < 0.6:
+        label = "suspicious"
+    else:
+        label = "fake"
+
+    # If there are no reasons but score is low, add a generic explanation
+    if not reasons and label == "real":
+        reasons.append("No strong anomalies detected based on current rule set.")
+
+    return ReceiptDecision(
+        label=label,
+        score=score,
+        reasons=reasons,
+        features=feats,
+        minor_notes=minor_notes or None,
+    )
+
+
+def analyze_receipt(file_path: str) -> ReceiptDecision:
+    """
+    High-level orchestrator:
+    file_path -> ingest+OCR -> features -> rule-based decision.
+    This is the function described in the README.
+    """
+    inp = ReceiptInput(file_path=file_path)
+    raw = ingest_and_ocr(inp)
+    feats = build_features(raw)
+    decision = _score_and_explain(feats)
+    return decision

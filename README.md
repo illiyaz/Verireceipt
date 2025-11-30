@@ -1,0 +1,365 @@
+# VeriReceipt – AI-Powered Fake Receipt Detection Engine
+
+VeriReceipt is an intelligent fraud-detection system that identifies **fake, AI-generated, manipulated, or tampered receipts** submitted for reimbursements. It combines **document forensics**, **OCR**, **metadata analysis**, **rule-based scoring**, and **AI models (DONUT/CLIP)** to determine whether a receipt is **real**, **fake**, or **suspicious**, along with human-readable explanations.
+
+---
+
+## 🚀 Why VeriReceipt?
+
+Businesses lose money every year due to:
+- AI-generated receipts (Canva, Photoshop, fake receipt apps)
+- Digitally altered totals
+- Edited dates, vendor names, or line items
+- PDF metadata tampering
+- Reimbursement fraud
+
+VeriReceipt stops this using a hybrid AI + forensic rules pipeline.
+
+---
+
+## 🏗 Architecture Overview
+
+```
+          ┌──────────────────────────┐
+          │     Receipt Upload       │
+          └──────────────┬───────────┘
+                         ▼
+              ┌─────────────────────┐
+              │ Ingestion Pipeline  │
+              │ - PDF/Image Load    │
+              │ - Normalization     │
+              └──────────┬──────────┘
+                         ▼
+              ┌─────────────────────┐
+              │  Metadata Engine    │
+              │ - PDF metadata      │
+              │ - EXIF metadata     │
+              └──────────┬──────────┘
+                         ▼
+              ┌─────────────────────┐
+              │   OCR & Text Layer │
+              │ - Tesseract/EasyOCR │
+              └──────────┬──────────┘
+                         ▼
+              ┌─────────────────────┐
+              │ Feature Extraction  │
+              │ - Forensic signals  │
+              │ - Text patterns     │
+              │ - Layout cues       │
+              └──────────┬──────────┘
+                         ▼
+              ┌─────────────────────┐
+              │   Fraud Engine     │
+              │ - Rules            │
+              │ - Scoring          │
+              └──────────┬──────────┘
+                         ▼
+              ┌─────────────────────┐
+              │ AI Model (DONUT/CLIP) │
+              │ - Real vs Fake       │
+              └──────────┬──────────┘
+                         ▼
+              ┌─────────────────────┐
+              │ Final Decision       │
+              │ - real / fake / suspicious │
+              │ - Reasons            │
+              └─────────────────────┘
+```
+
+---
+
+## 📦 Project Structure
+
+```
+VeriReceipt/
+  app/
+    pipelines/
+      ingest.py
+      metadata.py
+      ocr.py
+      features.py
+      rules.py
+    models/
+    schemas/
+      receipt.py
+    utils/
+    config.py
+  data/
+    raw/
+    processed/
+  notebooks/
+  tests/
+  requirements.txt
+  README.md
+```
+
+---
+
+## 🛡 Status Badges
+
+![Status](https://img.shields.io/badge/status-active-brightgreen)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![License](https://img.shields.io/badge/license-Apache%202.0-green)
+![Build](https://img.shields.io/badge/build-passing-success)
+![AI](https://img.shields.io/badge/AI-DONUT%20%7C%20CLIP-orange)
+
+---
+
+## 📌 Current Development Stage
+
+We are currently building:
+- Core folder structure  
+- Receipt ingestion  
+- OCR pipeline  
+- Metadata extraction  
+- v1 Rule-based fraud engine  
+
+Next:
+- Forensic feature engineering  
+- AI model training  
+- API + UI  
+- Deployment pipeline  
+
+---
+
+
+## 🔧 Development Plan (Phase 1 – Rule-Based Engine)
+
+VeriReceipt is currently in **Phase 1**, where the goal is to make the system capable of detecting fake receipts using deterministic rules before adding machine learning models. This phase builds the foundation for all future AI capabilities.
+
+### **1. Feature Engineering**
+We will extract structured, meaningful features from the raw receipt:
+- **File & Metadata Features**
+  - Suspicious PDF producers (e.g., Canva, Photoshop, WPS)
+  - Creation/modification date anomalies
+  - EXIF availability (camera vs synthetic images)
+  - File size irregularities
+- **Text Features (From OCR)**
+  - Merchant name extraction
+  - Date extraction + validation
+  - Total amount identification
+  - Line-item parsing
+  - Amount mismatch detection
+- **Layout Features (Basic for v1)**
+  - Line structure consistency
+  - Presence/absence of expected labels (e.g., "Total", "Invoice")
+- **Forensic Cues**
+  - Repeated text patterns
+  - Highly uniform spacing (template-like)
+  - All-caps or low variety of characters
+
+### **2. Rule-Based Fraud Engine**
+We will combine the above features into a weighted scoring model:
+- Assign weights to anomalies (e.g., metadata forgery = high severity)
+- Aggregate into a 0–1 fraud score
+- Map to:
+  - **0.0–0.3 → real**
+  - **0.3–0.6 → suspicious**
+  - **0.6–1.0 → fake**
+- Produce **human-readable reasoning**, e.g.:
+  - `"PDF producer is 'Canva', which is frequently used to fabricate receipts."`
+  - `"Sum of line items does not match printed total."`
+
+### **3. Orchestrated Analysis Pipeline**
+Implement a unified function:
+
+```
+analyze_receipt(file_path) → ReceiptDecision
+```
+
+Flow:
+1. Ingestion →  
+2. OCR →  
+3. Metadata extraction →  
+4. Feature engineering →  
+5. Rule engine →  
+6. Final decision  
+
+This becomes the core engine for both CLI and API.
+
+### **4. Testing Tools**
+We will add:
+- A CLI test script (`test_run.py`)
+- Example sample receipts in `data/raw/`
+
+The script prints:
+```
+Label: fake
+Score: 0.82
+Reasons:
+ - Producer is Canva
+ - Total mismatch
+```
+
+### **5. Outputs (v1)**
+Every decision returns:
+- `label` (real / suspicious / fake)
+- `score`
+- `reasons`
+- optional feature dump (for debugging)
+
+This completes a fully working v1 that already provides real value to reimbursement teams before ML is added.
+
+## 🧮 Rule Engine Specification (Phase 1)
+
+This section documents the rules currently implemented in the VeriReceipt v1 engine. Each rule contributes a weighted score to a final fraud score between 0.0 and 1.0.
+
+### Rule Summary Table
+
+| ID  | Rule                                    | Condition (Trigger)                                                                                 | Weight | Severity       |
+|-----|-----------------------------------------|------------------------------------------------------------------------------------------------------|--------|----------------|
+| R1  | Suspicious producer/creator             | PDF `producer`/`creator` contains known editing/template tools (Canva, Photoshop, WPS, etc.)        | +0.30  | High           |
+| R2  | Missing creation date                   | No `creation_date` metadata                                                                        | +0.05  | Low            |
+| R3  | Missing modification date               | No `mod_date` metadata                                                                             | +0.05  | Low            |
+| R4  | No EXIF data (images)                   | `exif_present = False` for image receipts                                                          | +0.05  | Low            |
+| R5  | No detected amounts                     | No currency/amount tokens detected in OCR text                                                     | +0.40  | High           |
+| R6  | Amounts but no total line               | `has_any_amount = True` and `total_line_present = False`                                           | +0.15  | Medium         |
+| R7  | Line-item vs total mismatch             | `total_mismatch = True` (sum of line items ≠ printed total)                                        | +0.40  | High           |
+| R8  | No date found                           | `has_date = False`                                                                                 | +0.20  | Medium–High    |
+| R9  | No merchant candidate                   | `merchant_candidate` could not be confidently inferred                                             | +0.15  | Medium         |
+| R10 | Too few lines                           | `num_lines < 5`                                                                                  | +0.15  | Medium         |
+| R11 | Too many lines                          | `num_lines > 120`                                                                                | +0.10  | Low–Medium     |
+| R12 | Very high numeric line ratio            | `numeric_line_ratio > 0.8` and `num_lines > 10`                                              | +0.10  | Low–Medium     |
+| R13 | High uppercase ratio                    | `uppercase_ratio > 0.8` and `num_lines > 5`                                                  | +0.10  | Low–Medium     |
+| R14 | Low character variety                   | `unique_char_count < 15` and `num_lines > 5`                                                 | +0.15  | Medium         |
+
+**Classification thresholds:**
+
+- `score < 0.3`  → **real**  
+- `0.3 ≤ score < 0.6` → **suspicious**  
+- `score ≥ 0.6` → **fake**
+
+---
+
+### Detailed Rule Descriptions
+
+**R1 – Suspicious producer/creator**  
+- **What:** Checks if the PDF `producer` or `creator` string contains tools like Canva, Photoshop, WPS, Fotor, etc.  
+- **Why:** These tools are commonly used to design templates or edit documents after generation. For native POS/e-bill systems, producers are usually printer drivers or system names.  
+- **Weight:** +0.30 (high) because it is a strong signal of possible manual fabrication or editing.
+
+**R2 – Missing creation date**  
+- **What:** No `creation_date` metadata present.  
+- **Why:** Native systems typically record this. Missing data may indicate export via intermediate tools.  
+- **Weight:** +0.05 (low).
+
+**R3 – Missing modification date**  
+- **What:** No `mod_date` metadata present.  
+- **Why:** Similar reasoning as R2; weak but useful when combined with other signals.  
+- **Weight:** +0.05 (low).
+
+**R4 – No EXIF data (image receipts)**  
+- **What:** For image-based receipts, absence of EXIF (camera) data is mildly suspicious.  
+- **Why:** Genuine receipts photographed by a phone usually carry some EXIF info; exports/screenshots often strip it.  
+- **Weight:** +0.05 (low).
+
+**R5 – No detected amounts**  
+- **What:** OCR text contains no recognizable currency/amount pattern.  
+- **Why:** A receipt without any numeric amount is almost never valid. Often indicates OCR failure or synthetic text.  
+- **Weight:** +0.40 (high).
+
+**R6 – Amounts but no total line**  
+- **What:** Amounts exist but no line with "Total/Grand Total/Amount Payable/etc." found.  
+- **Why:** Most receipts clearly mark the total; absence suggests an incomplete or template-style artifact.  
+- **Weight:** +0.15 (medium).
+
+**R7 – Line-item vs total mismatch**  
+- **What:** Sum of detected line-item amounts does not match the printed total (above a small tolerance).  
+- **Why:** Strong signal of manual tampering with the total or error in fabrication.  
+- **Weight:** +0.40 (high).
+
+**R8 – No date found**  
+- **What:** No date-like pattern detected in OCR text.  
+- **Why:** Valid receipts almost always include a date; missing date is a compliance red flag.  
+- **Weight:** +0.20 (medium–high).
+
+**R9 – No merchant candidate**  
+- **What:** We cannot confidently infer a merchant name from the header lines.  
+- **Why:** Most receipts clearly show merchant/store name at the top; absence suggests generic/fake templates.  
+- **Weight:** +0.15 (medium).
+
+**R10 – Too few lines**  
+- **What:** Very small number of lines (`num_lines < 5`).  
+- **Why:** Real receipts typically have multiple lines for header, items, totals, legal text. Too few lines feels synthetic.  
+- **Weight:** +0.15 (medium).
+
+**R11 – Too many lines**  
+- **What:** Unusually large number of lines (`num_lines > 120`).  
+- **Why:** Could indicate noisy OCR on non-receipt content, or synthetic filler text.  
+- **Weight:** +0.10 (low–medium).
+
+**R12 – Very high numeric line ratio**  
+- **What:** Majority of lines are numeric (`numeric_line_ratio > 0.8` and `num_lines > 10`).  
+- **Why:** Real receipts contain text labels, not only numeric content; pure numeric patterns look auto-generated.  
+- **Weight:** +0.10 (low–medium).
+
+**R13 – High uppercase ratio**  
+- **What:** Most alphabetic characters are uppercase (`uppercase_ratio > 0.8`).  
+- **Why:** Overuse of uppercase can indicate template headings being repeated or stylized synthetic layouts.  
+- **Weight:** +0.10 (low–medium).
+
+**R14 – Low character variety**  
+- **What:** Very low unique character count (`unique_char_count < 15` with reasonable line count).  
+- **Why:** Suggests repetitive or boilerplate content, often seen in simple fake templates.  
+- **Weight:** +0.15 (medium).
+
+---
+
+**Developer Notes:**  
+- All weights and thresholds live in `app/pipelines/rules.py`.  
+- They are intentionally simple constants to make experimentation easy.  
+- When adjusting weights, keep the **relative severity** in mind rather than absolute values.  
+- In the future, these rules can be moved to a config file (YAML/JSON) to make the engine data-driven.
+
+---
+
+## 🗺 Roadmap
+
+### **Phase 1 — Core Foundations (In Progress)**
+- [x] Project setup  
+- [x] Ingestion + OCR pipeline  
+- [x] Metadata extraction  
+- [ ] Feature engineering  
+- [ ] Rule engine v1  
+
+### **Phase 2 — AI Integration**
+- [ ] Collect dataset (real + fake receipts)
+- [ ] Fine-tune DONUT model
+- [ ] Evaluation + accuracy tuning
+- [ ] Introduce image forensics model
+
+### **Phase 3 — Production System**
+- [ ] FastAPI backend
+- [ ] Docker deployment
+- [ ] Enterprise-grade logging & monitoring
+- [ ] Web dashboard for finance teams
+
+### **Phase 4 — Commercialization**
+- [ ] Multi-tenant SaaS support
+- [ ] API rate limiting & auth
+- [ ] Billing & usage metering
+
+---
+
+## 📘 API Documentation (Placeholder)
+
+The API documentation for VeriReceipt will be added here.
+
+This section will cover:
+- Receipt upload API
+- Fraud scoring API
+- Health check API
+- Authentication and rate limiting (future)
+- Response schemas and examples
+
+Coming soon.
+
+---
+
+## 💬 Contact
+
+For support or contributions, feel free to reach out.
+
+---
+
+## 🎉 VeriReceipt — AI That Knows What’s Real
