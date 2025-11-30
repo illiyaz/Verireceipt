@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VeriReceipt - AI Receipt Fraud Detection</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .card-shadow {
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+        }
+        
+        .dropzone {
+            border: 3px dashed #cbd5e0;
+            transition: all 0.3s ease;
+        }
+        
+        .dropzone.drag-over {
+            border-color: #667eea;
+            background-color: #f7fafc;
+        }
+        
+        .pulse-animation {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: .5;
+            }
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .badge-real {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        }
+        
+        .badge-fake {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+        }
+        
+        .badge-suspicious {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        }
+        
+        .engine-card {
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        
+        .engine-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 48px rgba(0, 0, 0, 0.15);
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // API Configuration
+        const API_BASE_URL = 'http://localhost:8000';
+
+        function App() {
+            const [file, setFile] = useState(null);
+            const [preview, setPreview] = useState(null);
+            const [analyzing, setAnalyzing] = useState(false);
+            const [results, setResults] = useState(null);
+            const [error, setError] = useState(null);
+            const [dragOver, setDragOver] = useState(false);
+            const fileInputRef = useRef(null);
+
+            const handleDragOver = (e) => {
+                e.preventDefault();
+                setDragOver(true);
+            };
+
+            const handleDragLeave = (e) => {
+                e.preventDefault();
+                setDragOver(false);
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                setDragOver(false);
+                
+                const droppedFile = e.dataTransfer.files[0];
+                if (droppedFile) {
+                    handleFileSelect(droppedFile);
+                }
+            };
+
+            const handleFileSelect = (selectedFile) => {
+                if (!selectedFile) return;
+
+                // Validate file type
+                const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
+                if (!validTypes.includes(selectedFile.type)) {
+                    setError('Please upload a valid image (JPG, PNG) or PDF file');
+                    return;
+                }
+
+                setFile(selectedFile);
+                setError(null);
+                setResults(null);
+
+                // Create preview for images
+                if (selectedFile.type.startsWith('image/')) {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        setPreview(reader.result);
+                    };
+                    reader.readAsDataURL(selectedFile);
+                } else {
+                    setPreview(null);
+                }
+            };
+
+            const analyzeReceipt = async () => {
+                if (!file) return;
+
+                setAnalyzing(true);
+                setError(null);
+
+                const formData = new FormData();
+                formData.append('file', file);
+
+                try {
+                    const response = await fetch(`${API_BASE_URL}/analyze/hybrid`, {
+                        method: 'POST',
+                        body: formData,
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`Analysis failed: ${response.statusText}`);
+                    }
+
+                    const data = await response.json();
+                    setResults(data);
+                } catch (err) {
+                    setError(err.message || 'Failed to analyze receipt. Make sure the API server is running.');
+                } finally {
+                    setAnalyzing(false);
+                }
+            };
+
+            const reset = () => {
+                setFile(null);
+                setPreview(null);
+                setResults(null);
+                setError(null);
+                if (fileInputRef.current) {
+                    fileInputRef.current.value = '';
+                }
+            };
+
+            return (
+                <div className="min-h-screen">
+                    {/* Header */}
+                    <header className="gradient-bg text-white py-8 shadow-lg">
+                        <div className="container mx-auto px-4">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center space-x-4">
+                                    <i className="fas fa-shield-alt text-4xl"></i>
+                                    <div>
+                                        <h1 className="text-4xl font-bold">VeriReceipt</h1>
+                                        <p className="text-purple-200">AI-Powered Receipt Fraud Detection</p>
+                                    </div>
+                                </div>
+                                <div className="text-right">
+                                    <div className="text-sm text-purple-200">Powered by</div>
+                                    <div className="font-semibold">3 AI Engines</div>
+                                </div>
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* Main Content */}
+                    <main className="container mx-auto px-4 py-12">
+                        {!results ? (
+                            <div className="max-w-4xl mx-auto">
+                                {/* Upload Section */}
+                                <div className="bg-white rounded-2xl card-shadow p-8 mb-8">
+                                    <h2 className="text-2xl font-bold text-gray-800 mb-6">
+                                        <i className="fas fa-upload mr-3 text-purple-600"></i>
+                                        Upload Receipt
+                                    </h2>
+                                    
+                                    <div
+                                        className={`dropzone rounded-xl p-12 text-center cursor-pointer ${dragOver ? 'drag-over' : ''}`}
+                                        onDragOver={handleDragOver}
+                                        onDragLeave={handleDragLeave}
+                                        onDrop={handleDrop}
+                                        onClick={() => fileInputRef.current?.click()}
+                                    >
+                                        <input
+                                            ref={fileInputRef}
+                                            type="file"
+                                            accept="image/*,.pdf"
+                                            onChange={(e) => handleFileSelect(e.target.files[0])}
+                                            className="hidden"
+                                        />
+                                        
+                                        {!file ? (
+                                            <div>
+                                                <i className="fas fa-cloud-upload-alt text-6xl text-gray-400 mb-4"></i>
+                                                <p className="text-xl text-gray-600 mb-2">
+                                                    Drag & drop your receipt here
+                                                </p>
+                                                <p className="text-gray-400 mb-4">or click to browse</p>
+                                                <p className="text-sm text-gray-400">
+                                                    Supports: JPG, PNG, PDF
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <div className="fade-in">
+                                                {preview ? (
+                                                    <img
+                                                        src={preview}
+                                                        alt="Receipt preview"
+                                                        className="max-h-64 mx-auto rounded-lg shadow-md mb-4"
+                                                    />
+                                                ) : (
+                                                    <i className="fas fa-file-pdf text-6xl text-red-500 mb-4"></i>
+                                                )}
+                                                <p className="text-lg font-semibold text-gray-700 mb-2">
+                                                    {file.name}
+                                                </p>
+                                                <p className="text-sm text-gray-500">
+                                                    {(file.size / 1024 / 1024).toFixed(2)} MB
+                                                </p>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {error && (
+                                        <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                                            <p className="text-red-700">
+                                                <i className="fas fa-exclamation-circle mr-2"></i>
+                                                {error}
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {file && (
+                                        <div className="mt-6 flex gap-4">
+                                            <button
+                                                onClick={analyzeReceipt}
+                                                disabled={analyzing}
+                                                className="flex-1 bg-gradient-to-r from-purple-600 to-purple-700 text-white py-4 px-8 rounded-xl font-semibold text-lg hover:from-purple-700 hover:to-purple-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+                                            >
+                                                {analyzing ? (
+                                                    <>
+                                                        <i className="fas fa-spinner fa-spin mr-2"></i>
+                                                        Analyzing with 3 AI Engines...
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <i className="fas fa-search mr-2"></i>
+                                                        Analyze Receipt
+                                                    </>
+                                                )}
+                                            </button>
+                                            <button
+                                                onClick={reset}
+                                                className="px-8 py-4 border-2 border-gray-300 text-gray-700 rounded-xl font-semibold hover:bg-gray-50 transition-all"
+                                            >
+                                                <i className="fas fa-times mr-2"></i>
+                                                Clear
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Info Cards */}
+                                <div className="grid md:grid-cols-3 gap-6">
+                                    <div className="bg-white rounded-xl p-6 card-shadow">
+                                        <div className="text-blue-600 text-3xl mb-3">
+                                            <i className="fas fa-bolt"></i>
+                                        </div>
+                                        <h3 className="font-bold text-gray-800 mb-2">Rule-Based Engine</h3>
+                                        <p className="text-sm text-gray-600">Fast OCR + metadata analysis with 14 fraud detection rules</p>
+                                    </div>
+                                    <div className="bg-white rounded-xl p-6 card-shadow">
+                                        <div className="text-green-600 text-3xl mb-3">
+                                            <i className="fas fa-brain"></i>
+                                        </div>
+                                        <h3 className="font-bold text-gray-800 mb-2">DONUT Transformer</h3>
+                                        <p className="text-sm text-gray-600">Document understanding for accurate data extraction</p>
+                                    </div>
+                                    <div className="bg-white rounded-xl p-6 card-shadow">
+                                        <div className="text-purple-600 text-3xl mb-3">
+                                            <i className="fas fa-eye"></i>
+                                        </div>
+                                        <h3 className="font-bold text-gray-800 mb-2">Vision LLM</h3>
+                                        <p className="text-sm text-gray-600">Visual fraud detection with Ollama AI models</p>
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <ResultsView results={results} preview={preview} onReset={reset} />
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        function ResultsView({ results, preview, onReset }) {
+            const { rule_based, donut, vision_llm, hybrid_verdict, timing, engines_used } = results;
+
+            const getVerdictColor = (label) => {
+                if (label === 'real') return 'badge-real';
+                if (label === 'fake') return 'badge-fake';
+                return 'badge-suspicious';
+            };
+
+            const getActionIcon = (action) => {
+                if (action === 'approve') return 'fa-check-circle';
+                if (action === 'reject') return 'fa-times-circle';
+                return 'fa-exclamation-circle';
+            };
+
+            return (
+                <div className="max-w-7xl mx-auto fade-in">
+                    {/* Hybrid Verdict - Hero Section */}
+                    <div className="bg-white rounded-2xl card-shadow p-8 mb-8">
+                        <div className="flex items-center justify-between mb-6">
+                            <h2 className="text-3xl font-bold text-gray-800">
+                                <i className="fas fa-chart-line mr-3 text-purple-600"></i>
+                                Analysis Results
+                            </h2>
+                            <button
+                                onClick={onReset}
+                                className="px-6 py-3 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition-all"
+                            >
+                                <i className="fas fa-redo mr-2"></i>
+                                Analyze Another
+                            </button>
+                        </div>
+
+                        <div className="grid md:grid-cols-2 gap-8">
+                            {/* Receipt Preview */}
+                            {preview && (
+                                <div>
+                                    <h3 className="text-lg font-semibold text-gray-700 mb-3">Receipt Image</h3>
+                                    <img
+                                        src={preview}
+                                        alt="Receipt"
+                                        className="w-full rounded-xl shadow-md"
+                                    />
+                                </div>
+                            )}
+
+                            {/* Hybrid Verdict */}
+                            <div>
+                                <h3 className="text-lg font-semibold text-gray-700 mb-4">Hybrid Verdict</h3>
+                                <div className="space-y-4">
+                                    <div className={`${getVerdictColor(hybrid_verdict.final_label)} text-white rounded-xl p-6 shadow-lg`}>
+                                        <div className="flex items-center justify-between mb-3">
+                                            <span className="text-sm font-medium opacity-90">Final Classification</span>
+                                            <i className={`fas ${getActionIcon(hybrid_verdict.recommended_action)} text-2xl`}></i>
+                                        </div>
+                                        <div className="text-4xl font-bold mb-2 uppercase">
+                                            {hybrid_verdict.final_label}
+                                        </div>
+                                        <div className="text-xl opacity-90">
+                                            Confidence: {(hybrid_verdict.confidence * 100).toFixed(1)}%
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-gray-50 rounded-xl p-6">
+                                        <div className="flex items-center mb-3">
+                                            <i className="fas fa-lightbulb text-yellow-500 mr-2"></i>
+                                            <span className="font-semibold text-gray-700">Recommended Action</span>
+                                        </div>
+                                        <p className="text-lg font-bold text-gray-800 capitalize">
+                                            {hybrid_verdict.recommended_action.replace('_', ' ')}
+                                        </p>
+                                    </div>
+
+                                    <div className="bg-gray-50 rounded-xl p-6">
+                                        <div className="flex items-center mb-3">
+                                            <i className="fas fa-info-circle text-blue-500 mr-2"></i>
+                                            <span className="font-semibold text-gray-700">Reasoning</span>
+                                        </div>
+                                        <ul className="space-y-2">
+                                            {hybrid_verdict.reasoning.map((reason, idx) => (
+                                                <li key={idx} className="text-gray-700 flex items-start">
+                                                    <i className="fas fa-chevron-right text-purple-500 mr-2 mt-1 text-xs"></i>
+                                                    <span>{reason}</span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+
+                                    <div className="flex items-center justify-between text-sm text-gray-500">
+                                        <span>
+                                            <i className="fas fa-clock mr-1"></i>
+                                            Analysis Time: {timing.parallel_total_seconds}s
+                                        </span>
+                                        <span>
+                                            <i className="fas fa-microchip mr-1"></i>
+                                            {engines_used.length} Engines Used
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Individual Engine Results */}
+                    <div className="grid md:grid-cols-3 gap-6">
+                        {/* Rule-Based Engine */}
+                        <EngineCard
+                            title="Rule-Based Engine"
+                            icon="fa-bolt"
+                            color="blue"
+                            data={rule_based}
+                            type="rule"
+                        />
+
+                        {/* DONUT */}
+                        <EngineCard
+                            title="DONUT Transformer"
+                            icon="fa-brain"
+                            color="green"
+                            data={donut}
+                            type="donut"
+                        />
+
+                        {/* Vision LLM */}
+                        <EngineCard
+                            title="Vision LLM"
+                            icon="fa-eye"
+                            color="purple"
+                            data={vision_llm}
+                            type="vision"
+                        />
+                    </div>
+                </div>
+            );
+        }
+
+        function EngineCard({ title, icon, color, data, type }) {
+            if (data.error) {
+                return (
+                    <div className="bg-white rounded-xl p-6 card-shadow engine-card">
+                        <div className="flex items-center mb-4">
+                            <i className={`fas ${icon} text-${color}-600 text-2xl mr-3`}></i>
+                            <h3 className="font-bold text-gray-800">{title}</h3>
+                        </div>
+                        <div className="text-center py-8">
+                            <i className="fas fa-exclamation-triangle text-yellow-500 text-3xl mb-3"></i>
+                            <p className="text-sm text-gray-600">{data.error}</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="bg-white rounded-xl p-6 card-shadow engine-card">
+                    <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center">
+                            <i className={`fas ${icon} text-${color}-600 text-2xl mr-3`}></i>
+                            <h3 className="font-bold text-gray-800">{title}</h3>
+                        </div>
+                        <span className="text-xs text-gray-500">
+                            {data.time_seconds}s
+                        </span>
+                    </div>
+
+                    <div className="space-y-3">
+                        {type === 'rule' && (
+                            <>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm text-gray-600">Label:</span>
+                                    <span className={`px-3 py-1 rounded-full text-xs font-semibold text-white ${
+                                        data.label === 'real' ? 'bg-green-500' :
+                                        data.label === 'fake' ? 'bg-red-500' : 'bg-yellow-500'
+                                    }`}>
+                                        {data.label.toUpperCase()}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm text-gray-600">Fraud Score:</span>
+                                    <span className="font-bold text-gray-800">{data.score.toFixed(3)}</span>
+                                </div>
+                                {data.reasons && data.reasons.length > 0 && (
+                                    <div className="mt-3 pt-3 border-t">
+                                        <p className="text-xs text-gray-500 mb-2">Key Findings:</p>
+                                        <ul className="space-y-1">
+                                            {data.reasons.slice(0, 2).map((reason, idx) => (
+                                                <li key={idx} className="text-xs text-gray-700 flex items-start">
+                                                    <i className="fas fa-circle text-blue-400 mr-2 text-[6px] mt-1"></i>
+                                                    <span>{reason}</span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
+                            </>
+                        )}
+
+                        {type === 'donut' && (
+                            <>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm text-gray-600">Merchant:</span>
+                                    <span className="font-semibold text-gray-800">
+                                        {data.merchant || 'N/A'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm text-gray-600">Total:</span>
+                                    <span className="font-semibold text-gray-800">
+                                        {data.total ? `$${data.total}` : 'N/A'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm text-gray-600">Line Items:</span>
+                                    <span className="font-semibold text-gray-800">
+                                        {data.line_items_count || 0}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm text-gray-600">Data Quality:</span>
+                                    <span className={`px-2 py-1 rounded text-xs font-semibold ${
+                                        data.data_quality === 'good' ? 'bg-green-100 text-green-700' :
+                                        data.data_quality === 'poor' ? 'bg-red-100 text-red-700' :
+                                        'bg-yellow-100 text-yellow-700'
+                                    }`}>
+                                        {data.data_quality}
+                                    </span>
+                                </div>
+                            </>
+                        )}
+
+                        {type === 'vision' && (
+                            <>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm text-gray-600">Verdict:</span>
+                                    <span className={`px-3 py-1 rounded-full text-xs font-semibold text-white ${
+                                        data.verdict === 'real' ? 'bg-green-500' :
+                                        data.verdict === 'fake' ? 'bg-red-500' : 'bg-yellow-500'
+                                    }`}>
+                                        {data.verdict.toUpperCase()}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm text-gray-600">Confidence:</span>
+                                    <span className="font-bold text-gray-800">
+                                        {(data.confidence * 100).toFixed(1)}%
+                                    </span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm text-gray-600">Auth Score:</span>
+                                    <span className="font-bold text-gray-800">
+                                        {(data.authenticity_score * 100).toFixed(1)}%
+                                    </span>
+                                </div>
+                                {data.fraud_indicators && data.fraud_indicators.length > 0 && (
+                                    <div className="mt-3 pt-3 border-t">
+                                        <p className="text-xs text-gray-500 mb-2">Fraud Indicators:</p>
+                                        <ul className="space-y-1">
+                                            {data.fraud_indicators.slice(0, 2).map((indicator, idx) => (
+                                                <li key={idx} className="text-xs text-red-600 flex items-start">
+                                                    <i className="fas fa-exclamation-triangle mr-2 mt-1 text-[8px]"></i>
+                                                    <span>{indicator}</span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // Render the app
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>

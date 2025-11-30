@@ -1,0 +1,323 @@
+[
+  {
+    "image_path": "data/raw/Gas_bill.jpeg",
+    "rule_based": "ReceiptDecision(label='real', score=0.0, reasons=['No strong anomalies detected based on current rule set.'], features=ReceiptFeatures(file_features={'file_size_bytes': 205909, 'num_pages': 1, 'producer': '', 'creator': None, 'suspicious_producer': False, 'has_creation_date': False, 'has_mod_date': False, 'exif_present': False, 'exif_keys_count': 0}, text_features={'has_any_amount': True, 'num_amount_candidates': 21, 'total_line_present': True, 'total_amount': None, 'has_line_items': True, 'line_items_sum': 30864.4, 'total_mismatch': False, 'has_date': True, 'merchant_candidate': 'LAXMI ENTERPRISES', 'num_lines': 37, 'num_chars': 434, 'num_numeric_lines': 13, 'numeric_line_ratio': 0.35135135135135137, 'unique_char_count': 59, 'uppercase_ratio': 0.7839721254355401}, layout_features={'num_lines': 37, 'numeric_line_ratio': 0.35135135135135137}, forensic_features={'uppercase_ratio': 0.7839721254355401, 'unique_char_count': 59}), minor_notes=None)",
+    "donut": {
+      "merchant": null,
+      "date": null,
+      "total": null,
+      "subtotal": null,
+      "tax": null,
+      "line_items": [
+        {
+          "name": "LAXMI ENTERPR ISES",
+          "price": null,
+          "quantity": 1
+        },
+        {
+          "name": "DATE - 17/11/2025",
+          "price": null,
+          "quantity": 1
+        },
+        {
+          "name": "RECEIPT NO",
+          "price": 2070.0,
+          "quantity": 1
+        },
+        {
+          "name": "FLAT NO",
+          "price": 1082.0,
+          "quantity": 1
+        },
+        {
+          "name": "NAME",
+          "price": null,
+          "quantity": 1
+        },
+        {
+          "name": "PRESENT READING :",
+          "price": 144.113,
+          "quantity": 1
+        },
+        {
+          "name": "PREVIOUS READING",
+          "price": 121.511,
+          "quantity": 1
+        },
+        {
+          "name": "PREVIOUS BILLDATE :",
+          "price": null,
+          "quantity": 1
+        },
+        {
+          "name": "UNITS CONSUMED",
+          "price": 22.602,
+          "quantity": 1
+        },
+        {
+          "name": {
+            "price": "56.505"
+          },
+          "price": 61.12,
+          "quantity": ":"
+        }
+      ],
+      "payment_method": null,
+      "raw_donut_output": {
+        "menu": [
+          {
+            "nm": "LAXMI ENTERPR ISES",
+            "price": "SUS"
+          },
+          {
+            "nm": "DATE - 17/11/2025",
+            "price": "TIME - 17:51"
+          },
+          {
+            "nm": "RECEIPT NO",
+            "price": "2070"
+          },
+          {
+            "nm": "FLAT NO",
+            "price": "1082"
+          },
+          {
+            "nm": "NAME",
+            "price": ":"
+          },
+          {
+            "nm": "PRESENT READING :",
+            "price": "144.113"
+          },
+          {
+            "nm": "PREVIOUS READING",
+            "price": "121.511"
+          },
+          {
+            "nm": "PREVIOUS BILLDATE :",
+            "discountprice": "22.602",
+            "price": "29/06/2025"
+          },
+          {
+            "nm": "UNITS CONSUMED",
+            "price": "22.602"
+          },
+          {
+            "nm": {
+              "price": "56.505"
+            },
+            "unitprice": "61.12",
+            "cnt": ":",
+            "price": "61.12"
+          }
+        ],
+        "sub_total": [
+          {
+            "subtotal_price": "3453.58",
+            "discount_price": "0.21",
+            "tax_price": "3453.79",
+            "price": "0.20"
+          },
+          {
+            "nm": "BALANCE AMOUNT",
+            "price": "0.20",
+            "subtotal_price": "9342535359",
+            "tax_price": "934\u5c3e"
+          }
+        ],
+        "total": {
+          "total_price": "934\u5c3e"
+        }
+      }
+    },
+    "vision_llm": {
+      "model": "llama3.2-vision:latest",
+      "image_path": "data/raw/Gas_bill.jpeg",
+      "extracted_data": {
+        "merchant_name": "Laxmi Enterprises",
+        "date": "2025-11-17",
+        "total_amount": 3453.58,
+        "currency": "INR",
+        "line_items": null,
+        "payment_method": "cash",
+        "receipt_number": null
+      },
+      "fraud_detection": {
+        "is_suspicious": false,
+        "confidence": 0.0,
+        "fraud_indicators": [],
+        "visual_anomalies": [],
+        "overall_assessment": "The receipt appears to be genuine and free of any obvious signs of manipulation or editing."
+      },
+      "authenticity_assessment": {
+        "verdict": "real",
+        "confidence": 0.9,
+        "reasoning": "The layout and layout of the receipt appear to match typical receipts from real businesses, and there are no signs of editing or manipulation. The text quality also looks consistent.",
+        "red_flags": [],
+        "authenticity_score": 0.9
+      }
+    },
+    "hybrid_verdict": {
+      "final_label": "real",
+      "confidence": 1.0,
+      "reasoning": [
+        "DONUT extracted some data",
+        "Rule-based: real (score: 0.00)",
+        "Vision: real (confidence: 0.90)"
+      ],
+      "data_quality": "partial",
+      "fraud_indicators": [],
+      "recommended_action": "approve"
+    },
+    "timing": {
+      "parallel_total": 10.493465662002563
+    }
+  },
+  {
+    "image_path": "data/raw/Medplus_sample.jpg",
+    "rule_based": "ReceiptDecision(label='real', score=0.15, reasons=[\"Amounts detected but no clear 'Total' line found on the receipt.\"], features=ReceiptFeatures(file_features={'file_size_bytes': 135487, 'num_pages': 1, 'producer': '', 'creator': None, 'suspicious_producer': False, 'has_creation_date': False, 'has_mod_date': False, 'exif_present': False, 'exif_keys_count': 0}, text_features={'has_any_amount': True, 'num_amount_candidates': 41, 'total_line_present': False, 'total_amount': None, 'has_line_items': True, 'line_items_sum': 31.0, 'total_mismatch': False, 'has_date': True, 'merchant_candidate': 'Tex Ince / Fetal ts', 'num_lines': 43, 'num_chars': 833, 'num_numeric_lines': 2, 'numeric_line_ratio': 0.046511627906976744, 'unique_char_count': 80, 'uppercase_ratio': 0.27292110874200426}, layout_features={'num_lines': 43, 'numeric_line_ratio': 0.046511627906976744}, forensic_features={'uppercase_ratio': 0.27292110874200426, 'unique_char_count': 80}), minor_notes=None)",
+    "donut": {
+      "merchant": null,
+      "date": null,
+      "total": null,
+      "subtotal": null,
+      "tax": null,
+      "line_items": [],
+      "payment_method": null,
+      "raw_donut_output": [
+        {
+          "nm": "The lakes Avent I Sales Arts (Bhot of SPIRI) KLEGALS SAUTOS KLUD"
+        }
+      ]
+    },
+    "vision_llm": {
+      "model": "llama3.2-vision:latest",
+      "image_path": "data/raw/Medplus_sample.jpg",
+      "extracted_data": {
+        "merchant_name": null,
+        "date": null,
+        "total_amount": 586.67,
+        "currency": null,
+        "line_items": [
+          "PROTEIN DIABETES CARE CREAM",
+          "VANILLA 400G JAR POWDER"
+        ],
+        "payment_method": null,
+        "receipt_number": null
+      },
+      "fraud_detection": {
+        "is_suspicious": true,
+        "confidence": 0.8,
+        "fraud_indicators": [
+          "font inconsistencies",
+          "editing artifacts",
+          "layout anomalies"
+        ],
+        "visual_anomalies": [
+          "font size and style variations",
+          "unusual spacing",
+          "blurred text"
+        ],
+        "overall_assessment": "The image appears to be a manipulated receipt, likely created for fraudulent purposes."
+      },
+      "authenticity_assessment": {
+        "verdict": "real",
+        "confidence": 0.9,
+        "reasoning": "The layout and content of the receipt appear to be typical of a real printed receipt. The font, layout, and content all match what I would expect to see on a real receipt. There are no obvious signs of editing or manipulation.",
+        "red_flags": [],
+        "authenticity_score": 0.9
+      }
+    },
+    "hybrid_verdict": {
+      "final_label": "real",
+      "confidence": 0.7083333333333333,
+      "reasoning": [
+        "DONUT could not extract structured data",
+        "Rule-based: real (score: 0.15)",
+        "Vision: real (confidence: 0.90)"
+      ],
+      "data_quality": "poor",
+      "fraud_indicators": [
+        "font inconsistencies",
+        "editing artifacts",
+        "layout anomalies",
+        "Poor data structure"
+      ],
+      "recommended_action": "human_review"
+    },
+    "timing": {
+      "parallel_total": 11.96310806274414
+    }
+  },
+  {
+    "image_path": "data/raw/Medplus_sample1.jpeg",
+    "rule_based": "ReceiptDecision(label='real', score=0.2, reasons=['No valid date found on the receipt.'], features=ReceiptFeatures(file_features={'file_size_bytes': 72665, 'num_pages': 1, 'producer': '', 'creator': None, 'suspicious_producer': False, 'has_creation_date': False, 'has_mod_date': False, 'exif_present': False, 'exif_keys_count': 0}, text_features={'has_any_amount': True, 'num_amount_candidates': 70, 'total_line_present': True, 'total_amount': None, 'has_line_items': True, 'line_items_sum': 6465.17, 'total_mismatch': False, 'has_date': False, 'merchant_candidate': 'Crs', 'num_lines': 57, 'num_chars': 1631, 'num_numeric_lines': 7, 'numeric_line_ratio': 0.12280701754385964, 'unique_char_count': 82, 'uppercase_ratio': 0.34838076545632973}, layout_features={'num_lines': 57, 'numeric_line_ratio': 0.12280701754385964}, forensic_features={'uppercase_ratio': 0.34838076545632973, 'unique_char_count': 82}), minor_notes=None)",
+    "donut": {
+      "merchant": null,
+      "date": null,
+      "total": null,
+      "subtotal": null,
+      "tax": null,
+      "line_items": [],
+      "payment_method": null,
+      "raw_donut_output": {
+        "nm": "The Tmusic/ Matullomoide"
+      }
+    },
+    "vision_llm": {
+      "model": "llama3.2-vision:latest",
+      "image_path": "data/raw/Medplus_sample1.jpeg",
+      "extracted_data": {
+        "merchant_name": null,
+        "date": "2025-11-29",
+        "total_amount": 595.0,
+        "currency": "INR",
+        "line_items": [
+          "PROTINEX DIABETES CARE CREAMY VANILLA 400GM JAR POWDER",
+          "NUTRICIA INTERNATIONAL PUT LTD"
+        ],
+        "payment_method": "cash",
+        "receipt_number": null
+      },
+      "fraud_detection": {
+        "is_suspicious": true,
+        "confidence": 0.8,
+        "fraud_indicators": [
+          "font inconsistencies",
+          "misaligned text"
+        ],
+        "visual_anomalies": [
+          "blurred text",
+          "uneven text"
+        ],
+        "overall_assessment": "The receipt appears to be tampered with, with multiple signs of editing and manipulation."
+      },
+      "authenticity_assessment": {
+        "verdict": "real",
+        "confidence": 0.95,
+        "reasoning": "The layout, font, and content of the receipt appear to match those of a real printed receipt. The presence of a store name, date, and items purchased suggest it is genuine.",
+        "red_flags": [],
+        "authenticity_score": 0.95
+      }
+    },
+    "hybrid_verdict": {
+      "final_label": "real",
+      "confidence": 0.7142857142857142,
+      "reasoning": [
+        "DONUT could not extract structured data",
+        "Rule-based: real (score: 0.20)",
+        "Vision: real (confidence: 0.95)"
+      ],
+      "data_quality": "poor",
+      "fraud_indicators": [
+        "font inconsistencies",
+        "misaligned text",
+        "Poor data structure"
+      ],
+      "recommended_action": "human_review"
+    },
+    "timing": {
+      "parallel_total": 12.37642502784729
+    }
+  }
+]

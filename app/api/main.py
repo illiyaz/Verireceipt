@@ -15,6 +15,15 @@ from pydantic import BaseModel, Field
 from app.pipelines.rules import analyze_receipt
 from app.repository.receipt_store import get_receipt_store
 
+# Import hybrid analysis
+try:
+    from app.pipelines.vision_llm import analyze_receipt_with_vision
+    from app.pipelines.donut_extractor import extract_receipt_with_donut, DONUT_AVAILABLE
+    VISION_AVAILABLE = True
+except ImportError:
+    VISION_AVAILABLE = False
+    DONUT_AVAILABLE = False
+
 app = FastAPI(
     title="VeriReceipt API",
     description="AI-Powered Fake Receipt Detection Engine. Analyzes receipts using document forensics, OCR, metadata analysis, and rule-based fraud detection.",
@@ -301,3 +310,189 @@ def get_stats():
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Statistics not implemented for this backend (CSV). Switch to DB backend."
         )
+
+
+# ---------- Hybrid Analysis Endpoint ----------
+
+class HybridAnalyzeResponse(BaseModel):
+    """Response from hybrid 3-engine analysis."""
+    rule_based: dict = Field(..., description="Rule-based engine results")
+    donut: Optional[dict] = Field(None, description="DONUT extraction results")
+    vision_llm: Optional[dict] = Field(None, description="Vision LLM results")
+    hybrid_verdict: dict = Field(..., description="Combined verdict from all engines")
+    timing: dict = Field(..., description="Timing information for each engine")
+    engines_used: List[str] = Field(..., description="List of engines that were used")
+
+
+@app.post("/analyze/hybrid", response_model=HybridAnalyzeResponse, tags=["analysis"])
+async def analyze_hybrid(file: UploadFile = File(...)):
+    """
+    Analyze receipt using all 3 engines in parallel:
+    1. Rule-Based (OCR + Metadata + Rules)
+    2. DONUT (Document Understanding Transformer)
+    3. Vision LLM (Ollama - Visual Fraud Detection)
+    
+    Returns results from all engines plus a hybrid verdict.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    import time as time_module
+    
+    # Save uploaded file
+    file_id = str(uuid.uuid4())
+    file_ext = Path(file.filename).suffix
+    temp_path = UPLOAD_DIR / f"{file_id}{file_ext}"
+    
+    try:
+        with open(temp_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save uploaded file: {str(e)}"
+        )
+    
+    results = {
+        "rule_based": None,
+        "donut": None,
+        "vision_llm": None,
+        "hybrid_verdict": None,
+        "timing": {},
+        "engines_used": []
+    }
+    
+    # Run all engines in parallel
+    def run_rule_based():
+        start = time_module.time()
+        try:
+            decision = analyze_receipt(str(temp_path))
+            elapsed = time_module.time() - start
+            return {
+                "label": decision.label,
+                "score": decision.score,
+                "reasons": decision.reasons,
+                "minor_notes": decision.minor_notes,
+                "time_seconds": round(elapsed, 2)
+            }
+        except Exception as e:
+            return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
+    
+    def run_donut():
+        if not DONUT_AVAILABLE:
+            return {"error": "DONUT not available", "time_seconds": 0}
+        
+        start = time_module.time()
+        try:
+            data = extract_receipt_with_donut(str(temp_path))
+            elapsed = time_module.time() - start
+            return {
+                "merchant": data.get("merchant"),
+                "total": data.get("total"),
+                "line_items_count": len(data.get("line_items", [])),
+                "data_quality": "good" if data.get("total") else "poor",
+                "time_seconds": round(elapsed, 2)
+            }
+        except Exception as e:
+            return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
+    
+    def run_vision():
+        if not VISION_AVAILABLE:
+            return {"error": "Vision LLM not available", "time_seconds": 0}
+        
+        start = time_module.time()
+        try:
+            vision_results = analyze_receipt_with_vision(str(temp_path))
+            elapsed = time_module.time() - start
+            auth = vision_results.get("authenticity_assessment", {})
+            fraud = vision_results.get("fraud_detection", {})
+            return {
+                "verdict": auth.get("verdict", "unknown"),
+                "confidence": auth.get("confidence", 0.0),
+                "authenticity_score": auth.get("authenticity_score", 0.0),
+                "fraud_indicators": fraud.get("fraud_indicators", []),
+                "reasoning": auth.get("reasoning", ""),
+                "time_seconds": round(elapsed, 2)
+            }
+        except Exception as e:
+            return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
+    
+    # Execute in parallel
+    start_time = time_module.time()
+    
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        rule_future = executor.submit(run_rule_based)
+        donut_future = executor.submit(run_donut)
+        vision_future = executor.submit(run_vision)
+        
+        results["rule_based"] = rule_future.result()
+        results["donut"] = donut_future.result()
+        results["vision_llm"] = vision_future.result()
+    
+    total_time = time_module.time() - start_time
+    results["timing"]["parallel_total_seconds"] = round(total_time, 2)
+    
+    # Track which engines were used
+    if not results["rule_based"].get("error"):
+        results["engines_used"].append("rule-based")
+    if not results["donut"].get("error"):
+        results["engines_used"].append("donut")
+    if not results["vision_llm"].get("error"):
+        results["engines_used"].append("vision-llm")
+    
+    # Generate hybrid verdict
+    hybrid = {
+        "final_label": "unknown",
+        "confidence": 0.0,
+        "recommended_action": "unknown",
+        "reasoning": []
+    }
+    
+    # Simple hybrid logic
+    rule_label = results["rule_based"].get("label", "unknown")
+    rule_score = results["rule_based"].get("score", 0.5)
+    vision_verdict = results["vision_llm"].get("verdict", "unknown")
+    vision_confidence = results["vision_llm"].get("confidence", 0.0)
+    
+    # Combine signals
+    if rule_label == "real" and rule_score < 0.3:
+        if vision_verdict == "real" and vision_confidence > 0.7:
+            hybrid["final_label"] = "real"
+            hybrid["confidence"] = 0.95
+            hybrid["recommended_action"] = "approve"
+            hybrid["reasoning"].append("Both engines strongly indicate authentic receipt")
+        else:
+            hybrid["final_label"] = "real"
+            hybrid["confidence"] = 0.85
+            hybrid["recommended_action"] = "approve"
+            hybrid["reasoning"].append("Rule-based engine indicates real receipt")
+    elif rule_label == "fake" or rule_score > 0.7:
+        hybrid["final_label"] = "fake"
+        hybrid["confidence"] = 0.90
+        hybrid["recommended_action"] = "reject"
+        hybrid["reasoning"].append("High fraud score detected")
+    else:
+        # Suspicious case - use vision as tiebreaker
+        if vision_verdict == "fake" and vision_confidence > 0.7:
+            hybrid["final_label"] = "fake"
+            hybrid["confidence"] = 0.85
+            hybrid["recommended_action"] = "reject"
+            hybrid["reasoning"].append("Vision model detected fraud indicators")
+        elif vision_verdict == "real" and vision_confidence > 0.8:
+            hybrid["final_label"] = "real"
+            hybrid["confidence"] = 0.80
+            hybrid["recommended_action"] = "approve"
+            hybrid["reasoning"].append("Vision model confirms authenticity")
+        else:
+            hybrid["final_label"] = "suspicious"
+            hybrid["confidence"] = 0.60
+            hybrid["recommended_action"] = "human_review"
+            hybrid["reasoning"].append("Uncertain - requires human review")
+    
+    results["hybrid_verdict"] = hybrid
+    
+    # Cleanup
+    try:
+        temp_path.unlink()
+    except:
+        pass
+    
+    return HybridAnalyzeResponse(**results)
