@@ -166,7 +166,75 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
             "Low variety of characters detected in the text, which may indicate repetitive or template-generated content."
         )
 
-    # --- 5. Normalize and classify ------------------------------------------
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 5: Date mismatch (creation date vs receipt date)
+    #
+    # CRITICAL: If PDF/image was created AFTER the receipt date, it's likely fake.
+    # This catches cases where someone creates a fake receipt with a backdated date.
+    # ---------------------------------------------------------------------------
+
+    # R15: Creation date vs receipt date mismatch
+    if ff.get("has_creation_date") and tf.get("receipt_date"):
+        try:
+            from datetime import datetime
+            
+            creation_date_raw = ff.get("creation_date")
+            receipt_date_str = tf.get("receipt_date")
+            
+            if creation_date_raw and receipt_date_str:
+                # Parse creation date (from PDF metadata - usually datetime object or string)
+                if isinstance(creation_date_raw, str):
+                    # Try to parse string date
+                    creation_date = None
+                    for fmt in ["%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y%m%d%H%M%S"]:
+                        try:
+                            creation_date = datetime.strptime(creation_date_raw.split()[0], fmt)
+                            break
+                        except:
+                            continue
+                    # If still None, try ISO format
+                    if not creation_date:
+                        try:
+                            creation_date = datetime.fromisoformat(creation_date_raw.replace('Z', '+00:00'))
+                        except:
+                            pass
+                else:
+                    # Assume it's already a datetime object
+                    creation_date = creation_date_raw
+                
+                # Parse receipt date (from OCR text - normalized to YYYY-MM-DD)
+                receipt_date = datetime.strptime(receipt_date_str, "%Y-%m-%d")
+                
+                if creation_date and receipt_date:
+                    # Calculate difference in days
+                    days_diff = (creation_date.date() - receipt_date.date()).days
+                    
+                    # Receipt date is in the future relative to creation (impossible!)
+                    if days_diff < -1:
+                        score += 0.4
+                        reasons.append(
+                            f"CRITICAL: Receipt date ({receipt_date_str}) is {abs(days_diff)} days AFTER "
+                            f"file creation date - this is impossible and indicates fabrication."
+                        )
+                    
+                    # File created more than 2 days after receipt date (suspicious)
+                    elif days_diff > 2:
+                        score += 0.35
+                        reasons.append(
+                            f"Suspicious: File created {days_diff} days after receipt date ({receipt_date_str}) - "
+                            f"likely backdated or fabricated."
+                        )
+                    
+                    # Same day or next day (normal - receipt scanned same/next day)
+                    elif days_diff >= -1 and days_diff <= 2:
+                        minor_notes.append(
+                            f"Receipt scanned within {days_diff} day(s) of transaction - normal timing."
+                        )
+        except Exception as e:
+            # Date parsing failed - log but don't penalize
+            minor_notes.append(f"Could not compare creation date vs receipt date: {str(e)}")
+
+    # --- 6. Normalize and classify ------------------------------------------
 
     # Clamp score to [0, 1]
     score = max(0.0, min(1.0, score))

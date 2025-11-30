@@ -144,6 +144,33 @@ def _has_any_date(text: str) -> bool:
     return False
 
 
+def _extract_receipt_date(text: str) -> Optional[str]:
+    """
+    Extract the first date found in the receipt text.
+    Returns date string in a normalized format or None.
+    """
+    from datetime import datetime
+    
+    for rx in _DATE_REGEXES:
+        match = rx.search(text)
+        if match:
+            date_str = match.group(0)
+            # Try to parse and normalize the date
+            try:
+                # Try various date formats
+                for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y", "%d.%m.%Y", "%d %b %Y", "%d %B %Y"]:
+                    try:
+                        parsed = datetime.strptime(date_str, fmt)
+                        return parsed.strftime("%Y-%m-%d")  # Normalize to YYYY-MM-DD
+                    except:
+                        continue
+                # If parsing fails, return the original string
+                return date_str
+            except:
+                return date_str
+    return None
+
+
 # --- Helper: Merchant candidate line ----------------------------------------
 
 def _guess_merchant_line(lines: List[str]) -> Optional[str]:
@@ -229,7 +256,9 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         "creator": meta.get("creator"),
         "suspicious_producer": suspicious_producer,
         "has_creation_date": bool(meta.get("creation_date")),
+        "creation_date": meta.get("creation_date"),  # Actual date value
         "has_mod_date": bool(meta.get("mod_date")),
+        "mod_date": meta.get("mod_date"),  # Actual date value
         "exif_present": meta.get("exif_present"),  # for images
         "exif_keys_count": meta.get("exif_keys_count"),
     }
@@ -247,8 +276,9 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         bool(total_amount is not None and has_line_items and abs(items_sum - total_amount) > 0.5)
     )
 
-    # Date presence
+    # Date presence and extraction
     has_date = _has_any_date(full_text)
+    receipt_date = _extract_receipt_date(full_text)
 
     # Merchant candidate
     merchant_candidate = _guess_merchant_line(lines)
@@ -264,6 +294,7 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         "line_items_sum": items_sum if has_line_items else None,
         "total_mismatch": total_mismatch,
         "has_date": has_date,
+        "receipt_date": receipt_date,  # Actual extracted date
         "merchant_candidate": merchant_candidate,
     }
     text_features.update(text_stats)
