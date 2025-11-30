@@ -137,6 +137,7 @@
             const [engineStatus, setEngineStatus] = useState({
                 'rule-based': 'pending',
                 'donut': 'pending',
+                'layoutlm': 'pending',
                 'vision-llm': 'pending'
             });
             const [engineResults, setEngineResults] = useState({});
@@ -207,6 +208,7 @@
                 setEngineStatus({
                     'rule-based': 'pending',
                     'donut': 'pending',
+                    'layoutlm': 'pending',
                     'vision-llm': 'pending'
                 });
                 setEngineResults({});
@@ -218,7 +220,7 @@
 
                 try {
                     addLog('📤 Uploading receipt...', 'info');
-                    addLog('🚀 Starting 3-engine analysis (this may take 10-20 seconds)...', 'info');
+                    addLog('🚀 Starting 4-engine analysis (this may take 10-20 seconds)...', 'info');
                     
                     // Using regular endpoint for now (streaming has async issues)
                     const response = await fetch(`${API_BASE_URL}/analyze/hybrid`, {
@@ -234,27 +236,46 @@
                     const data = await response.json();
                     
                     // Simulate progress updates for better UX
-                    addLog('⏳ Analyzing with all 3 engines...', 'info');
-                    setProgress(33);
+                    addLog('⏳ Analyzing with all 4 engines...', 'info');
+                    setProgress(25);
                     
                     // Show results for each engine
                     if (data.rule_based && !data.rule_based.error) {
                         setEngineStatus(prev => ({ ...prev, 'rule-based': 'completed' }));
                         setEngineResults(prev => ({ ...prev, 'rule-based': data.rule_based }));
                         addLog(`✅ Rule-Based completed in ${data.rule_based.time_seconds}s`, 'success');
+                    } else if (data.rule_based && data.rule_based.error) {
+                        setEngineStatus(prev => ({ ...prev, 'rule-based': 'failed' }));
+                        addLog(`❌ Rule-Based failed: ${data.rule_based.error}`, 'error');
                     }
-                    setProgress(66);
+                    setProgress(50);
                     
                     if (data.donut && !data.donut.error) {
                         setEngineStatus(prev => ({ ...prev, 'donut': 'completed' }));
                         setEngineResults(prev => ({ ...prev, 'donut': data.donut }));
                         addLog(`✅ DONUT completed in ${data.donut.time_seconds}s`, 'success');
+                    } else if (data.donut && data.donut.error) {
+                        setEngineStatus(prev => ({ ...prev, 'donut': 'failed' }));
+                        addLog(`❌ DONUT failed: ${data.donut.error}`, 'error');
                     }
+                    
+                    if (data.layoutlm && !data.layoutlm.error) {
+                        setEngineStatus(prev => ({ ...prev, 'layoutlm': 'completed' }));
+                        setEngineResults(prev => ({ ...prev, 'layoutlm': data.layoutlm }));
+                        addLog(`✅ LayoutLM completed in ${data.layoutlm.time_seconds}s`, 'success');
+                    } else if (data.layoutlm && data.layoutlm.error) {
+                        setEngineStatus(prev => ({ ...prev, 'layoutlm': 'failed' }));
+                        addLog(`❌ LayoutLM failed: ${data.layoutlm.error}`, 'error');
+                    }
+                    setProgress(75);
                     
                     if (data.vision_llm && !data.vision_llm.error) {
                         setEngineStatus(prev => ({ ...prev, 'vision-llm': 'completed' }));
                         setEngineResults(prev => ({ ...prev, 'vision-llm': data.vision_llm }));
                         addLog(`✅ Vision LLM completed in ${data.vision_llm.time_seconds}s`, 'success');
+                    } else if (data.vision_llm && data.vision_llm.error) {
+                        setEngineStatus(prev => ({ ...prev, 'vision-llm': 'failed' }));
+                        addLog(`❌ Vision LLM failed: ${data.vision_llm.error}`, 'error');
                     }
                     setProgress(100);
                     
@@ -324,6 +345,7 @@
                 setEngineStatus({
                     'rule-based': 'pending',
                     'donut': 'pending',
+                    'layoutlm': 'pending',
                     'vision-llm': 'pending'
                 });
                 if (fileInputRef.current) {
@@ -483,6 +505,13 @@
                                                 color="green"
                                                 status={engineStatus['donut']}
                                                 result={engineResults['donut']}
+                                            />
+                                            <EngineStatusCard
+                                                name="LayoutLM"
+                                                icon="fa-layer-group"
+                                                color="orange"
+                                                status={engineStatus['layoutlm']}
+                                                result={engineResults['layoutlm']}
                                             />
                                             <EngineStatusCard
                                                 name="Vision LLM"
