@@ -486,32 +486,45 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         "total_engines": 4
     }
     
-    # Check if all engines completed successfully
-    all_engines_completed = (
-        not results["rule_based"].get("error") and
-        not results["donut"].get("error") and
-        not results["layoutlm"].get("error") and
-        not results["vision_llm"].get("error")
-    )
+    # Tiered approach: Check which engines completed
+    critical_engines = {
+        "rule-based": not results["rule_based"].get("error"),
+        "vision-llm": not results["vision_llm"].get("error")
+    }
     
-    # If not all engines completed, flag for review
-    if not all_engines_completed:
+    optional_engines = {
+        "donut": not results["donut"].get("error"),
+        "layoutlm": not results["layoutlm"].get("error")
+    }
+    
+    # Track failed engines for transparency
+    failed_engines = []
+    if results["rule_based"].get("error"):
+        failed_engines.append(f"Rule-Based: {results['rule_based']['error']}")
+    if results["donut"].get("error"):
+        failed_engines.append(f"DONUT: {results['donut']['error']}")
+    if results["layoutlm"].get("error"):
+        failed_engines.append(f"LayoutLM: {results['layoutlm']['error']}")
+    if results["vision_llm"].get("error"):
+        failed_engines.append(f"Vision LLM: {results['vision_llm']['error']}")
+    
+    # Add transparency info to hybrid verdict
+    hybrid["engines_status"] = {
+        "critical_complete": all(critical_engines.values()),
+        "optional_complete": sum(optional_engines.values()),
+        "failed_engines": failed_engines
+    }
+    
+    # Check if critical engines (Rule-Based + Vision LLM) completed
+    if not all(critical_engines.values()):
+        # Critical engines failed - cannot generate reliable verdict
         hybrid["final_label"] = "incomplete"
         hybrid["confidence"] = 0.0
         hybrid["recommended_action"] = "retry_or_review"
+        hybrid["reasoning"].append("⚠️ Critical engines (Rule-Based or Vision LLM) failed")
         
-        # Add reasoning for each failed engine
-        if results["rule_based"].get("error"):
-            hybrid["reasoning"].append(f"Rule-based engine failed: {results['rule_based']['error']}")
-        if results["donut"].get("error"):
-            hybrid["reasoning"].append(f"DONUT engine failed: {results['donut']['error']}")
-        if results["layoutlm"].get("error"):
-            hybrid["reasoning"].append(f"LayoutLM engine failed: {results['layoutlm']['error']}")
-        if results["vision_llm"].get("error"):
-            hybrid["reasoning"].append(f"Vision LLM failed: {results['vision_llm']['error']}")
-        
-        if not hybrid["reasoning"]:
-            hybrid["reasoning"].append("One or more engines did not complete successfully")
+        for failure in failed_engines:
+            hybrid["reasoning"].append(f"❌ {failure}")
     else:
         # All engines completed - generate hybrid verdict
         rule_label = results["rule_based"].get("label", "unknown")
@@ -521,42 +534,79 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         donut_quality = results["donut"].get("data_quality", "unknown")
         layoutlm_quality = results["layoutlm"].get("data_quality", "unknown")
         
-        # Combine signals from all 4 engines
+        # Critical engines completed - generate verdict with tiered confidence
+        
+        # Calculate base confidence from critical engines
+        base_confidence = 0.85  # Base with Rule-Based + Vision LLM
+        
+        # Boost confidence for each optional engine that succeeded
+        optional_boost = 0.0
+        if optional_engines["donut"] and donut_quality == "good":
+            optional_boost += 0.05
+        if optional_engines["layoutlm"] and layoutlm_quality == "good":
+            optional_boost += 0.05
+        
+        # Combine signals from available engines
         if rule_label == "real" and rule_score < 0.3:
             if vision_verdict == "real" and vision_confidence > 0.7:
                 hybrid["final_label"] = "real"
-                hybrid["confidence"] = 0.98  # Higher with 4 engines
+                hybrid["confidence"] = min(base_confidence + optional_boost, 0.98)
                 hybrid["recommended_action"] = "approve"
-                hybrid["reasoning"].append("All 4 engines indicate authentic receipt")
-                if donut_quality == "good" or layoutlm_quality == "good":
-                    hybrid["reasoning"].append("Document structure validated by extraction engines")
+                
+                # Transparent reasoning
+                engines_count = 2 + sum(optional_engines.values())
+                hybrid["reasoning"].append(f"✅ {engines_count}/4 engines indicate authentic receipt")
+                hybrid["reasoning"].append(f"✅ Critical engines (Rule-Based + Vision LLM) agree: REAL")
+                
+                if optional_engines["donut"] and donut_quality == "good":
+                    hybrid["reasoning"].append("✅ DONUT validated document structure")
+                if optional_engines["layoutlm"] and layoutlm_quality == "good":
+                    hybrid["reasoning"].append("✅ LayoutLM validated document structure")
+                
+                # Show failed optional engines transparently
+                if not optional_engines["donut"]:
+                    hybrid["reasoning"].append("ℹ️ DONUT unavailable (confidence slightly lower)")
+                if not optional_engines["layoutlm"]:
+                    hybrid["reasoning"].append("ℹ️ LayoutLM unavailable (confidence slightly lower)")
             else:
                 hybrid["final_label"] = "real"
-                hybrid["confidence"] = 0.85
+                hybrid["confidence"] = 0.80
                 hybrid["recommended_action"] = "approve"
-                hybrid["reasoning"].append("Rule-based engine indicates real receipt")
+                hybrid["reasoning"].append("✅ Rule-based engine indicates real receipt")
+                hybrid["reasoning"].append("ℹ️ Vision LLM shows lower confidence")
+                
         elif rule_label == "fake" or rule_score > 0.7:
             hybrid["final_label"] = "fake"
-            hybrid["confidence"] = 0.90
+            hybrid["confidence"] = min(0.90 + optional_boost, 0.95)
             hybrid["recommended_action"] = "reject"
-            hybrid["reasoning"].append("High fraud score detected by rule-based engine")
+            
+            engines_count = 2 + sum(optional_engines.values())
+            hybrid["reasoning"].append(f"❌ {engines_count}/4 engines indicate fraudulent receipt")
+            hybrid["reasoning"].append("❌ High fraud score detected by rule-based engine")
+            
+            if vision_verdict == "fake":
+                hybrid["reasoning"].append("❌ Vision LLM confirms fraud indicators")
+                
         else:
             # Suspicious case - use vision as tiebreaker
             if vision_verdict == "fake" and vision_confidence > 0.7:
                 hybrid["final_label"] = "fake"
                 hybrid["confidence"] = 0.85
                 hybrid["recommended_action"] = "reject"
-                hybrid["reasoning"].append("Vision model detected fraud indicators")
+                hybrid["reasoning"].append("⚠️ Suspicious patterns detected")
+                hybrid["reasoning"].append("❌ Vision model detected fraud indicators")
             elif vision_verdict == "real" and vision_confidence > 0.8:
                 hybrid["final_label"] = "real"
                 hybrid["confidence"] = 0.80
                 hybrid["recommended_action"] = "approve"
-                hybrid["reasoning"].append("Vision model confirms authenticity")
+                hybrid["reasoning"].append("✅ Vision model confirms authenticity")
+                hybrid["reasoning"].append("ℹ️ Rule-based shows moderate score")
             else:
                 hybrid["final_label"] = "suspicious"
                 hybrid["confidence"] = 0.60
                 hybrid["recommended_action"] = "human_review"
-                hybrid["reasoning"].append("Uncertain - requires human review")
+                hybrid["reasoning"].append("⚠️ Uncertain - requires human review")
+                hybrid["reasoning"].append("ℹ️ Mixed signals from engines")
     
     results["hybrid_verdict"] = hybrid
     
