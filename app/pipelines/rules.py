@@ -229,9 +229,11 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
                     if days_diff < -1:
                         score += 0.4
                         reasons.append(
-                            f"⚠️ Impossible Date Sequence: The receipt claims to be dated {receipt_date_str}, "
-                            f"but the file was created {abs(days_diff)} days EARLIER on {creation_date.date()}. "
-                            f"This is physically impossible - a receipt cannot exist before the file containing it was created. "
+                            f"⚠️ Impossible Date Sequence Detected:\n"
+                            f"   • Receipt/Purchase Date: {receipt_date_str}\n"
+                            f"   • PDF Creation Date: {creation_date.date()}\n"
+                            f"   • Time Difference: Receipt is {abs(days_diff)} days AFTER file creation\n"
+                            f"   • Problem: This is physically impossible - a receipt cannot be dated after the file containing it was created. "
                             f"This strongly indicates the receipt was backdated or fabricated."
                         )
                     
@@ -239,10 +241,12 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
                     elif days_diff > 2:
                         score += 0.35
                         reasons.append(
-                            f"⏰ Suspicious Timing: The receipt is dated {receipt_date_str}, but the file was created "
-                            f"{days_diff} days later on {creation_date.date()}. While receipts can be scanned later, "
-                            f"a gap of {days_diff} days is unusual for expense claims. This pattern is common in "
-                            f"backdated or fabricated receipts created to match past dates."
+                            f"⏰ Suspicious Date Gap Detected:\n"
+                            f"   • Receipt/Purchase Date: {receipt_date_str}\n"
+                            f"   • PDF Creation Date: {creation_date.date()}\n"
+                            f"   • Time Difference: File created {days_diff} days AFTER the receipt date\n"
+                            f"   • Analysis: While receipts can be scanned later, a {days_diff}-day gap is unusual for expense claims. "
+                            f"This pattern is common in backdated or fabricated receipts created to match past dates."
                         )
                     
                     # Same day or next day (normal - receipt scanned same/next day)
@@ -329,9 +333,14 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
         if total_diff > 1.0:  # Allow 1 rupee/dollar rounding
             score += 0.30
             reasons.append(
-                f"🧮 Math Error Detected: Subtotal ({subtotal:.2f}) + Tax ({tax_amount:.2f}) = {expected_total:.2f}, "
-                f"but the receipt shows Total: {total_amount:.2f}. Difference: {total_diff:.2f}. "
-                f"Real receipts from legitimate businesses have accurate calculations. Math errors are a strong indicator of fake receipts."
+                f"🧮 Math Error Detected:\n"
+                f"   • Subtotal: {subtotal:.2f}\n"
+                f"   • Tax: {tax_amount:.2f}\n"
+                f"   • Expected Total: {expected_total:.2f}\n"
+                f"   • Actual Total on Receipt: {total_amount:.2f}\n"
+                f"   • Difference: {total_diff:.2f}\n"
+                f"   • Problem: Real receipts from legitimate businesses have accurate calculations. "
+                f"Math errors like this are a strong indicator of manually created fake receipts."
             )
         
         # If tax rate is given, verify tax calculation
@@ -342,9 +351,13 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
             if tax_diff > 1.0:
                 score += 0.25
                 reasons.append(
-                    f"💰 Tax Calculation Error: The receipt claims {tax_rate}% tax on {subtotal:.2f}, which should be {expected_tax:.2f}, "
-                    f"but shows {tax_amount:.2f} instead (difference: {tax_diff:.2f}). "
-                    f"Incorrect tax calculations are common in manually created fake receipts."
+                    f"💰 Tax Calculation Error:\n"
+                    f"   • Subtotal: {subtotal:.2f}\n"
+                    f"   • Tax Rate Claimed: {tax_rate}%\n"
+                    f"   • Expected Tax ({tax_rate}% of {subtotal:.2f}): {expected_tax:.2f}\n"
+                    f"   • Actual Tax on Receipt: {tax_amount:.2f}\n"
+                    f"   • Difference: {tax_diff:.2f}\n"
+                    f"   • Problem: Incorrect tax calculations are common in manually created fake receipts."
                 )
     
     # R20: Total doesn't match standard tax rates (if no explicit tax line)
@@ -367,8 +380,11 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
         if not matches_any_rate and items_sum > 0:
             score += 0.20
             reasons.append(
-                f"❓ Unusual Total Amount: Line items sum to {items_sum:.2f}, but total is {total_amount:.2f}. "
-                f"This doesn't match any standard tax rate (5%, 10%, 12%, 18%, 20%) or a no-tax scenario. "
+                f"❓ Unusual Total Amount:\n"
+                f"   • Line Items Sum: {items_sum:.2f}\n"
+                f"   • Total on Receipt: {total_amount:.2f}\n"
+                f"   • Difference: {abs(total_amount - items_sum):.2f}\n"
+                f"   • Analysis: This doesn't match any standard tax rate (5%, 10%, 12%, 18%, 20%) or a no-tax scenario. "
                 f"Real receipts follow predictable tax patterns. This mismatch suggests manual fabrication."
             )
 
