@@ -116,6 +116,72 @@ def _find_total_line(lines: List[str]) -> Tuple[Optional[str], Optional[float]]:
     return total_line, None
 
 
+def _find_subtotal(lines: List[str]) -> Optional[float]:
+    """
+    Try to find the subtotal (before tax) on the receipt.
+    """
+    subtotal_keywords = ["subtotal", "sub total", "sub-total", "amount before tax"]
+    
+    for line in lines:
+        lower = line.lower()
+        if any(k in lower for k in subtotal_keywords):
+            match = _AMOUNT_REGEX.search(line)
+            if match:
+                return _parse_amount(match.group(1))
+    return None
+
+
+def _find_tax_amount(lines: List[str]) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Try to find tax amount and tax rate on the receipt.
+    Returns (tax_amount, tax_rate_percent)
+    """
+    tax_keywords = ["tax", "gst", "vat", "sales tax", "service tax"]
+    
+    tax_amount = None
+    tax_rate = None
+    
+    for line in lines:
+        lower = line.lower()
+        if any(k in lower for k in tax_keywords):
+            # Try to extract tax amount
+            match = _AMOUNT_REGEX.search(line)
+            if match:
+                tax_amount = _parse_amount(match.group(1))
+            
+            # Try to extract tax rate (e.g., "18%", "10%")
+            rate_match = re.search(r'(\d+(?:\.\d+)?)\s*%', line)
+            if rate_match:
+                tax_rate = float(rate_match.group(1))
+    
+    return tax_amount, tax_rate
+
+
+def _extract_receipt_number(lines: List[str]) -> Optional[str]:
+    """
+    Try to extract receipt/invoice number from the receipt.
+    """
+    receipt_keywords = [
+        "receipt", "invoice", "bill", "order", "transaction",
+        "ref", "reference", "#", "no", "number"
+    ]
+    
+    for line in lines:
+        lower = line.lower()
+        # Check if line contains receipt number keywords
+        if any(k in lower for k in receipt_keywords):
+            # Try to extract alphanumeric receipt number
+            # Patterns: R-1234, INV-001, #12345, 0001, etc.
+            match = re.search(r'[:#\s]([A-Z0-9\-]{3,20})\b', line, re.I)
+            if match:
+                receipt_num = match.group(1).strip()
+                # Filter out common false positives
+                if receipt_num.lower() not in ['number', 'no', 'ref']:
+                    return receipt_num
+    
+    return None
+
+
 def _extract_line_item_amounts(lines: List[str]) -> List[float]:
     """
     Very naive v1 line-item detector:
@@ -271,6 +337,13 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     producer_lower = str(producer).lower()
 
     suspicious_producer = any(p in producer_lower for p in SUSPICIOUS_PRODUCERS)
+    
+    # Get image dimensions from first page
+    image_width = None
+    image_height = None
+    if raw.images and len(raw.images) > 0:
+        image_width = raw.images[0].width
+        image_height = raw.images[0].height
 
     file_features: Dict[str, Any] = {
         "file_size_bytes": raw.file_size_bytes,
@@ -285,6 +358,8 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         "mod_date": meta.get("mod_date"),  # Actual date value
         "exif_present": meta.get("exif_present"),  # for images
         "exif_keys_count": meta.get("exif_keys_count"),
+        "image_width": image_width,
+        "image_height": image_height,
     }
 
     # --- Text features -------------------------------------------------------
@@ -299,6 +374,13 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     total_mismatch = (
         bool(total_amount is not None and has_line_items and abs(items_sum - total_amount) > 0.5)
     )
+
+    # Tax and subtotal extraction
+    subtotal = _find_subtotal(lines)
+    tax_amount, tax_rate = _find_tax_amount(lines)
+
+    # Receipt number extraction
+    receipt_number = _extract_receipt_number(lines)
 
     # Date presence and extraction
     has_date = _has_any_date(full_text)
@@ -317,6 +399,10 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         "has_line_items": has_line_items,
         "line_items_sum": items_sum if has_line_items else None,
         "total_mismatch": total_mismatch,
+        "subtotal": subtotal,
+        "tax_amount": tax_amount,
+        "tax_rate": tax_rate,
+        "receipt_number": receipt_number,
         "has_date": has_date,
         "receipt_date": receipt_date,  # Actual extracted date
         "merchant_candidate": merchant_candidate,

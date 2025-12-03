@@ -296,7 +296,143 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
             f"unusual for legitimate receipts."
         )
 
-    # --- 7. Normalize and classify ------------------------------------------
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 7: Tax and calculation checks
+    #
+    # Verify mathematical accuracy of tax calculations and totals.
+    # Fake receipts often have incorrect math.
+    # ---------------------------------------------------------------------------
+
+    # R19: Tax calculation mismatch
+    subtotal = tf.get("subtotal")
+    tax_amount = tf.get("tax_amount")
+    tax_rate = tf.get("tax_rate")
+    total_amount = tf.get("total_amount")
+    
+    if subtotal and tax_amount and total_amount:
+        # Check if subtotal + tax = total
+        expected_total = subtotal + tax_amount
+        total_diff = abs(total_amount - expected_total)
+        
+        if total_diff > 1.0:  # Allow 1 rupee/dollar rounding
+            score += 0.30
+            reasons.append(
+                f"Math error: Subtotal ({subtotal:.2f}) + Tax ({tax_amount:.2f}) "
+                f"≠ Total ({total_amount:.2f}). Difference: {total_diff:.2f}"
+            )
+        
+        # If tax rate is given, verify tax calculation
+        if tax_rate:
+            expected_tax = subtotal * (tax_rate / 100)
+            tax_diff = abs(tax_amount - expected_tax)
+            
+            if tax_diff > 1.0:
+                score += 0.25
+                reasons.append(
+                    f"Tax calculation error: {tax_rate}% of {subtotal:.2f} "
+                    f"should be {expected_tax:.2f}, but got {tax_amount:.2f}"
+                )
+    
+    # R20: Total doesn't match standard tax rates (if no explicit tax line)
+    elif total_amount and tf.get("line_items_sum") and not tax_amount:
+        items_sum = tf.get("line_items_sum")
+        # Common tax rates: 5%, 10%, 12%, 18%, 20%
+        common_rates = [0.05, 0.10, 0.12, 0.18, 0.20]
+        
+        matches_any_rate = False
+        for rate in common_rates:
+            expected_total = items_sum * (1 + rate)
+            if abs(total_amount - expected_total) / total_amount < 0.02:  # Within 2%
+                matches_any_rate = True
+                break
+        
+        # Also check if total equals items_sum (no tax)
+        if abs(total_amount - items_sum) < 1.0:
+            matches_any_rate = True
+        
+        if not matches_any_rate and items_sum > 0:
+            score += 0.20
+            reasons.append(
+                f"Total ({total_amount:.2f}) doesn't match line items ({items_sum:.2f}) "
+                f"plus any standard tax rate - suspicious calculation"
+            )
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 8: Receipt number validation
+    #
+    # Check for suspicious receipt number patterns that are common in fakes.
+    # ---------------------------------------------------------------------------
+
+    # R21: Suspicious receipt number patterns
+    receipt_number = tf.get("receipt_number")
+    
+    if receipt_number:
+        receipt_num_clean = receipt_number.replace('-', '').replace('_', '').upper()
+        
+        # Check for very simple numbers (001, 123, etc.)
+        if receipt_num_clean.isdigit() and len(receipt_num_clean) <= 4:
+            num_value = int(receipt_num_clean)
+            if num_value < 100:
+                score += 0.25
+                reasons.append(
+                    f"Receipt number '{receipt_number}' is suspiciously simple (< 100) - "
+                    f"real receipts typically have larger numbers"
+                )
+        
+        # Check for all same digit (1111, 0000, etc.)
+        if len(set(receipt_num_clean)) == 1 and len(receipt_num_clean) >= 3:
+            score += 0.30
+            reasons.append(
+                f"Receipt number '{receipt_number}' has all same digits - highly suspicious"
+            )
+        
+        # Check for sequential patterns (12345, 123456, etc.)
+        if receipt_num_clean.isdigit() and len(receipt_num_clean) >= 4:
+            is_sequential = True
+            for i in range(len(receipt_num_clean) - 1):
+                if int(receipt_num_clean[i+1]) != (int(receipt_num_clean[i]) + 1) % 10:
+                    is_sequential = False
+                    break
+            
+            if is_sequential:
+                score += 0.25
+                reasons.append(
+                    f"Receipt number '{receipt_number}' is sequential - suspicious pattern"
+                )
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 9: Image quality and dimensions
+    #
+    # Check for suspicious image dimensions that indicate computer-generated receipts.
+    # ---------------------------------------------------------------------------
+
+    # R22: Suspicious image dimensions
+    image_width = ff.get("image_width")
+    image_height = ff.get("image_height")
+    
+    if image_width and image_height:
+        # Canva default dimensions (1080x1080)
+        if image_width == 1080 and image_height == 1080:
+            score += 0.25
+            reasons.append(
+                "Image dimensions (1080x1080) match Canva default - likely computer-generated"
+            )
+        
+        # Very small images (likely screenshots)
+        elif image_width < 800 or image_height < 800:
+            score += 0.15
+            reasons.append(
+                f"Low resolution image ({image_width}x{image_height}) - may be screenshot or low-quality fake"
+            )
+        
+        # Perfect square (unusual for receipts)
+        elif image_width == image_height and image_width >= 1000:
+            score += 0.20
+            reasons.append(
+                f"Perfect square dimensions ({image_width}x{image_height}) - unusual for real receipts"
+            )
+
+    # --- 10. Normalize and classify ------------------------------------------
 
     # Clamp score to [0, 1]
     score = max(0.0, min(1.0, score))
