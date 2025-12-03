@@ -134,27 +134,133 @@ def _find_subtotal(lines: List[str]) -> Optional[float]:
 def _find_tax_amount(lines: List[str]) -> Tuple[Optional[float], Optional[float]]:
     """
     Try to find tax amount and tax rate on the receipt.
-    Returns (tax_amount, tax_rate_percent)
-    """
-    tax_keywords = ["tax", "gst", "vat", "sales tax", "service tax"]
+    Handles multiple tax systems:
+    - India: GST, CGST, SGST, IGST, CESS
+    - International: VAT, Sales Tax, Service Tax
     
-    tax_amount = None
+    Returns (total_tax_amount, tax_rate_percent)
+    """
+    # Indian tax components
+    indian_tax_keywords = [
+        "gst", "cgst", "sgst", "igst", "cess",  # Indian GST system
+        "central gst", "state gst", "integrated gst"
+    ]
+    
+    # International tax keywords
+    international_tax_keywords = [
+        "tax", "vat", "sales tax", "service tax", "excise"
+    ]
+    
+    all_tax_keywords = indian_tax_keywords + international_tax_keywords
+    
+    # Collect all tax amounts (for Indian receipts with multiple components)
+    tax_amounts = []
     tax_rate = None
     
     for line in lines:
         lower = line.lower()
-        if any(k in lower for k in tax_keywords):
-            # Try to extract tax amount
-            match = _AMOUNT_REGEX.search(line)
-            if match:
-                tax_amount = _parse_amount(match.group(1))
+        
+        # Check if line contains any tax keyword
+        if any(k in lower for k in all_tax_keywords):
+            # Try to extract tax amount - look for amount after colon or at end of line
+            # This handles formats like "CGST @ 9%: 90.00" or "Tax: 90.00"
+            if ':' in line:
+                # Get the part after the colon
+                after_colon = line.split(':')[-1]
+                match = _AMOUNT_REGEX.search(after_colon)
+            else:
+                # No colon, search the whole line
+                match = _AMOUNT_REGEX.search(line)
             
-            # Try to extract tax rate (e.g., "18%", "10%")
+            if match:
+                amount = _parse_amount(match.group(1))
+                if amount:
+                    tax_amounts.append(amount)
+            
+            # Try to extract tax rate (e.g., "18%", "10%", "2.5%")
             rate_match = re.search(r'(\d+(?:\.\d+)?)\s*%', line)
-            if rate_match:
+            if rate_match and not tax_rate:  # Take first rate found
                 tax_rate = float(rate_match.group(1))
     
-    return tax_amount, tax_rate
+    # Sum all tax components (important for Indian receipts with CGST+SGST)
+    total_tax = sum(tax_amounts) if tax_amounts else None
+    
+    return total_tax, tax_rate
+
+
+def _detect_tax_breakdown(lines: List[str]) -> Dict[str, Any]:
+    """
+    Detect and extract individual tax components (especially for Indian receipts).
+    Returns a dictionary with tax breakdown information.
+    """
+    tax_breakdown = {
+        "has_cgst": False,
+        "has_sgst": False,
+        "has_igst": False,
+        "has_cess": False,
+        "cgst_amount": None,
+        "sgst_amount": None,
+        "igst_amount": None,
+        "cess_amount": None,
+        "is_indian_receipt": False,
+    }
+    
+    for line in lines:
+        lower = line.lower()
+        
+        # Check for CGST (Central GST)
+        if "cgst" in lower or "central gst" in lower:
+            tax_breakdown["has_cgst"] = True
+            tax_breakdown["is_indian_receipt"] = True
+            # Look for amount after colon
+            if ':' in line:
+                after_colon = line.split(':')[-1]
+                match = _AMOUNT_REGEX.search(after_colon)
+            else:
+                match = _AMOUNT_REGEX.search(line)
+            if match:
+                tax_breakdown["cgst_amount"] = _parse_amount(match.group(1))
+        
+        # Check for SGST (State GST)
+        if "sgst" in lower or "state gst" in lower:
+            tax_breakdown["has_sgst"] = True
+            tax_breakdown["is_indian_receipt"] = True
+            # Look for amount after colon
+            if ':' in line:
+                after_colon = line.split(':')[-1]
+                match = _AMOUNT_REGEX.search(after_colon)
+            else:
+                match = _AMOUNT_REGEX.search(line)
+            if match:
+                tax_breakdown["sgst_amount"] = _parse_amount(match.group(1))
+        
+        # Check for IGST (Integrated GST - interstate)
+        if "igst" in lower or "integrated gst" in lower:
+            tax_breakdown["has_igst"] = True
+            tax_breakdown["is_indian_receipt"] = True
+            # Look for amount after colon
+            if ':' in line:
+                after_colon = line.split(':')[-1]
+                match = _AMOUNT_REGEX.search(after_colon)
+            else:
+                match = _AMOUNT_REGEX.search(line)
+            if match:
+                tax_breakdown["igst_amount"] = _parse_amount(match.group(1))
+        
+        # Check for CESS
+        if "cess" in lower:
+            tax_breakdown["has_cess"] = True
+            tax_breakdown["is_indian_receipt"] = True
+            # Look for amount after colon
+            if ':' in line:
+                after_colon = line.split(':')[-1]
+                match = _AMOUNT_REGEX.search(after_colon)
+            else:
+                match = _AMOUNT_REGEX.search(line)
+            if match:
+                tax_breakdown["cess_amount"] = _parse_amount(match.group(1))
+    
+    return tax_breakdown
 
 
 def _extract_receipt_number(lines: List[str]) -> Optional[str]:
@@ -378,6 +484,7 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     # Tax and subtotal extraction
     subtotal = _find_subtotal(lines)
     tax_amount, tax_rate = _find_tax_amount(lines)
+    tax_breakdown = _detect_tax_breakdown(lines)
 
     # Receipt number extraction
     receipt_number = _extract_receipt_number(lines)
@@ -407,6 +514,8 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         "receipt_date": receipt_date,  # Actual extracted date
         "merchant_candidate": merchant_candidate,
     }
+    # Add tax breakdown info
+    text_features.update(tax_breakdown)
     text_features.update(text_stats)
 
     # --- Layout features (basic for now) ------------------------------------

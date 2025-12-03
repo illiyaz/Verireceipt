@@ -387,6 +387,54 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
                 f"   • Analysis: This doesn't match any standard tax rate (5%, 10%, 12%, 18%, 20%) or a no-tax scenario. "
                 f"Real receipts follow predictable tax patterns. This mismatch suggests manual fabrication."
             )
+    
+    # R20b: Indian GST validation (CGST + SGST should equal total tax, or IGST for interstate)
+    is_indian = tf.get("is_indian_receipt", False)
+    if is_indian:
+        has_cgst = tf.get("has_cgst", False)
+        has_sgst = tf.get("has_sgst", False)
+        has_igst = tf.get("has_igst", False)
+        cgst_amount = tf.get("cgst_amount")
+        sgst_amount = tf.get("sgst_amount")
+        igst_amount = tf.get("igst_amount")
+        
+        # Indian GST rule: Either (CGST + SGST) for intrastate OR IGST for interstate
+        # Having both is incorrect
+        if has_cgst and has_sgst and has_igst:
+            score += 0.30
+            reasons.append(
+                f"🇮🇳 Indian GST Error: Receipt shows both CGST+SGST (intrastate) AND IGST (interstate). "
+                f"This is impossible - Indian receipts use either CGST+SGST for same-state transactions "
+                f"or IGST for interstate transactions, never both."
+            )
+        
+        # Validate CGST + SGST = total tax (they should be equal amounts)
+        elif has_cgst and has_sgst and cgst_amount and sgst_amount:
+            # CGST and SGST should be equal
+            if abs(cgst_amount - sgst_amount) > 0.5:
+                score += 0.25
+                reasons.append(
+                    f"🇮🇳 Indian GST Error:\n"
+                    f"   • CGST: {cgst_amount:.2f}\n"
+                    f"   • SGST: {sgst_amount:.2f}\n"
+                    f"   • Problem: In Indian GST system, CGST and SGST must be equal amounts (each is half of the total GST rate). "
+                    f"This mismatch indicates an incorrect or fabricated receipt."
+                )
+            
+            # Check if CGST + SGST matches the total tax
+            if tax_amount:
+                expected_tax = cgst_amount + sgst_amount
+                if abs(tax_amount - expected_tax) > 1.0:
+                    score += 0.20
+                    reasons.append(
+                        f"🇮🇳 Indian GST Calculation Error:\n"
+                        f"   • CGST: {cgst_amount:.2f}\n"
+                        f"   • SGST: {sgst_amount:.2f}\n"
+                        f"   • CGST + SGST: {expected_tax:.2f}\n"
+                        f"   • Total Tax Shown: {tax_amount:.2f}\n"
+                        f"   • Difference: {abs(tax_amount - expected_tax):.2f}\n"
+                        f"   • Problem: Total tax should equal CGST + SGST in Indian receipts."
+                    )
 
     # ---------------------------------------------------------------------------
     # RULE GROUP 8: Receipt number validation
