@@ -36,6 +36,12 @@ try:
 except ImportError:
     LAYOUTLM_AVAILABLE = False
 
+try:
+    from app.models.donut_receipt import DonutReceiptExtractor
+    DONUT_RECEIPT_AVAILABLE = True
+except ImportError:
+    DONUT_RECEIPT_AVAILABLE = False
+
 app = FastAPI(
     title="VeriReceipt API",
     description="AI-Powered Fake Receipt Detection Engine. Analyzes receipts using document forensics, OCR, metadata analysis, and rule-based fraud detection.",
@@ -340,11 +346,12 @@ class HybridAnalyzeResponse(BaseModel):
 @app.post("/analyze/hybrid", response_model=HybridAnalyzeResponse, tags=["analysis"])
 async def analyze_hybrid(file: UploadFile = File(...)):
     """
-    Analyze receipt using all 4 engines in parallel:
+    Analyze receipt using all 5 engines in parallel:
     1. Rule-Based (OCR + Metadata + Rules) - Fast, reliable baseline
     2. DONUT (Document Understanding Transformer) - Specialized for receipts
-    3. LayoutLM (Multimodal Document Understanding) - Best for diverse formats
-    4. Vision LLM (Ollama) - Visual fraud detection
+    3. Donut-Receipt (Structured Extraction) - NEW! Extracts items, merchant, payment
+    4. LayoutLM (Multimodal Document Understanding) - Best for diverse formats
+    5. Vision LLM (Ollama) - Visual fraud detection
     
     Returns results from all engines plus a hybrid verdict.
     """
@@ -368,6 +375,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     results = {
         "rule_based": None,
         "donut": None,
+        "donut_receipt": None,  # NEW: 5th engine
         "layoutlm": None,
         "vision_llm": None,
         "hybrid_verdict": None,
@@ -429,6 +437,33 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         except Exception as e:
             return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
     
+    def run_donut_receipt():
+        if not DONUT_RECEIPT_AVAILABLE:
+            return {"error": "Donut-Receipt not available", "time_seconds": 0}
+        
+        start = time_module.time()
+        try:
+            extractor = DonutReceiptExtractor()
+            data = extractor.extract(str(temp_path))
+            elapsed = time_module.time() - start
+            return {
+                "status": data.get("status"),
+                "merchant": data.get("merchant"),
+                "items": data.get("items", []),
+                "items_count": len(data.get("items", [])),
+                "subtotal": data.get("subtotal"),
+                "tax": data.get("tax"),
+                "total": data.get("total"),
+                "payment_method": data.get("payment_method"),
+                "date": data.get("date"),
+                "time": data.get("time"),
+                "receipt_number": data.get("receipt_number"),
+                "confidence": data.get("confidence", 0.0),
+                "time_seconds": round(elapsed, 2)
+            }
+        except Exception as e:
+            return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
+    
     def run_vision():
         if not VISION_AVAILABLE:
             return {"error": "Vision LLM not available", "time_seconds": 0}
@@ -450,18 +485,20 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         except Exception as e:
             return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
     
-    # Execute all 4 engines in parallel with timeouts
+    # Execute all 5 engines in parallel with timeouts
     start_time = time_module.time()
     
     # Timeout configuration (seconds)
     RULE_BASED_TIMEOUT = 30   # Fast engine
     DONUT_TIMEOUT = 60        # Medium speed
+    DONUT_RECEIPT_TIMEOUT = 60  # NEW: Medium speed
     LAYOUTLM_TIMEOUT = 60     # Medium speed
     VISION_TIMEOUT = 90       # Slowest engine (Ollama can be slow)
     
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:  # 5 engines now
         rule_future = executor.submit(run_rule_based)
         donut_future = executor.submit(run_donut)
+        donut_receipt_future = executor.submit(run_donut_receipt)  # NEW
         layoutlm_future = executor.submit(run_layoutlm)
         vision_future = executor.submit(run_vision)
         
@@ -485,6 +522,16 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             }
         except Exception as e:
             results["donut"] = {"error": str(e), "time_seconds": 0}
+        
+        try:
+            results["donut_receipt"] = donut_receipt_future.result(timeout=DONUT_RECEIPT_TIMEOUT)
+        except FuturesTimeoutError:
+            results["donut_receipt"] = {
+                "error": f"Timeout after {DONUT_RECEIPT_TIMEOUT}s - engine took too long",
+                "time_seconds": DONUT_RECEIPT_TIMEOUT
+            }
+        except Exception as e:
+            results["donut_receipt"] = {"error": str(e), "time_seconds": 0}
         
         try:
             results["layoutlm"] = layoutlm_future.result(timeout=LAYOUTLM_TIMEOUT)
@@ -514,6 +561,8 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         results["engines_used"].append("rule-based")
     if not results["donut"].get("error"):
         results["engines_used"].append("donut")
+    if not results["donut_receipt"].get("error"):
+        results["engines_used"].append("donut-receipt")  # NEW
     if not results["layoutlm"].get("error"):
         results["engines_used"].append("layoutlm")
     if not results["vision_llm"].get("error"):
