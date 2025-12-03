@@ -259,6 +259,15 @@
                         addLog(`❌ DONUT failed: ${data.donut.error}`, 'error');
                     }
                     
+                    if (data.donut_receipt && !data.donut_receipt.error) {
+                        setEngineStatus(prev => ({ ...prev, 'donut-receipt': 'completed' }));
+                        setEngineResults(prev => ({ ...prev, 'donut-receipt': data.donut_receipt }));
+                        addLog(`✅ Donut-Receipt completed in ${data.donut_receipt.time_seconds}s - Extracted ${data.donut_receipt.items_count || 0} items`, 'success');
+                    } else if (data.donut_receipt && data.donut_receipt.error) {
+                        setEngineStatus(prev => ({ ...prev, 'donut-receipt': 'failed' }));
+                        addLog(`❌ Donut-Receipt failed: ${data.donut_receipt.error}`, 'error');
+                    }
+                    
                     if (data.layoutlm && !data.layoutlm.error) {
                         setEngineStatus(prev => ({ ...prev, 'layoutlm': 'completed' }));
                         setEngineResults(prev => ({ ...prev, 'layoutlm': data.layoutlm }));
@@ -368,7 +377,7 @@
                                 </div>
                                 <div className="text-right">
                                     <div className="text-sm text-purple-200">Streaming Analysis</div>
-                                    <div className="font-semibold">4 AI Engines</div>
+                                    <div className="font-semibold">5 AI Engines</div>
                                 </div>
                             </div>
                         </div>
@@ -505,6 +514,13 @@
                                                 color="green"
                                                 status={engineStatus['donut']}
                                                 result={engineResults['donut']}
+                                            />
+                                            <EngineStatusCard
+                                                name="Donut-Receipt Parser"
+                                                icon="fa-receipt"
+                                                color="teal"
+                                                status={engineStatus['donut-receipt']}
+                                                result={engineResults['donut-receipt']}
                                             />
                                             <EngineStatusCard
                                                 name="LayoutLM"
@@ -706,6 +722,28 @@
                                 </li>
                             ))}
                         </ul>
+                    </div>
+                    
+                    {/* Human Review Button */}
+                    <div className="mt-6 p-6 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border-2 border-indigo-200">
+                        <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                                <div className="flex items-center mb-2">
+                                    <i className="fas fa-user-check text-indigo-600 text-2xl mr-3"></i>
+                                    <h3 className="text-lg font-bold text-gray-800">Human Review</h3>
+                                </div>
+                                <p className="text-sm text-gray-600">
+                                    Help improve our AI models by reviewing this analysis. Your feedback trains the system to be more accurate.
+                                </p>
+                            </div>
+                            <button 
+                                onClick={() => window.location.href = `/review.html?id=${verdict.receipt_id || 'current'}`}
+                                className="ml-4 px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold rounded-lg hover:from-indigo-700 hover:to-purple-700 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105"
+                            >
+                                <i className="fas fa-clipboard-check mr-2"></i>
+                                Review Receipt
+                            </button>
+                        </div>
                     </div>
                 </div>
             );

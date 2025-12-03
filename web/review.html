@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Human Review - VeriReceipt</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        
+        .split-screen {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        .receipt-viewer {
+            background: #f3f4f6;
+            overflow: auto;
+            position: relative;
+        }
+        
+        .review-form {
+            background: white;
+            overflow: auto;
+            border-left: 2px solid #e5e7eb;
+        }
+        
+        .zoom-controls {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid #e5e7eb;
+            padding: 1rem;
+        }
+        
+        .receipt-image {
+            transition: transform 0.2s;
+            transform-origin: top left;
+        }
+        
+        .checkbox-label {
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .checkbox-label:hover {
+            background: #f3f4f6;
+        }
+        
+        .submit-button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .submit-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        
+        function ReviewPage() {
+            const [receipt, setReceipt] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [humanLabel, setHumanLabel] = useState('');
+            const [reasons, setReasons] = useState([]);
+            const [corrections, setCorrections] = useState({});
+            const [zoom, setZoom] = useState(1.0);
+            const [submitting, setSubmitting] = useState(false);
+            const [submitted, setSubmitted] = useState(false);
+            
+            // Get receipt ID from URL
+            const receiptId = new URLSearchParams(window.location.search).get('id');
+            
+            useEffect(() => {
+                // Load receipt data
+                // In production, this would fetch from API
+                // For now, we'll use mock data
+                setTimeout(() => {
+                    setReceipt({
+                        id: receiptId,
+                        image_url: '/uploads/sample-receipt.jpg', // Replace with actual path
+                        verdict: 'suspicious',
+                        confidence: 0.65,
+                        models: {
+                            rule_based: { verdict: 'suspicious', score: 0.65 },
+                            donut: { verdict: 'real' },
+                            donut_receipt: { 
+                                merchant: { name: 'Sample Store' },
+                                total: 1234.56,
+                                items: [
+                                    { name: 'Item 1', quantity: 1, total: 100.00 },
+                                    { name: 'Item 2', quantity: 2, total: 200.00 }
+                                ]
+                            },
+                            layoutlm: { verdict: 'suspicious' },
+                            vision_llm: { verdict: 'fake' }
+                        },
+                        extracted: {
+                            merchant: { name: 'Sample Store' },
+                            total: 1234.56,
+                            tax: { amount: 123.45 },
+                            date: '2025-12-03'
+                        }
+                    });
+                    setLoading(false);
+                }, 500);
+            }, [receiptId]);
+            
+            const handleReasonToggle = (reason) => {
+                if (reasons.includes(reason)) {
+                    setReasons(reasons.filter(r => r !== reason));
+                } else {
+                    setReasons([...reasons, reason]);
+                }
+            };
+            
+            const handleSubmit = async () => {
+                if (!humanLabel) {
+                    alert('Please select a verdict (Real/Suspicious/Fake)');
+                    return;
+                }
+                
+                setSubmitting(true);
+                
+                const feedback = {
+                    receipt_id: receipt.id,
+                    human_label: humanLabel,
+                    reasons: reasons,
+                    corrections: corrections,
+                    timestamp: new Date().toISOString(),
+                    reviewer_id: localStorage.getItem('user_email') || 'anonymous'
+                };
+                
+                try {
+                    const response = await fetch('/api/feedback', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(feedback)
+                    });
+                    
+                    if (response.ok) {
+                        setSubmitted(true);
+                        setTimeout(() => {
+                            window.location.href = '/';
+                        }, 2000);
+                    } else {
+                        alert('Failed to submit feedback. Please try again.');
+                    }
+                } catch (error) {
+                    console.error('Error submitting feedback:', error);
+                    alert('Error submitting feedback. Please try again.');
+                } finally {
+                    setSubmitting(false);
+                }
+            };
+            
+            if (loading) {
+                return (
+                    <div className="flex items-center justify-center h-screen">
+                        <div className="text-center">
+                            <i className="fas fa-spinner fa-spin text-4xl text-purple-600 mb-4"></i>
+                            <p className="text-gray-600">Loading receipt...</p>
+                        </div>
+                    </div>
+                );
+            }
+            
+            if (submitted) {
+                return (
+                    <div className="flex items-center justify-center h-screen bg-green-50">
+                        <div className="text-center">
+                            <i className="fas fa-check-circle text-6xl text-green-600 mb-4"></i>
+                            <h2 className="text-2xl font-bold text-gray-800 mb-2">Feedback Submitted!</h2>
+                            <p className="text-gray-600">Thank you for helping improve our AI models.</p>
+                            <p className="text-sm text-gray-500 mt-2">Redirecting to home...</p>
+                        </div>
+                    </div>
+                );
+            }
+            
+            return (
+                <div className="split-screen">
+                    {/* Left: Receipt Image Viewer */}
+                    <div className="receipt-viewer">
+                        <div className="zoom-controls">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center space-x-2">
+                                    <button 
+                                        onClick={() => setZoom(z => Math.min(z + 0.2, 3.0))}
+                                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                                    >
+                                        <i className="fas fa-search-plus mr-2"></i>
+                                        Zoom In
+                                    </button>
+                                    <button 
+                                        onClick={() => setZoom(z => Math.max(z - 0.2, 0.5))}
+                                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                                    >
+                                        <i className="fas fa-search-minus mr-2"></i>
+                                        Zoom Out
+                                    </button>
+                                    <button 
+                                        onClick={() => setZoom(1.0)}
+                                        className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition"
+                                    >
+                                        <i className="fas fa-undo mr-2"></i>
+                                        Reset
+                                    </button>
+                                </div>
+                                <div className="text-sm text-gray-600">
+                                    Zoom: {(zoom * 100).toFixed(0)}%
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="p-6">
+                            <img 
+                                src={receipt.image_url}
+                                alt="Receipt"
+                                className="receipt-image border-2 border-gray-300 shadow-lg rounded-lg"
+                                style={{ transform: `scale(${zoom})` }}
+                                onError={(e) => {
+                                    e.target.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="%23f3f4f6"/><text x="50%" y="50%" text-anchor="middle" fill="%236b7280" font-size="20">Receipt Image</text></svg>';
+                                }}
+                            />
+                        </div>
+                    </div>
+                    
+                    {/* Right: Review Form */}
+                    <div className="review-form p-8">
+                        <div className="max-w-2xl">
+                            {/* Header */}
+                            <div className="mb-8">
+                                <h1 className="text-3xl font-bold text-gray-800 mb-2">
+                                    <i className="fas fa-clipboard-check text-purple-600 mr-3"></i>
+                                    Human Review
+                                </h1>
+                                <p className="text-gray-600">
+                                    Review the AI analysis and provide your expert feedback to improve the system.
+                                </p>
+                            </div>
+                            
+                            {/* AI Verdict Summary */}
+                            <div className="mb-8 p-6 bg-yellow-50 border-2 border-yellow-200 rounded-xl">
+                                <h2 className="font-bold text-gray-800 mb-3 flex items-center">
+                                    <i className="fas fa-robot text-yellow-600 mr-2"></i>
+                                    AI Verdict
+                                </h2>
+                                <div className="space-y-2">
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-gray-700">Overall:</span>
+                                        <span className={`font-bold text-lg uppercase ${
+                                            receipt.verdict === 'fake' ? 'text-red-600' :
+                                            receipt.verdict === 'suspicious' ? 'text-yellow-600' :
+                                            'text-green-600'
+                                        }`}>
+                                            {receipt.verdict}
+                                        </span>
+                                    </div>
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-gray-700">Confidence:</span>
+                                        <span className="font-semibold">{(receipt.confidence * 100).toFixed(1)}%</span>
+                                    </div>
+                                    
+                                    <div className="mt-4 pt-4 border-t border-yellow-300">
+                                        <div className="text-sm font-semibold text-gray-700 mb-2">Model Results:</div>
+                                        <div className="grid grid-cols-2 gap-2 text-sm">
+                                            <div>Rule-Based: <span className="font-semibold">{receipt.models.rule_based.verdict}</span></div>
+                                            <div>DONUT: <span className="font-semibold">{receipt.models.donut.verdict}</span></div>
+                                            <div>Donut-Receipt: <span className="font-semibold">✓</span></div>
+                                            <div>LayoutLM: <span className="font-semibold">{receipt.models.layoutlm.verdict}</span></div>
+                                            <div>Vision LLM: <span className="font-semibold">{receipt.models.vision_llm.verdict}</span></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            {/* Human Assessment */}
+                            <div className="mb-8">
+                                <h2 className="font-bold text-gray-800 mb-4 text-xl">
+                                    <i className="fas fa-user-check text-indigo-600 mr-2"></i>
+                                    Your Assessment
+                                </h2>
+                                <div className="space-y-3">
+                                    {['real', 'suspicious', 'fake'].map(label => (
+                                        <label 
+                                            key={label}
+                                            className={`checkbox-label flex items-center p-4 border-2 rounded-lg cursor-pointer ${
+                                                humanLabel === label 
+                                                    ? 'border-purple-600 bg-purple-50' 
+                                                    : 'border-gray-300 hover:border-purple-300'
+                                            }`}
+                                        >
+                                            <input 
+                                                type="radio" 
+                                                name="label" 
+                                                value={label}
+                                                checked={humanLabel === label}
+                                                onChange={(e) => setHumanLabel(e.target.value)}
+                                                className="mr-3 w-5 h-5"
+                                            />
+                                            <span className={`font-bold text-lg uppercase ${
+                                                label === 'real' ? 'text-green-600' :
+                                                label === 'suspicious' ? 'text-yellow-600' :
+                                                'text-red-600'
+                                            }`}>
+                                                {label}
+                                            </span>
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                            
+                            {/* Reasons */}
+                            <div className="mb-8">
+                                <h2 className="font-bold text-gray-800 mb-4 text-xl">
+                                    <i className="fas fa-list-check text-indigo-600 mr-2"></i>
+                                    Reasons (select all that apply)
+                                </h2>
+                                <div className="space-y-2">
+                                    {[
+                                        { id: 'wrong_merchant_name', label: 'Wrong Merchant Name' },
+                                        { id: 'incorrect_amounts', label: 'Incorrect Amounts' },
+                                        { id: 'missing_items', label: 'Missing Items' },
+                                        { id: 'tax_calculation_wrong', label: 'Tax Calculation Wrong' },
+                                        { id: 'date_time_incorrect', label: 'Date/Time Incorrect' },
+                                        { id: 'visual_quality_issues', label: 'Visual Quality Issues' },
+                                        { id: 'suspicious_software', label: 'Suspicious Software' },
+                                        { id: 'metadata_stripped', label: 'Metadata Stripped' },
+                                        { id: 'other', label: 'Other' }
+                                    ].map(reason => (
+                                        <label 
+                                            key={reason.id}
+                                            className="checkbox-label flex items-center p-3 border rounded-lg"
+                                        >
+                                            <input 
+                                                type="checkbox"
+                                                checked={reasons.includes(reason.id)}
+                                                onChange={() => handleReasonToggle(reason.id)}
+                                                className="mr-3 w-4 h-4"
+                                            />
+                                            <span className="text-gray-700">{reason.label}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                            
+                            {/* Corrections */}
+                            <div className="mb-8">
+                                <h2 className="font-bold text-gray-800 mb-4 text-xl">
+                                    <i className="fas fa-edit text-indigo-600 mr-2"></i>
+                                    Corrections (if AI was wrong)
+                                </h2>
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Merchant Name:
+                                        </label>
+                                        <input 
+                                            type="text"
+                                            defaultValue={receipt.extracted.merchant?.name}
+                                            onChange={(e) => setCorrections({...corrections, merchant: e.target.value})}
+                                            className="w-full border-2 border-gray-300 rounded-lg px-4 py-2 focus:border-purple-600 focus:outline-none"
+                                            placeholder="Enter correct merchant name"
+                                        />
+                                    </div>
+                                    
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Total Amount:
+                                        </label>
+                                        <input 
+                                            type="number"
+                                            step="0.01"
+                                            defaultValue={receipt.extracted.total}
+                                            onChange={(e) => setCorrections({...corrections, total: parseFloat(e.target.value)})}
+                                            className="w-full border-2 border-gray-300 rounded-lg px-4 py-2 focus:border-purple-600 focus:outline-none"
+                                            placeholder="Enter correct total"
+                                        />
+                                    </div>
+                                    
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Tax Amount:
+                                        </label>
+                                        <input 
+                                            type="number"
+                                            step="0.01"
+                                            defaultValue={receipt.extracted.tax?.amount}
+                                            onChange={(e) => setCorrections({...corrections, tax: parseFloat(e.target.value)})}
+                                            className="w-full border-2 border-gray-300 rounded-lg px-4 py-2 focus:border-purple-600 focus:outline-none"
+                                            placeholder="Enter correct tax amount"
+                                        />
+                                    </div>
+                                    
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Date:
+                                        </label>
+                                        <input 
+                                            type="date"
+                                            defaultValue={receipt.extracted.date}
+                                            onChange={(e) => setCorrections({...corrections, date: e.target.value})}
+                                            className="w-full border-2 border-gray-300 rounded-lg px-4 py-2 focus:border-purple-600 focus:outline-none"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            {/* Submit Button */}
+                            <div className="flex space-x-4">
+                                <button 
+                                    onClick={handleSubmit}
+                                    disabled={!humanLabel || submitting}
+                                    className="submit-button flex-1 py-4 text-white font-bold rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {submitting ? (
+                                        <>
+                                            <i className="fas fa-spinner fa-spin mr-2"></i>
+                                            Submitting...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <i className="fas fa-paper-plane mr-2"></i>
+                                            Submit Feedback
+                                        </>
+                                    )}
+                                </button>
+                                
+                                <button 
+                                    onClick={() => window.location.href = '/'}
+                                    className="px-6 py-4 bg-gray-300 text-gray-700 font-bold rounded-lg hover:bg-gray-400 transition"
+                                >
+                                    <i className="fas fa-times mr-2"></i>
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+        
+        ReactDOM.render(<ReviewPage />, document.getElementById('root'));
+    </script>
+</body>
+</html>
