@@ -333,6 +333,63 @@ def _has_any_date(text: str) -> bool:
     return False
 
 
+def _extract_currency_symbols(text: str) -> List[str]:
+    """
+    Extract all currency symbols found in the text.
+    Returns list of unique currency symbols.
+    """
+    currency_symbols = []
+    currency_patterns = [
+        (r'₹', 'INR'),  # Indian Rupee
+        (r'\$', 'USD'),  # US Dollar
+        (r'€', 'EUR'),  # Euro
+        (r'£', 'GBP'),  # British Pound
+        (r'¥', 'JPY'),  # Japanese Yen
+        (r'Rs\.?', 'INR'),  # Rupees (text)
+        (r'USD', 'USD'),
+        (r'EUR', 'EUR'),
+        (r'GBP', 'GBP'),
+    ]
+    
+    for pattern, symbol in currency_patterns:
+        if re.search(pattern, text):
+            if symbol not in currency_symbols:
+                currency_symbols.append(symbol)
+    
+    return currency_symbols
+
+
+def _extract_receipt_time(text: str) -> Optional[str]:
+    """
+    Extract time from receipt text.
+    Returns time string in HH:MM format or None.
+    """
+    # Common time patterns
+    time_patterns = [
+        r'\b([0-2]?\d):([0-5]\d)\s*(?:AM|PM|am|pm)\b',  # 12:30 PM
+        r'\b([0-2]?\d):([0-5]\d):([0-5]\d)\b',  # 14:30:45
+        r'\b([0-2]?\d):([0-5]\d)\b',  # 14:30
+    ]
+    
+    for pattern in time_patterns:
+        match = re.search(pattern, text)
+        if match:
+            hour = int(match.group(1))
+            minute = int(match.group(2))
+            
+            # Convert to 24-hour format if AM/PM present
+            if 'PM' in match.group(0).upper() or 'pm' in match.group(0):
+                if hour != 12:
+                    hour += 12
+            elif 'AM' in match.group(0).upper() or 'am' in match.group(0):
+                if hour == 12:
+                    hour = 0
+            
+            return f"{hour:02d}:{minute:02d}"
+    
+    return None
+
+
 def _extract_receipt_date(text: str) -> Optional[str]:
     """
     Extract the first date found in the receipt text.
@@ -489,9 +546,13 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     # Receipt number extraction
     receipt_number = _extract_receipt_number(lines)
 
-    # Date presence and extraction
+    # Date and time extraction
     has_date = _has_any_date(full_text)
     receipt_date = _extract_receipt_date(full_text)
+    receipt_time = _extract_receipt_time(full_text)
+    
+    # Currency extraction
+    currency_symbols = _extract_currency_symbols(full_text)
 
     # Merchant candidate
     merchant_candidate = _guess_merchant_line(lines)
@@ -512,6 +573,8 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         "receipt_number": receipt_number,
         "has_date": has_date,
         "receipt_date": receipt_date,  # Actual extracted date
+        "receipt_time": receipt_time,  # Actual extracted time
+        "currency_symbols": currency_symbols,  # List of currencies found
         "merchant_candidate": merchant_candidate,
     }
     # Add tax breakdown info

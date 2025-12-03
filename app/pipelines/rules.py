@@ -522,7 +522,90 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
                 f"Square images are typical of design software templates, not real scanned documents."
             )
 
-    # --- 10. Normalize and classify ------------------------------------------
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 10: Timestamp validation
+    #
+    # Check for suspicious transaction times and future dates.
+    # ---------------------------------------------------------------------------
+
+    # R23: Timestamp validation
+    receipt_date_str = tf.get("receipt_date")
+    receipt_time = tf.get("receipt_time")
+    
+    if receipt_date_str:
+        try:
+            from datetime import datetime, date
+            receipt_date = datetime.strptime(receipt_date_str, "%Y-%m-%d").date()
+            today = date.today()
+            
+            # Future date (impossible)
+            if receipt_date > today:
+                days_future = (receipt_date - today).days
+                score += 0.40
+                reasons.append(
+                    f"⏰ Future Date Detected:\n"
+                    f"   • Receipt Date: {receipt_date_str}\n"
+                    f"   • Today's Date: {today}\n"
+                    f"   • Difference: {days_future} days in the FUTURE\n"
+                    f"   • Problem: Receipt cannot be dated in the future. This is impossible and indicates fabrication."
+                )
+            
+            # Very old receipt (over 1 year - unusual for expense claims)
+            elif (today - receipt_date).days > 365:
+                days_old = (today - receipt_date).days
+                score += 0.10
+                minor_notes.append(
+                    f"Receipt is {days_old} days old (over 1 year) - unusual for expense claims."
+                )
+        except:
+            pass
+    
+    # Check transaction time
+    if receipt_time:
+        try:
+            hour = int(receipt_time.split(':')[0])
+            minute = int(receipt_time.split(':')[1])
+            
+            # Very early morning (12 AM - 5 AM) - unusual for most businesses
+            if hour >= 0 and hour < 5:
+                score += 0.15
+                reasons.append(
+                    f"🌙 Unusual Transaction Time:\n"
+                    f"   • Time: {receipt_time}\n"
+                    f"   • Analysis: Transaction at {hour}:{minute:02d} is very early morning. "
+                    f"Most retail businesses are closed during these hours. "
+                    f"This timing is suspicious for a regular purchase."
+                )
+            
+            # Very late night (11 PM - 12 AM) - less common
+            elif hour == 23:
+                score += 0.10
+                minor_notes.append(
+                    f"Transaction at {receipt_time} (late night) - less common for retail purchases."
+                )
+        except:
+            pass
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 11: Currency consistency
+    #
+    # Check for mixed currency symbols (indicates fabrication).
+    # ---------------------------------------------------------------------------
+
+    # R24: Multiple currency symbols
+    currency_symbols = tf.get("currency_symbols", [])
+    
+    if len(currency_symbols) > 1:
+        score += 0.30
+        reasons.append(
+            f"💱 Mixed Currency Symbols Detected:\n"
+            f"   • Currencies Found: {', '.join(currency_symbols)}\n"
+            f"   • Problem: Real receipts use a single currency. Multiple currency symbols "
+            f"({len(currency_symbols)} different currencies) indicate the receipt was manually created "
+            f"by combining elements from different sources or templates."
+        )
+
+    # --- 12. Normalize and classify ------------------------------------------
 
     # Clamp score to [0, 1]
     score = max(0.0, min(1.0, score))
