@@ -1,0 +1,76 @@
+{
+  "state": "Telangana",
+  "total_pins": 10,
+  "pins": {
+    "500001": {
+      "city": "Hyderabad",
+      "district": "Hyderabad",
+      "region": "Central",
+      "post_office": "Abids",
+      "delivery": "Delivery"
+    },
+    "500002": {
+      "city": "Hyderabad",
+      "district": "Hyderabad",
+      "region": "Central",
+      "post_office": "Kachiguda",
+      "delivery": "Delivery"
+    },
+    "500003": {
+      "city": "Hyderabad",
+      "district": "Hyderabad",
+      "region": "Secunderabad",
+      "post_office": "Secunderabad",
+      "delivery": "Delivery"
+    },
+    "500016": {
+      "city": "Hyderabad",
+      "district": "Hyderabad",
+      "region": "Malakpet",
+      "post_office": "Malakpet",
+      "delivery": "Delivery"
+    },
+    "500032": {
+      "city": "Hyderabad",
+      "district": "Hyderabad",
+      "region": "Jubilee Hills",
+      "post_office": "Jubilee Hills",
+      "delivery": "Delivery"
+    },
+    "500034": {
+      "city": "Hyderabad",
+      "district": "Hyderabad",
+      "region": "Somajiguda",
+      "post_office": "Somajiguda",
+      "delivery": "Delivery"
+    },
+    "500081": {
+      "city": "Hyderabad",
+      "district": "Hyderabad",
+      "region": "Gachibowli",
+      "post_office": "Gachibowli",
+      "delivery": "Delivery"
+    },
+    "500082": {
+      "city": "Hyderabad",
+      "district": "Hyderabad",
+      "region": "HITEC City",
+      "post_office": "HITEC City",
+      "delivery": "Delivery"
+    },
+    "500084": {
+      "city": "Hyderabad",
+      "district": "Hyderabad",
+      "region": "Kondapur",
+      "post_office": "Kondapur",
+      "delivery": "Delivery"
+    },
+    "500409": {
+      "city": "Hyderabad",
+      "district": "Hyderabad",
+      "region": "Airport",
+      "post_office": "Shamshabad Airport",
+      "delivery": "Delivery"
+    }
+  }
+}

@@ -1,10 +1,13 @@
 """
 Offline Databases for Validation
 PIN codes, Merchants, Cities
+
+NOTE: This file contains fallback/sample data.
+For full database, use data_loader.py which loads from JSON files.
 """
 
 # Indian PIN Code Database (Sample - Top 100 major cities)
-# In production, load from JSON file with 19,000+ entries
+# Full database loaded from app/validation/data/pin_codes/*.json
 PIN_CODE_DB = {
     # Hyderabad
     "500001": {"city": "Hyderabad", "state": "Telangana", "district": "Hyderabad", "region": "Central"},

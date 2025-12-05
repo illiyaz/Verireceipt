@@ -1,0 +1,81 @@
+{
+  "category": "cafe",
+  "total_brands": 2,
+  "merchants": {
+    "starbucks": {
+      "official_names": [
+        "Starbucks",
+        "Starbucks Coffee"
+      ],
+      "category": "cafe",
+      "typical_items": [
+        "coffee",
+        "latte",
+        "cappuccino",
+        "frappuccino",
+        "sandwich"
+      ],
+      "price_range": {
+        "min": 100,
+        "max": 2000
+      },
+      "business_hours": [
+        7,
+        23
+      ],
+      "locations": {
+        "hyderabad": [
+          {
+            "pin": "500032",
+            "address": "Jubilee Hills"
+          }
+        ],
+        "bangalore": [
+          {
+            "pin": "560034",
+            "address": "Indiranagar"
+          }
+        ]
+      },
+      "brand_id": "starbucks",
+      "total_stores": 2
+    },
+    "ccd": {
+      "official_names": [
+        "Cafe Coffee Day",
+        "CCD"
+      ],
+      "category": "cafe",
+      "typical_items": [
+        "coffee",
+        "cappuccino",
+        "sandwich",
+        "cake"
+      ],
+      "price_range": {
+        "min": 50,
+        "max": 500
+      },
+      "business_hours": [
+        8,
+        23
+      ],
+      "locations": {
+        "hyderabad": [
+          {
+            "pin": "500081",
+            "address": "Gachibowli"
+          }
+        ],
+        "bangalore": [
+          {
+            "pin": "560001",
+            "address": "MG Road"
+          }
+        ]
+      },
+      "brand_id": "ccd",
+      "total_stores": 2
+    }
+  }
+}

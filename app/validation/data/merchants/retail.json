@@ -1,0 +1,79 @@
+{
+  "category": "retail",
+  "total_brands": 2,
+  "merchants": {
+    "big_bazaar": {
+      "official_names": [
+        "Big Bazaar",
+        "BigBazaar"
+      ],
+      "category": "retail",
+      "typical_items": [
+        "grocery",
+        "clothing",
+        "home",
+        "kitchen"
+      ],
+      "price_range": {
+        "min": 50,
+        "max": 50000
+      },
+      "business_hours": [
+        9,
+        22
+      ],
+      "locations": {
+        "hyderabad": [
+          {
+            "pin": "500016",
+            "address": "Dilsukhnagar"
+          }
+        ],
+        "bangalore": [
+          {
+            "pin": "560034",
+            "address": "Indiranagar"
+          }
+        ]
+      },
+      "brand_id": "big_bazaar",
+      "total_stores": 2
+    },
+    "dmart": {
+      "official_names": [
+        "DMart",
+        "D-Mart"
+      ],
+      "category": "grocery",
+      "typical_items": [
+        "grocery",
+        "food",
+        "personal care"
+      ],
+      "price_range": {
+        "min": 50,
+        "max": 20000
+      },
+      "business_hours": [
+        8,
+        22
+      ],
+      "locations": {
+        "hyderabad": [
+          {
+            "pin": "500081",
+            "address": "Gachibowli"
+          }
+        ],
+        "bangalore": [
+          {
+            "pin": "560066",
+            "address": "Whitefield"
+          }
+        ]
+      },
+      "brand_id": "dmart",
+      "total_stores": 2
+    }
+  }
+}

@@ -1,0 +1,123 @@
+{
+  "category": "electronics",
+  "total_brands": 2,
+  "merchants": {
+    "reliance_digital": {
+      "official_names": [
+        "Reliance Digital",
+        "R-Digital"
+      ],
+      "category": "electronics",
+      "typical_items": [
+        "mobile",
+        "laptop",
+        "tv",
+        "tablet",
+        "camera",
+        "headphone",
+        "speaker"
+      ],
+      "price_range": {
+        "min": 100,
+        "max": 200000
+      },
+      "business_hours": [
+        10,
+        22
+      ],
+      "locations": {
+        "hyderabad": [
+          {
+            "pin": "500001",
+            "address": "Abids"
+          },
+          {
+            "pin": "500016",
+            "address": "Malakpet"
+          },
+          {
+            "pin": "500081",
+            "address": "Gachibowli"
+          },
+          {
+            "pin": "500032",
+            "address": "Jubilee Hills"
+          }
+        ],
+        "bangalore": [
+          {
+            "pin": "560001",
+            "address": "MG Road"
+          },
+          {
+            "pin": "560034",
+            "address": "Indiranagar"
+          },
+          {
+            "pin": "560066",
+            "address": "Whitefield"
+          }
+        ],
+        "mumbai": [
+          {
+            "pin": "400001",
+            "address": "Fort"
+          },
+          {
+            "pin": "400050",
+            "address": "Bandra"
+          },
+          {
+            "pin": "400051",
+            "address": "Andheri"
+          }
+        ]
+      },
+      "brand_id": "reliance_digital",
+      "total_stores": 10
+    },
+    "croma": {
+      "official_names": [
+        "Croma",
+        "Croma Retail"
+      ],
+      "category": "electronics",
+      "typical_items": [
+        "mobile",
+        "laptop",
+        "tv",
+        "appliance"
+      ],
+      "price_range": {
+        "min": 100,
+        "max": 150000
+      },
+      "business_hours": [
+        10,
+        22
+      ],
+      "locations": {
+        "hyderabad": [
+          {
+            "pin": "500081",
+            "address": "Gachibowli"
+          }
+        ],
+        "bangalore": [
+          {
+            "pin": "560034",
+            "address": "Indiranagar"
+          }
+        ],
+        "mumbai": [
+          {
+            "pin": "400050",
+            "address": "Bandra"
+          }
+        ]
+      },
+      "brand_id": "croma",
+      "total_stores": 3
+    }
+  }
+}

@@ -5,6 +5,15 @@ Address Validation System
 
 import re
 from typing import Dict, Optional
+
+# Try to use data loader for full database, fallback to static data
+try:
+    from .data_loader import get_database
+    USE_DATA_LOADER = True
+except ImportError:
+    USE_DATA_LOADER = False
+
+# Always import fallback data
 from .databases import PIN_CODE_DB, CITY_STATE_MAP, AIRPORT_PINS
 
 
@@ -141,7 +150,12 @@ def validate_geography(address: str, pin_code: str) -> Dict:
     confidence = 1.0
     
     # 1. Validate PIN code exists
-    if pin_code not in PIN_CODE_DB:
+    if USE_DATA_LOADER:
+        pin_data = get_database().lookup_pin(pin_code)
+    else:
+        pin_data = PIN_CODE_DB.get(pin_code)
+    
+    if not pin_data:
         issues.append(f"PIN code {pin_code} not found in database")
         confidence = 0.3
         return {
@@ -150,8 +164,6 @@ def validate_geography(address: str, pin_code: str) -> Dict:
             "issues": issues,
             "verified_location": None
         }
-    
-    pin_data = PIN_CODE_DB[pin_code]
     
     # 2. Check city-state consistency
     address_lower = address.lower()

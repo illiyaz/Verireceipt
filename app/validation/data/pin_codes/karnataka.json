@@ -1,0 +1,62 @@
+{
+  "state": "Karnataka",
+  "total_pins": 8,
+  "pins": {
+    "560001": {
+      "city": "Bangalore",
+      "district": "Bangalore Urban",
+      "region": "Central",
+      "post_office": "Bangalore GPO",
+      "delivery": "Delivery"
+    },
+    "560002": {
+      "city": "Bangalore",
+      "district": "Bangalore Urban",
+      "region": "Shivaji Nagar",
+      "post_office": "Shivaji Nagar",
+      "delivery": "Delivery"
+    },
+    "560034": {
+      "city": "Bangalore",
+      "district": "Bangalore Urban",
+      "region": "Indiranagar",
+      "post_office": "Indiranagar",
+      "delivery": "Delivery"
+    },
+    "560066": {
+      "city": "Bangalore",
+      "district": "Bangalore Urban",
+      "region": "Whitefield",
+      "post_office": "Whitefield",
+      "delivery": "Delivery"
+    },
+    "560100": {
+      "city": "Bangalore",
+      "district": "Bangalore Urban",
+      "region": "Electronic City",
+      "post_office": "Electronic City",
+      "delivery": "Delivery"
+    },
+    "560103": {
+      "city": "Bangalore",
+      "district": "Bangalore Urban",
+      "region": "Koramangala",
+      "post_office": "Koramangala",
+      "delivery": "Delivery"
+    },
+    "560300": {
+      "city": "Bangalore",
+      "district": "Bangalore Urban",
+      "region": "Airport",
+      "post_office": "Kempegowda Airport",
+      "delivery": "Delivery"
+    },
+    "560076": {
+      "city": "Bangalore",
+      "district": "Bangalore Urban",
+      "region": "Marathahalli",
+      "post_office": "Marathahalli",
+      "delivery": "Delivery"
+    }
+  }
+}

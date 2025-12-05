@@ -1,0 +1,47 @@
+{
+  "category": "pharmacy",
+  "total_brands": 1,
+  "merchants": {
+    "apollo_pharmacy": {
+      "official_names": [
+        "Apollo Pharmacy",
+        "Apollo"
+      ],
+      "category": "pharmacy",
+      "typical_items": [
+        "medicine",
+        "tablet",
+        "syrup",
+        "health"
+      ],
+      "price_range": {
+        "min": 10,
+        "max": 10000
+      },
+      "business_hours": [
+        0,
+        24
+      ],
+      "locations": {
+        "hyderabad": [
+          {
+            "pin": "500001",
+            "address": "Abids"
+          },
+          {
+            "pin": "500081",
+            "address": "Gachibowli"
+          }
+        ],
+        "bangalore": [
+          {
+            "pin": "560034",
+            "address": "Indiranagar"
+          }
+        ]
+      },
+      "brand_id": "apollo_pharmacy",
+      "total_stores": 3
+    }
+  }
+}

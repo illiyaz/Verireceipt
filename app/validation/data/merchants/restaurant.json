@@ -1,0 +1,140 @@
+{
+  "category": "restaurant",
+  "total_brands": 3,
+  "merchants": {
+    "mcdonalds": {
+      "official_names": [
+        "McDonald's",
+        "McDonalds"
+      ],
+      "category": "restaurant",
+      "typical_items": [
+        "burger",
+        "fries",
+        "mcaloo",
+        "chicken",
+        "nugget",
+        "coke"
+      ],
+      "price_range": {
+        "min": 50,
+        "max": 1000
+      },
+      "business_hours": [
+        7,
+        23
+      ],
+      "locations": {
+        "hyderabad": [
+          {
+            "pin": "500001",
+            "address": "Abids"
+          },
+          {
+            "pin": "500016",
+            "address": "Dilsukhnagar"
+          },
+          {
+            "pin": "500032",
+            "address": "Jubilee Hills"
+          },
+          {
+            "pin": "500081",
+            "address": "Gachibowli"
+          }
+        ],
+        "bangalore": [
+          {
+            "pin": "560001",
+            "address": "MG Road"
+          },
+          {
+            "pin": "560034",
+            "address": "Indiranagar"
+          }
+        ]
+      },
+      "brand_id": "mcdonalds",
+      "total_stores": 6
+    },
+    "kfc": {
+      "official_names": [
+        "KFC",
+        "Kentucky Fried Chicken"
+      ],
+      "category": "restaurant",
+      "typical_items": [
+        "chicken",
+        "burger",
+        "fries",
+        "wings",
+        "bucket"
+      ],
+      "price_range": {
+        "min": 100,
+        "max": 1500
+      },
+      "business_hours": [
+        11,
+        23
+      ],
+      "locations": {
+        "hyderabad": [
+          {
+            "pin": "500081",
+            "address": "Gachibowli"
+          }
+        ],
+        "bangalore": [
+          {
+            "pin": "560034",
+            "address": "Indiranagar"
+          }
+        ]
+      },
+      "brand_id": "kfc",
+      "total_stores": 2
+    },
+    "dominos": {
+      "official_names": [
+        "Domino's Pizza",
+        "Dominos"
+      ],
+      "category": "restaurant",
+      "typical_items": [
+        "pizza",
+        "pasta",
+        "garlic bread",
+        "coke"
+      ],
+      "price_range": {
+        "min": 100,
+        "max": 2000
+      },
+      "business_hours": [
+        10,
+        23
+      ],
+      "locations": {
+        "hyderabad": [
+          {
+            "pin": "500001",
+            "address": "Abids"
+          },
+          {
+            "pin": "500081",
+            "address": "Gachibowli"
+          }
+        ],
+        "bangalore": [
+          {
+            "pin": "560034",
+            "address": "Indiranagar"
+          }
+        ]
+      },
+      "brand_id": "dominos",
+      "total_stores": 3
+    }
+  }
+}
