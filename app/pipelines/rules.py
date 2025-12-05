@@ -604,6 +604,108 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
             f"({len(currency_symbols)} different currencies) indicate the receipt was manually created "
             f"by combining elements from different sources or templates."
         )
+    
+    # --- R25: Address Validation ---------------------------------------------
+    merchant_address = features.get("merchant_address")
+    if merchant_address:
+        try:
+            from app.validation.address_validator import validate_address_complete
+            
+            address_validation = validate_address_complete(
+                merchant_address,
+                merchant_name=features.get("merchant_name")
+            )
+            
+            if not address_validation["valid"]:
+                score += 0.15
+                address_issues = address_validation["issues"][:2]  # Top 2 issues
+                reasons.append(
+                    f"📍 R25: Invalid Address Format:\n"
+                    f"   • Address: {merchant_address[:50]}...\n"
+                    f"   • Issues: {', '.join(address_issues)}\n"
+                    f"   • Confidence: {address_validation['confidence']:.0%}\n"
+                    f"   • Problem: Address format or geography doesn't match real-world data."
+                )
+        except Exception as e:
+            minor_notes.append(f"Address validation error: {str(e)}")
+    
+    # --- R26: Merchant Verification ------------------------------------------
+    merchant_name = features.get("merchant_name")
+    if merchant_name:
+        try:
+            from app.validation.merchant_validator import validate_merchant_complete
+            
+            merchant_validation = validate_merchant_complete(
+                merchant_name,
+                city=features.get("city"),
+                pin_code=features.get("pin_code"),
+                items=features.get("items")
+            )
+            
+            # Known merchant but location mismatch
+            if merchant_validation.get("known_merchant") and not merchant_validation["verified"]:
+                score += 0.20
+                reasons.append(
+                    f"🏪 R26: Merchant Location Mismatch:\n"
+                    f"   • Merchant: {merchant_name}\n"
+                    f"   • Issues: {', '.join(merchant_validation['issues'][:2])}\n"
+                    f"   • Problem: Known merchant but location doesn't match database."
+                )
+            
+            # Suspicious merchant name patterns
+            elif not merchant_validation["valid"] and merchant_validation["confidence"] < 0.5:
+                score += 0.15
+                reasons.append(
+                    f"⚠️ R26: Suspicious Merchant Name:\n"
+                    f"   • Merchant: {merchant_name}\n"
+                    f"   • Issues: {', '.join(merchant_validation['issues'][:2])}\n"
+                    f"   • Problem: Merchant name has suspicious patterns."
+                )
+        except Exception as e:
+            minor_notes.append(f"Merchant validation error: {str(e)}")
+    
+    # --- R27: Phone Number Validation ----------------------------------------
+    merchant_phone = features.get("merchant_phone")
+    if merchant_phone:
+        try:
+            from app.validation.phone_validator import validate_phone_number
+            
+            phone_validation = validate_phone_number(merchant_phone, country="IN")
+            
+            if not phone_validation["valid"]:
+                score += 0.10
+                reasons.append(
+                    f"📞 R27: Invalid Phone Number:\n"
+                    f"   • Phone: {merchant_phone}\n"
+                    f"   • Issues: {', '.join(phone_validation['issues'][:2])}\n"
+                    f"   • Problem: Phone number format is invalid or appears fake."
+                )
+        except Exception as e:
+            minor_notes.append(f"Phone validation error: {str(e)}")
+    
+    # --- R28: Business Hours Validation --------------------------------------
+    receipt_time = features.get("receipt_time")
+    if receipt_time and merchant_name:
+        try:
+            from app.validation.business_hours_validator import validate_business_hours
+            
+            hours_validation = validate_business_hours(
+                merchant_name,
+                receipt_time,
+                receipt_date=features.get("receipt_date")
+            )
+            
+            if not hours_validation["valid"]:
+                score += 0.10
+                reasons.append(
+                    f"🕐 R28: Unusual Transaction Time:\n"
+                    f"   • Time: {receipt_time} ({hours_validation.get('transaction_hour', 'N/A')}:00)\n"
+                    f"   • Business Hours: {hours_validation.get('business_hours', 'N/A')}\n"
+                    f"   • Issues: {', '.join(hours_validation['issues'][:2])}\n"
+                    f"   • Problem: Transaction outside typical business hours."
+                )
+        except Exception as e:
+            minor_notes.append(f"Business hours validation error: {str(e)}")
 
     # --- 12. Normalize and classify ------------------------------------------
 

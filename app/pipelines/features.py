@@ -425,6 +425,99 @@ def _extract_receipt_date(text: str) -> Optional[str]:
 
 # --- Helper: Merchant candidate line ----------------------------------------
 
+def _extract_merchant_address(text: str) -> Optional[str]:
+    """
+    Extract merchant address from receipt text.
+    Looks for multi-line address patterns.
+    """
+    lines = text.split('\n')
+    
+    # Look for address indicators
+    address_keywords = ['address', 'addr', 'location', 'store', 'branch']
+    
+    for i, line in enumerate(lines):
+        line_lower = line.lower()
+        
+        # Check if line contains address keyword
+        if any(kw in line_lower for kw in address_keywords):
+            # Extract next 2-3 lines as address
+            address_lines = []
+            for j in range(i, min(i+4, len(lines))):
+                addr_line = lines[j].strip()
+                if addr_line and len(addr_line) > 5:
+                    address_lines.append(addr_line)
+            
+            if address_lines:
+                return ' '.join(address_lines)
+    
+    # Fallback: Look for PIN code and extract surrounding lines
+    pin_pattern = r'\b\d{6}\b'
+    for i, line in enumerate(lines):
+        if re.search(pin_pattern, line):
+            # Get this line and previous 2 lines
+            start = max(0, i-2)
+            address_lines = [lines[j].strip() for j in range(start, i+1) if lines[j].strip()]
+            if address_lines:
+                return ' '.join(address_lines)
+    
+    return None
+
+
+def _extract_merchant_phone(text: str) -> Optional[str]:
+    """
+    Extract phone number from receipt text.
+    """
+    # Phone patterns
+    patterns = [
+        r'\+91[-\s]?\d{5}[-\s]?\d{5}',  # +91-XXXXX-XXXXX
+        r'\b\d{10}\b',                    # 10 digits
+        r'\b0\d{2,3}[-\s]?\d{7,8}\b',    # Landline with STD
+        r'(?:phone|tel|mobile|contact)[\s:]+([+\d\s\-()]+)',  # After keywords
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            phone = match.group(1) if match.lastindex else match.group(0)
+            # Clean up
+            phone = re.sub(r'[^\d+]', '', phone)
+            if len(phone) >= 10:
+                return phone
+    
+    return None
+
+
+def _extract_city_and_pin(text: str) -> tuple:
+    """
+    Extract city name and PIN code from text.
+    Returns (city, pin_code) tuple.
+    """
+    city = None
+    pin_code = None
+    
+    # Extract PIN code
+    pin_match = re.search(r'\b(\d{6})\b', text)
+    if pin_match:
+        pin_code = pin_match.group(1)
+    
+    # Extract city - look for common Indian cities
+    cities = [
+        'hyderabad', 'bangalore', 'bengaluru', 'mumbai', 'delhi', 'new delhi',
+        'chennai', 'kolkata', 'pune', 'ahmedabad', 'jaipur', 'surat',
+        'lucknow', 'kanpur', 'nagpur', 'indore', 'thane', 'bhopal',
+        'visakhapatnam', 'patna', 'vadodara', 'ghaziabad', 'ludhiana',
+        'agra', 'nashik', 'faridabad', 'meerut', 'rajkot', 'varanasi'
+    ]
+    
+    text_lower = text.lower()
+    for city_name in cities:
+        if city_name in text_lower:
+            city = city_name.title()
+            break
+    
+    return (city, pin_code)
+
+
 def _guess_merchant_line(lines: List[str]) -> Optional[str]:
     """
     Heuristic:
@@ -556,6 +649,11 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
 
     # Merchant candidate
     merchant_candidate = _guess_merchant_line(lines)
+    
+    # NEW: Extract merchant details for validation
+    merchant_address = _extract_merchant_address(full_text)
+    merchant_phone = _extract_merchant_phone(full_text)
+    city, pin_code = _extract_city_and_pin(full_text)
 
     text_stats = _compute_text_stats(lines)
 
@@ -576,6 +674,12 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         "receipt_time": receipt_time,  # Actual extracted time
         "currency_symbols": currency_symbols,  # List of currencies found
         "merchant_candidate": merchant_candidate,
+        # NEW: Merchant validation fields
+        "merchant_name": merchant_candidate,  # Alias for validation
+        "merchant_address": merchant_address,
+        "merchant_phone": merchant_phone,
+        "city": city,
+        "pin_code": pin_code,
     }
     # Add tax breakdown info
     text_features.update(tax_breakdown)
