@@ -1,0 +1,31 @@
+{
+  "feedback_id": "feedback_20251207_145833_092768_57b165817c1843ae92d4a7a291defa24",
+  "receipt_id": "57b165817c1843ae92d4a7a291defa24",
+  "image_path": "data/training/feedback/images/feedback_20251207_145833_092768_57b165817c1843ae92d4a7a291defa24.jpg",
+  "model_predictions": {
+    "rule_based": {
+      "verdict": "suspicious",
+      "score": 0.65
+    },
+    "donut": {
+      "verdict": "real"
+    },
+    "donut_receipt": {
+      "confidence": 0.85
+    },
+    "layoutlm": {
+      "verdict": "suspicious"
+    },
+    "vision_llm": {
+      "verdict": "fake"
+    }
+  },
+  "human_feedback": {
+    "label": "real",
+    "reasons": [],
+    "corrections": {}
+  },
+  "reviewer_id": "anonymous",
+  "timestamp": "2025-12-07T14:58:33.094067",
+  "status": "pending_training"
+}

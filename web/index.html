@@ -299,7 +299,9 @@
                             final_label: data.hybrid_verdict.final_label || 'unknown',
                             confidence: data.hybrid_verdict.confidence || 0,
                             recommended_action: data.hybrid_verdict.recommended_action || 'review',
-                            reasoning: data.hybrid_verdict.reasoning || []
+                            reasoning: data.hybrid_verdict.reasoning || [],
+                            // Store full API response for review page
+                            _fullData: data
                         };
                         console.log('Setting verdict:', verdictWithId);
                         setHybridVerdict(verdictWithId);
@@ -773,17 +775,18 @@
                             <button 
                                 onClick={() => {
                                     // Store receipt data for review page
+                                    const fullData = verdict._fullData || {};
                                     const receiptData = {
                                         receipt_id: verdict.receipt_id || 'current',
                                         image_url: preview,  // Use preview (data URL) for image display
                                         verdict: verdict.final_label,
                                         confidence: verdict.confidence,
                                         models: {
-                                            rule_based: engineResults['rule-based'] || {},
-                                            donut: engineResults['donut'] || {},
-                                            donut_receipt: engineResults['donut-receipt'] || {},
-                                            layoutlm: engineResults['layoutlm'] || {},
-                                            vision_llm: engineResults['vision-llm'] || {}
+                                            rule_based: fullData.rule_based || engineResults['rule-based'] || {},
+                                            donut: fullData.donut || engineResults['donut'] || {},
+                                            donut_receipt: fullData.donut_receipt || engineResults['donut-receipt'] || {},
+                                            layoutlm: fullData.layoutlm || engineResults['layoutlm'] || {},
+                                            vision_llm: fullData.vision_llm || engineResults['vision-llm'] || {}
                                         },
                                         extracted: verdict.extracted || {}
                                     };

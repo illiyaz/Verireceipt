@@ -1,0 +1,22 @@
+{
+  "gt_parse": {
+    "merchant": {
+      "name": "",
+      "address": "",
+      "phone": ""
+    },
+    "items": [],
+    "subtotal": null,
+    "tax": {
+      "amount": null,
+      "cgst": null,
+      "sgst": null,
+      "igst": null
+    },
+    "total": null,
+    "payment_method": null,
+    "date": null,
+    "time": null,
+    "receipt_number": null
+  }
+}
