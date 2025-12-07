@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 import asyncio
 import json as json_module
@@ -1215,3 +1215,35 @@ async def submit_feedback(feedback: FeedbackRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save feedback: {str(e)}"
         )
+
+
+@app.get("/receipt/{receipt_id}/image")
+async def get_receipt_image(receipt_id: str):
+    """
+    Serve the converted receipt image (JPG) for preview.
+    Useful for HEIC files that were converted by the server.
+    """
+    upload_dir = Path("/tmp/verireceipt_uploads")
+    
+    # Try to find the receipt file (should be .jpg after conversion)
+    receipt_path = upload_dir / f"{receipt_id}.jpg"
+    
+    if not receipt_path.exists():
+        # Try other extensions
+        for ext in ['.jpeg', '.png', '.pdf']:
+            alt_path = upload_dir / f"{receipt_id}{ext}"
+            if alt_path.exists():
+                receipt_path = alt_path
+                break
+    
+    if not receipt_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Receipt image not found: {receipt_id}"
+        )
+    
+    return FileResponse(
+        receipt_path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=3600"}
+    )

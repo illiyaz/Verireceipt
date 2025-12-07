@@ -790,9 +790,18 @@
                                 onClick={() => {
                                     // Store receipt data for review page
                                     const fullData = verdict._fullData || {};
+                                    
+                                    // For HEIC files, use server URL instead of base64 preview
+                                    let imageUrl = preview;
+                                    if (preview && (preview.includes('AAAAGGZ0eXBoZWlj') || preview.includes('ftypheic'))) {
+                                        // HEIC file - use server endpoint for converted JPG
+                                        imageUrl = `http://localhost:8000/receipt/${verdict.receipt_id}/image`;
+                                        console.log('Using server image URL for HEIC:', imageUrl);
+                                    }
+                                    
                                     const receiptData = {
                                         receipt_id: verdict.receipt_id || 'current',
-                                        image_url: preview,  // Use preview (data URL) for image display
+                                        image_url: imageUrl,  // Use server URL for HEIC, preview for others
                                         verdict: verdict.final_label,
                                         confidence: verdict.confidence,
                                         models: {
