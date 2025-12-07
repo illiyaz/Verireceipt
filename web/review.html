@@ -326,11 +326,11 @@
                                     <div className="mt-4 pt-4 border-t border-yellow-300">
                                         <div className="text-sm font-semibold text-gray-700 mb-2">Model Results:</div>
                                         <div className="grid grid-cols-2 gap-2 text-sm">
-                                            <div>Rule-Based: <span className="font-semibold">{receipt.models.rule_based.verdict}</span></div>
-                                            <div>DONUT: <span className="font-semibold">{receipt.models.donut.verdict}</span></div>
-                                            <div>Donut-Receipt: <span className="font-semibold">✓</span></div>
-                                            <div>LayoutLM: <span className="font-semibold">{receipt.models.layoutlm.verdict}</span></div>
-                                            <div>Vision LLM: <span className="font-semibold">{receipt.models.vision_llm.verdict}</span></div>
+                                            <div>Rule-Based: <span className="font-semibold">{receipt.models.rule_based?.label || receipt.models.rule_based?.verdict || 'N/A'}</span></div>
+                                            <div>DONUT: <span className="font-semibold">{receipt.models.donut?.verdict || receipt.models.donut?.label || 'N/A'}</span></div>
+                                            <div>Donut-Receipt: <span className="font-semibold">{receipt.models.donut_receipt?.data_quality || 'N/A'}</span></div>
+                                            <div>LayoutLM: <span className="font-semibold">{receipt.models.layoutlm?.verdict || receipt.models.layoutlm?.label || 'N/A'}</span></div>
+                                            <div>Vision LLM: <span className="font-semibold">{receipt.models.vision_llm?.verdict || receipt.models.vision_llm?.label || 'N/A'}</span></div>
                                         </div>
                                     </div>
                                 </div>

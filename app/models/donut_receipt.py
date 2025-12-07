@@ -32,14 +32,30 @@ class DonutReceiptExtractor:
         print(f"Loading Donut-Receipt model: {model_name}")
         
         self.processor = DonutProcessor.from_pretrained(model_name)
-        self.model = VisionEncoderDecoderModel.from_pretrained(model_name)
         
         # Use GPU if available for faster inference
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model.to(self.device)
-        self.model.eval()
         
-        print(f"Donut-Receipt loaded on {self.device}")
+        # Load model with proper settings to avoid meta tensor issues
+        try:
+            self.model = VisionEncoderDecoderModel.from_pretrained(
+                model_name,
+                torch_dtype=torch.float32,
+                low_cpu_mem_usage=False  # Disable to avoid meta tensors
+            )
+            self.model.to(self.device)
+            self.model.eval()
+            print(f"Donut-Receipt loaded on {self.device}")
+        except Exception as e:
+            print(f"Failed to load with standard method: {e}")
+            print("Trying alternative loading...")
+            self.model = VisionEncoderDecoderModel.from_pretrained(
+                model_name,
+                device_map=None  # Don't use auto device mapping
+            )
+            self.model = self.model.to(self.device)
+            self.model.eval()
+            print(f"Donut-Receipt loaded on {self.device} (alternative method)")
     
     def extract(self, image_path: str, timeout: int = 30) -> Dict[str, Any]:
         """
