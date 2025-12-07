@@ -970,10 +970,10 @@ class FeedbackRequest(BaseModel):
     """Human feedback for model training"""
     receipt_id: str = Field(..., description="Receipt ID being reviewed")
     human_label: str = Field(..., description="Human verdict: real/suspicious/fake")
-    reasons: List[str] = Field(default=[], description="Reasons for the verdict")
-    corrections: dict = Field(default={}, description="Corrected values")
-    reviewer_id: str = Field(default="anonymous", description="Reviewer identifier")
-    timestamp: str = Field(..., description="Feedback timestamp")
+    reasons: Optional[List[str]] = Field(default=[], description="Reasons for the verdict")
+    corrections: Optional[dict] = Field(default={}, description="Corrected values")
+    reviewer_id: Optional[str] = Field(default="anonymous", description="Reviewer identifier")
+    timestamp: Optional[str] = Field(default=None, description="Feedback timestamp")
 
 
 @app.post("/api/feedback", tags=["feedback"])
@@ -1046,6 +1046,9 @@ async def submit_feedback(feedback: FeedbackRequest):
         }
         
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"❌ Error saving feedback: {error_details}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save feedback: {str(e)}"

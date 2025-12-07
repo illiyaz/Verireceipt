@@ -141,13 +141,15 @@
                 setSubmitting(true);
                 
                 const feedback = {
-                    receipt_id: receipt.id,
+                    receipt_id: receipt.id || 'unknown',
                     human_label: humanLabel,
-                    reasons: reasons,
-                    corrections: corrections,
+                    reasons: reasons.length > 0 ? reasons : [],
+                    corrections: Object.keys(corrections).length > 0 ? corrections : {},
                     timestamp: new Date().toISOString(),
                     reviewer_id: localStorage.getItem('user_email') || 'anonymous'
                 };
+                
+                console.log('Submitting feedback:', feedback);
                 
                 try {
                     const response = await fetch('/api/feedback', {
@@ -156,17 +158,21 @@
                         body: JSON.stringify(feedback)
                     });
                     
+                    const result = await response.json();
+                    console.log('Response:', result);
+                    
                     if (response.ok) {
                         setSubmitted(true);
                         setTimeout(() => {
                             window.location.href = '/';
                         }, 2000);
                     } else {
-                        alert('Failed to submit feedback. Please try again.');
+                        console.error('Server error:', result);
+                        alert(`Failed to submit feedback: ${result.detail || 'Unknown error'}`);
                     }
                 } catch (error) {
                     console.error('Error submitting feedback:', error);
-                    alert('Error submitting feedback. Please try again.');
+                    alert(`Error submitting feedback: ${error.message}`);
                 } finally {
                     setSubmitting(false);
                 }

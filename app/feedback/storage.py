@@ -128,6 +128,8 @@ class FeedbackStorage:
         }
         """
         corrections = feedback.get("corrections", {})
+        if corrections is None:
+            corrections = {}
         
         donut_label = {
             "gt_parse": {
@@ -164,6 +166,8 @@ class FeedbackStorage:
         This is a simplified version - full implementation would need OCR boxes.
         """
         corrections = feedback.get("corrections", {})
+        if corrections is None:
+            corrections = {}
         
         # Simplified format - in practice would need token-level annotations
         layoutlm_label = {
