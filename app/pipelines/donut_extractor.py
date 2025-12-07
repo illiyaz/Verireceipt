@@ -60,11 +60,27 @@ class DonutExtractor:
             self.processor = DonutProcessor.from_pretrained(self.model_name)
             
             print("   Loading model...")
-            self.model = VisionEncoderDecoderModel.from_pretrained(self.model_name)
-            self.model.to(self.device)
-            self.model.eval()
-            
-            print("✅ DONUT model loaded")
+            try:
+                # Load model directly to device to avoid meta tensor issues
+                self.model = VisionEncoderDecoderModel.from_pretrained(
+                    self.model_name,
+                    torch_dtype=torch.float32,
+                    low_cpu_mem_usage=False  # Disable to avoid meta tensors
+                )
+                self.model.to(self.device)
+                self.model.eval()
+                print("✅ DONUT model loaded")
+            except Exception as e:
+                print(f"❌ Failed to load DONUT model: {e}")
+                print("   Trying alternative loading method...")
+                # Alternative: load with explicit device
+                self.model = VisionEncoderDecoderModel.from_pretrained(
+                    self.model_name,
+                    device_map=None  # Don't use auto device mapping
+                )
+                self.model = self.model.to(self.device)
+                self.model.eval()
+                print("✅ DONUT model loaded (alternative method)")
     
     def extract_from_image(self, image_path: str, task_prompt: str = "<s_cord-v2>") -> Dict[str, Any]:
         """

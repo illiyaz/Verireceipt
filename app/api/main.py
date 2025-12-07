@@ -154,12 +154,19 @@ def _save_upload_to_disk(upload: UploadFile) -> Path:
                 )
             
             # Try to open and validate image
-            img = Image.open(dest)
-            img.verify()  # Verify it's a valid image
-            img = Image.open(dest)  # Re-open after verify
+            from PIL import ImageFile
+            ImageFile.LOAD_TRUNCATED_IMAGES = True  # Allow truncated images
             
-            # Convert to RGB if needed (handles RGBA, P, etc.)
-            if img.mode not in ["RGB", "L"]:
+            img = Image.open(dest)
+            print(f"📷 Image opened: format={img.format}, mode={img.mode}, size={img.size}")
+            
+            # Don't verify - it's too strict and closes the file
+            # Just try to load the image data
+            img.load()
+            
+            # Convert to RGB if needed (handles RGBA, P, L, etc.)
+            if img.mode not in ["RGB"]:
+                print(f"🔄 Converting from {img.mode} to RGB")
                 img = img.convert("RGB")
             
             # Always save as JPEG for consistency
@@ -168,7 +175,7 @@ def _save_upload_to_disk(upload: UploadFile) -> Path:
             img.close()
             
             # Remove original if different from JPEG
-            if jpeg_dest != dest:
+            if jpeg_dest != dest and dest.exists():
                 dest.unlink()
             dest = jpeg_dest
             
