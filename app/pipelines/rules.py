@@ -606,14 +606,14 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
         )
     
     # --- R25: Address Validation ---------------------------------------------
-    merchant_address = features.get("merchant_address")
+    merchant_address = tf.get("merchant_address")
     if merchant_address:
         try:
             from app.validation.address_validator import validate_address_complete
             
             address_validation = validate_address_complete(
                 merchant_address,
-                merchant_name=features.get("merchant_name")
+                merchant_name=tf.get("merchant_name")
             )
             
             if not address_validation["valid"]:
@@ -630,16 +630,16 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
             minor_notes.append(f"Address validation error: {str(e)}")
     
     # --- R26: Merchant Verification ------------------------------------------
-    merchant_name = features.get("merchant_name")
+    merchant_name = tf.get("merchant_name")
     if merchant_name:
         try:
             from app.validation.merchant_validator import validate_merchant_complete
             
             merchant_validation = validate_merchant_complete(
                 merchant_name,
-                city=features.get("city"),
-                pin_code=features.get("pin_code"),
-                items=features.get("items")
+                city=tf.get("city"),
+                pin_code=tf.get("pin_code"),
+                items=tf.get("items")
             )
             
             # Known merchant but location mismatch
@@ -665,7 +665,7 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
             minor_notes.append(f"Merchant validation error: {str(e)}")
     
     # --- R27: Phone Number Validation ----------------------------------------
-    merchant_phone = features.get("merchant_phone")
+    merchant_phone = tf.get("merchant_phone")
     if merchant_phone:
         try:
             from app.validation.phone_validator import validate_phone_number
@@ -684,7 +684,7 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
             minor_notes.append(f"Phone validation error: {str(e)}")
     
     # --- R28: Business Hours Validation --------------------------------------
-    receipt_time = features.get("receipt_time")
+    receipt_time = tf.get("receipt_time")
     if receipt_time and merchant_name:
         try:
             from app.validation.business_hours_validator import validate_business_hours
@@ -692,7 +692,7 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
             hours_validation = validate_business_hours(
                 merchant_name,
                 receipt_time,
-                receipt_date=features.get("receipt_date")
+                receipt_date=tf.get("receipt_date")
             )
             
             if not hours_validation["valid"]:

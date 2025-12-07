@@ -138,7 +138,11 @@ def _save_upload_to_disk(upload: UploadFile) -> Path:
         shutil.copyfileobj(upload.file, f)
     
     # Validate and convert if needed (but keep original if validation fails)
-    if suffix != ".pdf":
+    if suffix == ".pdf":
+        # PDFs are handled by the pipelines directly
+        print(f"📄 PDF uploaded: {dest}")
+        return dest
+    else:
         try:
             # Verify file exists and has content
             if not dest.exists():
