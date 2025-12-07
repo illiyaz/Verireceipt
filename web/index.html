@@ -646,6 +646,14 @@
         }
 
         function HybridVerdictDisplay({ verdict }) {
+            // Add error boundary
+            if (!verdict) {
+                console.error('HybridVerdictDisplay: verdict is null/undefined');
+                return <div className="text-red-600">Error: No verdict data</div>;
+            }
+            
+            console.log('HybridVerdictDisplay rendering with:', verdict);
+            
             const getVerdictColor = (label) => {
                 if (label === 'real') return 'badge-real';
                 if (label === 'fake') return 'badge-fake';
@@ -653,8 +661,9 @@
                 return 'badge-suspicious';
             };
 
-            return (
-                <div className="space-y-4">
+            try {
+                return (
+                    <div className="space-y-4">
                     {/* Show engine status transparency */}
                     {verdict.engines_status && (
                         <div className={`border-2 rounded-xl p-4 mb-4 ${
@@ -785,10 +794,50 @@
                     </div>
                 </div>
             );
+            } catch (error) {
+                console.error('Error rendering HybridVerdictDisplay:', error);
+                console.error('Verdict data:', verdict);
+                return (
+                    <div className="bg-red-50 border-2 border-red-400 rounded-xl p-6">
+                        <div className="text-red-800 font-bold mb-2">
+                            <i className="fas fa-exclamation-triangle mr-2"></i>
+                            Error Displaying Verdict
+                        </div>
+                        <div className="text-sm text-red-600">
+                            {error.message}
+                        </div>
+                        <div className="text-xs text-gray-600 mt-2">
+                            Check browser console for details
+                        </div>
+                    </div>
+                );
+            }
         }
 
+        // Global error handler
+        window.addEventListener('error', (event) => {
+            console.error('Global error caught:', event.error);
+            console.error('Error message:', event.message);
+            console.error('Stack:', event.error?.stack);
+        });
+        
+        window.addEventListener('unhandledrejection', (event) => {
+            console.error('Unhandled promise rejection:', event.reason);
+        });
+
         // Render the app
-        ReactDOM.render(<App />, document.getElementById('root'));
+        try {
+            ReactDOM.render(<App />, document.getElementById('root'));
+        } catch (error) {
+            console.error('Fatal error rendering app:', error);
+            document.getElementById('root').innerHTML = `
+                <div style="padding: 20px; background: #fee; border: 2px solid #f00; margin: 20px; border-radius: 8px;">
+                    <h2 style="color: #c00;">Fatal Error</h2>
+                    <p>${error.message}</p>
+                    <p style="font-size: 12px; color: #666;">Check browser console for details</p>
+                </div>
+            `;
+        }
     </script>
 </body>
 </html>
