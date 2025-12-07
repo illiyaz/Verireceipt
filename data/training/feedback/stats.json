@@ -1,6 +1,6 @@
 {
-  "total_feedback": 0,
-  "pending_training": 0,
+  "total_feedback": 1,
+  "pending_training": 1,
   "trained": 0,
   "last_training": null,
   "model_versions": []

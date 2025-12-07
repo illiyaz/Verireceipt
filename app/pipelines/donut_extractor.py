@@ -223,16 +223,34 @@ def extract_receipt_with_donut(image_path: str) -> Dict[str, Any]:
     """
     Extract receipt data using DONUT.
     
-    This is the main function to use for DONUT extraction.
+    Args:
+        image_path: Path to receipt image
+    
+    Returns:
+        Extracted data dictionary
     """
     if not DONUT_AVAILABLE:
         return {
             "error": "DONUT not available",
-            "message": "Install with: pip install transformers torch pillow"
+            "merchant": None,
+            "total": None,
+            "date": None,
+            "line_items": []
+        }
+    
+    # Check if file is PDF - DONUT only handles images
+    from pathlib import Path
+    if Path(image_path).suffix.lower() == '.pdf':
+        return {
+            "error": "DONUT does not support PDF files (image-only model)",
+            "merchant": None,
+            "total": None,
+            "date": None,
+            "line_items": []
         }
     
     extractor = get_donut_extractor()
-    return extractor.extract_receipt_data(image_path)
+    return extractor.extract_from_image(image_path)
 
 
 def compare_donut_with_ocr(donut_data: Dict, ocr_features: Dict) -> Dict[str, Any]:
