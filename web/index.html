@@ -294,11 +294,20 @@
                         // Add receipt_id to verdict for later use
                         const verdictWithId = {
                             ...data.hybrid_verdict,
-                            receipt_id: data.receipt_id
+                            receipt_id: data.receipt_id,
+                            // Ensure required fields exist
+                            final_label: data.hybrid_verdict.final_label || 'unknown',
+                            confidence: data.hybrid_verdict.confidence || 0,
+                            recommended_action: data.hybrid_verdict.recommended_action || 'review',
+                            reasoning: data.hybrid_verdict.reasoning || []
                         };
+                        console.log('Setting verdict:', verdictWithId);
                         setHybridVerdict(verdictWithId);
                         addLog('🎉 Analysis complete!', 'success');
-                        addLog(`📊 Final verdict: ${data.hybrid_verdict.final_label.toUpperCase()}`, 'success');
+                        addLog(`📊 Final verdict: ${(data.hybrid_verdict.final_label || 'unknown').toUpperCase()}`, 'success');
+                    } else {
+                        console.warn('No hybrid_verdict in response:', data);
+                        addLog('⚠️ Analysis completed but no verdict received', 'error');
                     }
 
                 } catch (err) {
@@ -692,43 +701,47 @@
                         </div>
                     )}
                     
-                    <div className={`${getVerdictColor(verdict.final_label)} text-white rounded-xl p-6 shadow-lg`}>
+                    <div className={`${getVerdictColor(verdict.final_label || 'suspicious')} text-white rounded-xl p-6 shadow-lg`}>
                         <div className="text-sm font-medium opacity-90 mb-2">
                             {verdict.final_label === 'incomplete' ? 'Partial Analysis' : 'Final Classification'}
                         </div>
-                        <div className="text-4xl font-bold mb-2 uppercase">{verdict.final_label}</div>
+                        <div className="text-4xl font-bold mb-2 uppercase">{verdict.final_label || 'unknown'}</div>
                         <div className="text-xl opacity-90">
                             {verdict.final_label === 'incomplete' ? 
-                                `${verdict.engines_completed || 0}/${verdict.total_engines || 3} Engines Completed` :
-                                `Confidence: ${(verdict.confidence * 100).toFixed(1)}%`
+                                `${verdict.engines_completed || 0}/${verdict.total_engines || 5} Engines Completed` :
+                                `Confidence: ${((verdict.confidence || 0) * 100).toFixed(1)}%`
                             }
                         </div>
                     </div>
 
-                    <div className="bg-gray-50 rounded-xl p-6">
-                        <div className="flex items-center mb-3">
-                            <i className="fas fa-lightbulb text-yellow-500 mr-2"></i>
-                            <span className="font-semibold text-gray-700">Recommended Action</span>
+                    {verdict.recommended_action && (
+                        <div className="bg-gray-50 rounded-xl p-6">
+                            <div className="flex items-center mb-3">
+                                <i className="fas fa-lightbulb text-yellow-500 mr-2"></i>
+                                <span className="font-semibold text-gray-700">Recommended Action</span>
+                            </div>
+                            <p className="text-lg font-bold text-gray-800 capitalize">
+                                {verdict.recommended_action.replace(/_/g, ' ')}
+                            </p>
                         </div>
-                        <p className="text-lg font-bold text-gray-800 capitalize">
-                            {verdict.recommended_action.replace('_', ' ')}
-                        </p>
-                    </div>
+                    )}
 
-                    <div className="bg-gray-50 rounded-xl p-6">
-                        <div className="flex items-center mb-3">
-                            <i className="fas fa-info-circle text-blue-500 mr-2"></i>
-                            <span className="font-semibold text-gray-700">Reasoning</span>
+                    {verdict.reasoning && verdict.reasoning.length > 0 && (
+                        <div className="bg-gray-50 rounded-xl p-6">
+                            <div className="flex items-center mb-3">
+                                <i className="fas fa-info-circle text-blue-500 mr-2"></i>
+                                <span className="font-semibold text-gray-700">Reasoning</span>
+                            </div>
+                            <ul className="space-y-2">
+                                {verdict.reasoning.map((reason, idx) => (
+                                    <li key={idx} className="text-gray-700 flex items-start">
+                                        <i className="fas fa-chevron-right text-purple-500 mr-2 mt-1 text-xs"></i>
+                                        <span>{reason}</span>
+                                    </li>
+                                ))}
+                            </ul>
                         </div>
-                        <ul className="space-y-2">
-                            {verdict.reasoning.map((reason, idx) => (
-                                <li key={idx} className="text-gray-700 flex items-start">
-                                    <i className="fas fa-chevron-right text-purple-500 mr-2 mt-1 text-xs"></i>
-                                    <span>{reason}</span>
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
+                    )}
                     
                     {/* Human Review Button */}
                     <div className="mt-6 p-6 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border-2 border-indigo-200">
