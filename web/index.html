@@ -564,7 +564,11 @@
                                                 <i className="fas fa-chart-line mr-3 text-purple-600"></i>
                                                 Hybrid Verdict
                                             </h2>
-                                            <HybridVerdictDisplay verdict={hybridVerdict} />
+                                            <HybridVerdictDisplay 
+                                                verdict={hybridVerdict} 
+                                                preview={preview}
+                                                engineResults={engineResults}
+                                            />
                                         </div>
                                     )}
 
@@ -645,7 +649,7 @@
             );
         }
 
-        function HybridVerdictDisplay({ verdict }) {
+        function HybridVerdictDisplay({ verdict, preview, engineResults }) {
             // Add error boundary
             if (!verdict) {
                 console.error('HybridVerdictDisplay: verdict is null/undefined');
@@ -653,6 +657,8 @@
             }
             
             console.log('HybridVerdictDisplay rendering with:', verdict);
+            console.log('Preview available:', !!preview);
+            console.log('Engine results:', engineResults);
             
             const getVerdictColor = (label) => {
                 if (label === 'real') return 'badge-real';

@@ -140,21 +140,46 @@ def _save_upload_to_disk(upload: UploadFile) -> Path:
     # Validate and convert if needed (but keep original if validation fails)
     if suffix != ".pdf":
         try:
+            # Verify file exists and has content
+            if not dest.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Uploaded file not found: {dest}"
+                )
+            
+            if dest.stat().st_size == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Uploaded file is empty"
+                )
+            
+            # Try to open and validate image
             img = Image.open(dest)
+            img.verify()  # Verify it's a valid image
+            img = Image.open(dest)  # Re-open after verify
+            
             # Convert to RGB if needed (handles RGBA, P, etc.)
             if img.mode not in ["RGB", "L"]:
                 img = img.convert("RGB")
+            
             # Always save as JPEG for consistency
             jpeg_dest = dest.with_suffix(".jpg")
             img.save(jpeg_dest, "JPEG", quality=95)
             img.close()
+            
             # Remove original if different from JPEG
             if jpeg_dest != dest:
                 dest.unlink()
             dest = jpeg_dest
+            
+            print(f"✅ Image validated and saved: {dest}")
+        except HTTPException:
+            raise
         except Exception as e:
             # Log error but don't fail - keep the original file
             print(f"⚠️ Image validation warning: {str(e)}")
+            print(f"   File exists: {dest.exists()}")
+            print(f"   File size: {dest.stat().st_size if dest.exists() else 'N/A'}")
             print(f"   Keeping original file: {dest}")
             # Don't remove the file, just use it as-is
 
