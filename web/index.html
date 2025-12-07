@@ -790,7 +790,11 @@
                                         },
                                         extracted: verdict.extracted || {}
                                     };
-                                    console.log('Storing receipt data:', receiptData);
+                                    console.log('=== STORING RECEIPT DATA ===');
+                                    console.log('Preview:', preview ? preview.substring(0, 50) + '...' : 'MISSING');
+                                    console.log('Full Data:', fullData);
+                                    console.log('Engine Results:', engineResults);
+                                    console.log('Receipt Data:', receiptData);
                                     sessionStorage.setItem('currentReceipt', JSON.stringify(receiptData));
                                     window.location.href = `/review.html?id=${verdict.receipt_id || 'current'}`;
                                 }}

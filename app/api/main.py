@@ -723,7 +723,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 
                 # Transparent reasoning
                 engines_count = 2 + sum(optional_engines.values())
-                hybrid["reasoning"].append(f"✅ {engines_count}/4 engines indicate authentic receipt")
+                hybrid["reasoning"].append(f"✅ {engines_count}/{hybrid['total_engines']} engines indicate authentic receipt")
                 hybrid["reasoning"].append(f"✅ Critical engines (Rule-Based + Vision LLM) agree: REAL")
                 
                 if optional_engines["donut"] and donut_quality == "good":
@@ -749,7 +749,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             hybrid["recommended_action"] = "reject"
             
             engines_count = 2 + sum(optional_engines.values())
-            hybrid["reasoning"].append(f"❌ {engines_count}/4 engines indicate fraudulent receipt")
+            hybrid["reasoning"].append(f"❌ {engines_count}/{hybrid['total_engines']} engines indicate fraudulent receipt")
             hybrid["reasoning"].append("❌ High fraud score detected by rule-based engine")
             
             if vision_verdict == "fake":
