@@ -283,15 +283,42 @@
                         </div>
                         
                         <div className="p-6">
-                            <img 
-                                src={receipt.image_url}
-                                alt="Receipt"
-                                className="receipt-image border-2 border-gray-300 shadow-lg rounded-lg"
-                                style={{ transform: `scale(${zoom})` }}
-                                onError={(e) => {
-                                    e.target.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="%23f3f4f6"/><text x="50%" y="50%" text-anchor="middle" fill="%236b7280" font-size="20">Receipt Image</text></svg>';
-                                }}
-                            />
+                            {receipt.image_url ? (
+                                receipt.image_url.includes('AAAAGGZ0eXBoZWlj') || receipt.image_url.includes('ftypheic') ? (
+                                    // HEIC data - try to load from server instead
+                                    <img 
+                                        src={`http://localhost:8000/receipt/${receipt.id}/image`}
+                                        alt="Receipt"
+                                        className="receipt-image border-2 border-gray-300 shadow-lg rounded-lg"
+                                        style={{ transform: `scale(${zoom})` }}
+                                        onLoad={() => console.log('✅ Server image loaded')}
+                                        onError={(e) => {
+                                            console.error('❌ Failed to load server image');
+                                            e.target.onerror = null;
+                                            e.target.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="%23f3f4f6"/><text x="50%" y="50%" text-anchor="middle" fill="%236b7280" font-size="16">HEIC Image</text><text x="50%" y="55%" text-anchor="middle" fill="%239ca3af" font-size="12">Browser cannot display HEIC</text></svg>';
+                                        }}
+                                    />
+                                ) : (
+                                    <img 
+                                        src={receipt.image_url}
+                                        alt="Receipt"
+                                        className="receipt-image border-2 border-gray-300 shadow-lg rounded-lg"
+                                        style={{ transform: `scale(${zoom})` }}
+                                        onLoad={() => console.log('✅ Image loaded')}
+                                        onError={(e) => {
+                                            console.error('❌ Image load failed:', receipt.image_url.substring(0, 50));
+                                            e.target.onerror = null;
+                                            e.target.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="%23f3f4f6"/><text x="50%" y="50%" text-anchor="middle" fill="%236b7280" font-size="16">Image Load Failed</text></svg>';
+                                        }}
+                                    />
+                                )
+                            ) : (
+                                <div className="border-2 border-gray-300 shadow-lg rounded-lg p-8 bg-gray-50 text-center">
+                                    <i className="fas fa-image text-6xl text-gray-400 mb-4"></i>
+                                    <p className="text-gray-500">No image preview available</p>
+                                    <p className="text-xs text-gray-400 mt-2">Receipt ID: {receipt.id}</p>
+                                </div>
+                            )}
                         </div>
                     </div>
                     

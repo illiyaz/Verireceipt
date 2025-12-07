@@ -68,7 +68,6 @@ class DonutReceiptExtractor:
             print("⚠️ Model in meta state - trying alternative loading...")
             # Try loading with weights_only and no optimizations
             try:
-                import torch
                 self.model = VisionEncoderDecoderModel.from_pretrained(
                     model_name,
                     torch_dtype=torch.float32,
