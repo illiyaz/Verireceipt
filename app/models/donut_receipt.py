@@ -36,26 +36,30 @@ class DonutReceiptExtractor:
         # Use GPU if available for faster inference
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        # Load model with proper settings to avoid meta tensor issues
-        try:
-            self.model = VisionEncoderDecoderModel.from_pretrained(
-                model_name,
-                torch_dtype=torch.float32,
-                low_cpu_mem_usage=False  # Disable to avoid meta tensors
-            )
-            self.model.to(self.device)
-            self.model.eval()
-            print(f"Donut-Receipt loaded on {self.device}")
-        except Exception as e:
-            print(f"Failed to load with standard method: {e}")
-            print("Trying alternative loading...")
-            self.model = VisionEncoderDecoderModel.from_pretrained(
-                model_name,
-                device_map=None  # Don't use auto device mapping
-            )
-            self.model = self.model.to(self.device)
-            self.model.eval()
-            print(f"Donut-Receipt loaded on {self.device} (alternative method)")
+        # CRITICAL: Load model with proper settings to avoid meta tensor issues
+        print(f"Loading model to {self.device}...")
+        import os
+        cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+        
+        self.model = VisionEncoderDecoderModel.from_pretrained(
+            model_name,
+            torch_dtype=torch.float32,
+            low_cpu_mem_usage=False,  # MUST be False to avoid meta tensors
+            device_map=None,  # Don't use device_map
+            cache_dir=cache_dir
+        )
+        
+        # Move to device AFTER loading
+        print(f"Moving model to {self.device}...")
+        
+        # Check if model is in meta state (shouldn't be with our settings)
+        first_param = next(self.model.parameters())
+        if first_param.is_meta:
+            raise RuntimeError("Model loaded in meta state! This should not happen with low_cpu_mem_usage=False")
+        
+        self.model = self.model.to(self.device)
+        self.model.eval()
+        print(f"✅ Donut-Receipt loaded on {self.device}")
     
     def extract(self, image_path: str, timeout: int = 30) -> Dict[str, Any]:
         """

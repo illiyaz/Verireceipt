@@ -55,32 +55,44 @@ class DonutExtractor:
     
     def load_model(self):
         """Load DONUT model and processor."""
-        if self.processor is None:
-            print("   Loading processor...")
-            self.processor = DonutProcessor.from_pretrained(self.model_name)
+        if self.model is not None:
+            print("   Model already loaded, skipping...")
+            return
             
-            print("   Loading model...")
-            try:
-                # Load model directly to device to avoid meta tensor issues
-                self.model = VisionEncoderDecoderModel.from_pretrained(
-                    self.model_name,
-                    torch_dtype=torch.float32,
-                    low_cpu_mem_usage=False  # Disable to avoid meta tensors
-                )
-                self.model.to(self.device)
-                self.model.eval()
-                print("✅ DONUT model loaded")
-            except Exception as e:
-                print(f"❌ Failed to load DONUT model: {e}")
-                print("   Trying alternative loading method...")
-                # Alternative: load with explicit device
-                self.model = VisionEncoderDecoderModel.from_pretrained(
-                    self.model_name,
-                    device_map=None  # Don't use auto device mapping
-                )
-                self.model = self.model.to(self.device)
-                self.model.eval()
-                print("✅ DONUT model loaded (alternative method)")
+        print("   Loading processor...")
+        self.processor = DonutProcessor.from_pretrained(self.model_name)
+        
+        print("   Loading model...")
+        try:
+            # CRITICAL: Load model with state_dict to avoid meta tensors
+            import os
+            cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+            
+            self.model = VisionEncoderDecoderModel.from_pretrained(
+                self.model_name,
+                torch_dtype=torch.float32,
+                low_cpu_mem_usage=False,  # MUST be False to avoid meta tensors
+                device_map=None,  # Don't use device_map
+                cache_dir=cache_dir
+            )
+            
+            # Move to device AFTER loading
+            print(f"   Moving model to {self.device}...")
+            
+            # Check if model is in meta state (shouldn't be with our settings)
+            first_param = next(self.model.parameters())
+            if first_param.is_meta:
+                raise RuntimeError("Model loaded in meta state! This should not happen with low_cpu_mem_usage=False")
+            
+            self.model = self.model.to(self.device)
+            self.model.eval()
+            print("✅ DONUT model loaded successfully")
+            
+        except Exception as e:
+            print(f"❌ Failed to load DONUT model: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def extract_from_image(self, image_path: str, task_prompt: str = "<s_cord-v2>") -> Dict[str, Any]:
         """
