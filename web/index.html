@@ -190,15 +190,17 @@
                         let previewData = reader.result;
                         
                         // Check if it's HEIC format (browser can't display HEIC)
+                        // Note: Server will convert HEIC to JPG, but we can't preview before upload
                         if (previewData.includes('AAAAGGZ0eXBoZWlj') || previewData.includes('ftypheic')) {
-                            console.log('⚠️ HEIC format detected - browser cannot display HEIC images');
-                            console.log('Using placeholder for HEIC preview');
-                            // Use a placeholder since browser can't display HEIC
-                            previewData = null;
+                            console.log('⚠️ HEIC format detected');
+                            console.log('ℹ️ Server will convert to JPG for processing');
+                            console.log('ℹ️ Preview will be available after analysis');
+                            // Keep the HEIC data - server will handle it
+                            // But browser won't be able to display it until server converts
                         }
                         
                         setPreview(previewData);
-                        console.log('Preview set:', previewData ? previewData.substring(0, 50) + '...' : 'null (HEIC or unsupported)');
+                        console.log('Preview set:', previewData ? previewData.substring(0, 50) + '...' : 'null');
                     };
                     reader.readAsDataURL(selectedFile);
                 } else {
