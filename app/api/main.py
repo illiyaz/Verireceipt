@@ -605,7 +605,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         "recommended_action": "unknown",
         "reasoning": [],
         "engines_completed": len(results["engines_used"]),
-        "total_engines": 4
+        "total_engines": 5  # Rule-Based, DONUT, Donut-Receipt, LayoutLM, Vision LLM
     }
     
     # Tiered approach: Check which engines completed
@@ -616,6 +616,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     
     optional_engines = {
         "donut": not results["donut"].get("error"),
+        "donut-receipt": not results["donut_receipt"].get("error"),
         "layoutlm": not results["layoutlm"].get("error")
     }
     
@@ -625,6 +626,8 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         failed_engines.append(f"Rule-Based: {results['rule_based']['error']}")
     if results["donut"].get("error"):
         failed_engines.append(f"DONUT: {results['donut']['error']}")
+    if results["donut_receipt"].get("error"):
+        failed_engines.append(f"Donut-Receipt: {results['donut_receipt']['error']}")
     if results["layoutlm"].get("error"):
         failed_engines.append(f"LayoutLM: {results['layoutlm']['error']}")
     if results["vision_llm"].get("error"):
