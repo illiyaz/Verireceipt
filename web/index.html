@@ -291,7 +291,12 @@
                     
                     // Show hybrid verdict
                     if (data.hybrid_verdict) {
-                        setHybridVerdict(data.hybrid_verdict);
+                        // Add receipt_id to verdict for later use
+                        const verdictWithId = {
+                            ...data.hybrid_verdict,
+                            receipt_id: data.receipt_id
+                        };
+                        setHybridVerdict(verdictWithId);
                         addLog('🎉 Analysis complete!', 'success');
                         addLog(`📊 Final verdict: ${data.hybrid_verdict.final_label.toUpperCase()}`, 'success');
                     }

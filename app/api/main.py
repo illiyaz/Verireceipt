@@ -362,9 +362,11 @@ def get_stats():
 # ---------- Hybrid Analysis Endpoint ----------
 
 class HybridAnalyzeResponse(BaseModel):
-    """Response from hybrid 4-engine analysis."""
+    """Response from hybrid 5-engine analysis."""
+    receipt_id: str = Field(..., description="Unique receipt identifier")
     rule_based: dict = Field(..., description="Rule-based engine results")
     donut: Optional[dict] = Field(None, description="DONUT extraction results")
+    donut_receipt: Optional[dict] = Field(None, description="Donut-Receipt extraction results")
     layoutlm: Optional[dict] = Field(None, description="LayoutLM extraction results")
     vision_llm: Optional[dict] = Field(None, description="Vision LLM results")
     hybrid_verdict: dict = Field(..., description="Combined verdict from all engines")
@@ -387,14 +389,12 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     from concurrent.futures import ThreadPoolExecutor
     import time as time_module
     
-    # Save uploaded file
-    file_id = str(uuid.uuid4())
-    file_ext = Path(file.filename).suffix
-    temp_path = UPLOAD_DIR / f"{file_id}{file_ext}"
-    
+    # Save uploaded file with validation
     try:
-        with open(temp_path, "wb") as f:
-            shutil.copyfileobj(file.file, f)
+        temp_path = _save_upload_to_disk(file)
+        file_id = temp_path.stem  # Get filename without extension
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -402,6 +402,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         )
     
     results = {
+        "receipt_id": file_id,  # Include receipt ID in response
         "rule_based": None,
         "donut": None,
         "donut_receipt": None,  # NEW: 5th engine
@@ -731,11 +732,8 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     
     results["hybrid_verdict"] = hybrid
     
-    # Cleanup
-    try:
-        temp_path.unlink()
-    except:
-        pass
+    # Don't cleanup - keep file for feedback submission
+    # File will be cleaned up later or by a background job
     
     return HybridAnalyzeResponse(**results)
 
@@ -772,6 +770,7 @@ async def analyze_hybrid_stream(file: UploadFile = File(...)):
     update_queue = queue.Queue()
     
     results = {
+        "receipt_id": file_id,  # Include receipt ID in response
         "rule_based": None,
         "donut": None,
         "donut_receipt": None,
