@@ -92,9 +92,17 @@
             useEffect(() => {
                 // Load receipt data from sessionStorage (set by main page)
                 const storedData = sessionStorage.getItem('currentReceipt');
+                console.log('=== REVIEW PAGE LOADING ===');
+                console.log('Stored data exists:', !!storedData);
+                console.log('Stored data length:', storedData ? storedData.length : 0);
+                
                 if (storedData) {
                     try {
                         const data = JSON.parse(storedData);
+                        console.log('Parsed data:', data);
+                        console.log('Image URL:', data.image_url ? data.image_url.substring(0, 50) + '...' : '❌ MISSING');
+                        console.log('Models:', data.models);
+                        
                         setReceipt({
                             id: receiptId || data.receipt_id || 'unknown',
                             image_url: data.image_url || data.uploaded_image || '',
@@ -326,11 +334,26 @@
                                     <div className="mt-4 pt-4 border-t border-yellow-300">
                                         <div className="text-sm font-semibold text-gray-700 mb-2">Model Results:</div>
                                         <div className="grid grid-cols-2 gap-2 text-sm">
-                                            <div>Rule-Based: <span className="font-semibold">{receipt.models.rule_based?.label || receipt.models.rule_based?.verdict || 'N/A'}</span></div>
-                                            <div>DONUT: <span className="font-semibold">{receipt.models.donut?.verdict || receipt.models.donut?.label || 'N/A'}</span></div>
-                                            <div>Donut-Receipt: <span className="font-semibold">{receipt.models.donut_receipt?.data_quality || 'N/A'}</span></div>
-                                            <div>LayoutLM: <span className="font-semibold">{receipt.models.layoutlm?.verdict || receipt.models.layoutlm?.label || 'N/A'}</span></div>
-                                            <div>Vision LLM: <span className="font-semibold">{receipt.models.vision_llm?.verdict || receipt.models.vision_llm?.label || 'N/A'}</span></div>
+                                            <div>Rule-Based: <span className="font-semibold">
+                                                {receipt.models.rule_based?.error ? `❌ ${receipt.models.rule_based.error.substring(0, 30)}...` : 
+                                                 receipt.models.rule_based?.label || receipt.models.rule_based?.verdict || 'N/A'}
+                                            </span></div>
+                                            <div>DONUT: <span className="font-semibold">
+                                                {receipt.models.donut?.error ? `❌ ${receipt.models.donut.error.substring(0, 30)}...` : 
+                                                 receipt.models.donut?.verdict || receipt.models.donut?.label || 'N/A'}
+                                            </span></div>
+                                            <div>Donut-Receipt: <span className="font-semibold">
+                                                {receipt.models.donut_receipt?.error ? `❌ ${receipt.models.donut_receipt.error.substring(0, 30)}...` : 
+                                                 receipt.models.donut_receipt?.data_quality || 'N/A'}
+                                            </span></div>
+                                            <div>LayoutLM: <span className="font-semibold">
+                                                {receipt.models.layoutlm?.error ? `❌ ${receipt.models.layoutlm.error.substring(0, 30)}...` : 
+                                                 receipt.models.layoutlm?.verdict || receipt.models.layoutlm?.label || 'N/A'}
+                                            </span></div>
+                                            <div>Vision LLM: <span className="font-semibold">
+                                                {receipt.models.vision_llm?.error ? `❌ ${receipt.models.vision_llm.error.substring(0, 30)}...` : 
+                                                 receipt.models.vision_llm?.verdict || receipt.models.vision_llm?.label || 'N/A'}
+                                            </span></div>
                                         </div>
                                     </div>
                                 </div>
