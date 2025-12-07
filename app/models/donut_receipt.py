@@ -41,22 +41,38 @@ class DonutReceiptExtractor:
         import os
         cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
         
-        self.model = VisionEncoderDecoderModel.from_pretrained(
-            model_name,
-            torch_dtype=torch.float32,
-            low_cpu_mem_usage=False,  # MUST be False to avoid meta tensors
-            device_map=None,  # Don't use device_map
-            cache_dir=cache_dir
-        )
+        # WORKAROUND: Force load with weights
+        try:
+            self.model = VisionEncoderDecoderModel.from_pretrained(
+                model_name,
+                torch_dtype=torch.float32,
+                low_cpu_mem_usage=False,  # MUST be False
+                device_map=None,
+                cache_dir=cache_dir,
+                local_files_only=False
+            )
+        except Exception as e:
+            print(f"First attempt failed: {e}")
+            print("Trying with cached files...")
+            self.model = VisionEncoderDecoderModel.from_pretrained(
+                model_name,
+                torch_dtype=torch.float32,
+                device_map=None,
+                cache_dir=cache_dir,
+                local_files_only=True
+            )
+        
+        # Check if model is in meta state
+        first_param = next(self.model.parameters())
+        if first_param.is_meta:
+            print("⚠️ Model in meta state, forcing weight materialization...")
+            self.model = self.model.float()
+            first_param = next(self.model.parameters())
+            if first_param.is_meta:
+                raise RuntimeError("Cannot materialize model weights - PyTorch/Transformers version issue")
         
         # Move to device AFTER loading
         print(f"Moving model to {self.device}...")
-        
-        # Check if model is in meta state (shouldn't be with our settings)
-        first_param = next(self.model.parameters())
-        if first_param.is_meta:
-            raise RuntimeError("Model loaded in meta state! This should not happen with low_cpu_mem_usage=False")
-        
         self.model = self.model.to(self.device)
         self.model.eval()
         print(f"✅ Donut-Receipt loaded on {self.device}")

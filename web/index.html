@@ -186,9 +186,19 @@
 
                 if (selectedFile.type.startsWith('image/') || selectedFile.type === 'application/pdf') {
                     const reader = new FileReader();
-                    reader.onloadend = () => {
-                        setPreview(reader.result);
-                        console.log('Preview set:', reader.result.substring(0, 50) + '...');
+                    reader.onloadend = async () => {
+                        let previewData = reader.result;
+                        
+                        // Check if it's HEIC format (browser can't display HEIC)
+                        if (previewData.includes('AAAAGGZ0eXBoZWlj') || previewData.includes('ftypheic')) {
+                            console.log('⚠️ HEIC format detected - browser cannot display HEIC images');
+                            console.log('Using placeholder for HEIC preview');
+                            // Use a placeholder since browser can't display HEIC
+                            previewData = null;
+                        }
+                        
+                        setPreview(previewData);
+                        console.log('Preview set:', previewData ? previewData.substring(0, 50) + '...' : 'null (HEIC or unsupported)');
                     };
                     reader.readAsDataURL(selectedFile);
                 } else {
