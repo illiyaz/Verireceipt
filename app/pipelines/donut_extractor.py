@@ -97,7 +97,12 @@ class DonutExtractor:
             self.load_model()
         
         # Load image
-        image = Image.open(image_path).convert("RGB")
+        from PIL import ImageFile
+        ImageFile.LOAD_TRUNCATED_IMAGES = True  # Allow truncated/corrupted images
+        
+        image = Image.open(image_path)
+        image.load()  # Ensure image data is loaded
+        image = image.convert("RGB")
         
         # Prepare inputs
         pixel_values = self.processor(image, return_tensors="pt").pixel_values

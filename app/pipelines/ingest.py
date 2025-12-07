@@ -52,7 +52,18 @@ def _load_image(path: str) -> Image.Image:
     """
     Loads a single image and normalizes to RGB.
     """
-    return Image.open(path).convert("RGB")
+    from PIL import ImageFile
+    ImageFile.LOAD_TRUNCATED_IMAGES = True  # Allow truncated/corrupted images
+    
+    try:
+        img = Image.open(path)
+        # Load the image data to ensure it's valid
+        img.load()
+        # Convert to RGB
+        return img.convert("RGB")
+    except Exception as e:
+        print(f"❌ Error loading image {path}: {e}")
+        raise
 
 
 def ingest_receipt(inp: ReceiptInput) -> ReceiptRaw:
