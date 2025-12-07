@@ -630,8 +630,8 @@
                             {result.label && <div>Label: <span className="font-semibold">{result.label}</span></div>}
                             {result.score !== undefined && <div>Score: <span className="font-semibold">{result.score.toFixed(3)}</span></div>}
                             {result.verdict && <div>Verdict: <span className="font-semibold">{result.verdict}</span></div>}
-                            {result.merchant && <div>Merchant: <span className="font-semibold">{result.merchant}</span></div>}
-                            {result.time_seconds && <div>Time: <span className="font-semibold">{result.time_seconds}s</span></div>}
+                            {result.merchant && <div>Merchant: <span className="font-semibold">{typeof result.merchant === 'object' ? result.merchant.name || JSON.stringify(result.merchant) : result.merchant}</span></div>}
+                            {result.time_seconds !== undefined && <div>Time: <span className="font-semibold">{result.time_seconds}s</span></div>}
                         </div>
                     )}
 
