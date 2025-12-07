@@ -208,6 +208,7 @@
                 setEngineStatus({
                     'rule-based': 'pending',
                     'donut': 'pending',
+                    'donut-receipt': 'pending',
                     'layoutlm': 'pending',
                     'vision-llm': 'pending'
                 });
@@ -220,7 +221,7 @@
 
                 try {
                     addLog('📤 Uploading receipt...', 'info');
-                    addLog('🚀 Starting 4-engine analysis (this may take 10-20 seconds)...', 'info');
+                    addLog('🚀 Starting 5-engine analysis (this may take 10-20 seconds)...', 'info');
                     
                     // Using regular endpoint for now (streaming has async issues)
                     const response = await fetch(`${API_BASE_URL}/analyze/hybrid`, {
@@ -236,7 +237,7 @@
                     const data = await response.json();
                     
                     // Simulate progress updates for better UX
-                    addLog('⏳ Analyzing with all 4 engines...', 'info');
+                    addLog('⏳ Analyzing with all 5 engines...', 'info');
                     setProgress(25);
                     
                     // Show results for each engine
@@ -741,7 +742,7 @@
                                     // Store receipt data for review page
                                     const receiptData = {
                                         receipt_id: verdict.receipt_id || 'current',
-                                        image_url: uploadedImage,
+                                        image_url: preview,  // Use preview (data URL) for image display
                                         verdict: verdict.final_label,
                                         confidence: verdict.confidence,
                                         models: {
@@ -753,6 +754,7 @@
                                         },
                                         extracted: verdict.extracted || {}
                                     };
+                                    console.log('Storing receipt data:', receiptData);
                                     sessionStorage.setItem('currentReceipt', JSON.stringify(receiptData));
                                     window.location.href = `/review.html?id=${verdict.receipt_id || 'current'}`;
                                 }}

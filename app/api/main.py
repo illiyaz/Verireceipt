@@ -137,31 +137,26 @@ def _save_upload_to_disk(upload: UploadFile) -> Path:
     with dest.open("wb") as f:
         shutil.copyfileobj(upload.file, f)
     
-    # Validate and convert if needed
+    # Validate and convert if needed (but keep original if validation fails)
     if suffix != ".pdf":
         try:
             img = Image.open(dest)
             # Convert to RGB if needed (handles RGBA, P, etc.)
             if img.mode not in ["RGB", "L"]:
                 img = img.convert("RGB")
-            # Save as JPEG to ensure compatibility
-            if suffix != ".jpg" and suffix != ".jpeg":
-                new_dest = dest.with_suffix(".jpg")
-                img.save(new_dest, "JPEG", quality=95)
-                dest.unlink()  # Remove original
-                dest = new_dest
-            else:
-                # Re-save to ensure proper format
-                img.save(dest, "JPEG", quality=95)
+            # Always save as JPEG for consistency
+            jpeg_dest = dest.with_suffix(".jpg")
+            img.save(jpeg_dest, "JPEG", quality=95)
             img.close()
-        except Exception as e:
-            # If image validation fails, remove the file
-            if dest.exists():
+            # Remove original if different from JPEG
+            if jpeg_dest != dest:
                 dest.unlink()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid image file: {str(e)}"
-            )
+            dest = jpeg_dest
+        except Exception as e:
+            # Log error but don't fail - keep the original file
+            print(f"⚠️ Image validation warning: {str(e)}")
+            print(f"   Keeping original file: {dest}")
+            # Don't remove the file, just use it as-is
 
     return dest
 
@@ -779,6 +774,8 @@ async def analyze_hybrid_stream(file: UploadFile = File(...)):
     results = {
         "rule_based": None,
         "donut": None,
+        "donut_receipt": None,
+        "layoutlm": None,
         "vision_llm": None,
         "hybrid_verdict": None,
         "timing": {},
@@ -844,6 +841,68 @@ async def analyze_hybrid_stream(file: UploadFile = File(...)):
             })
             return error_result
     
+    def run_donut_receipt():
+        if not DONUT_RECEIPT_AVAILABLE:
+            return {"error": "Donut-Receipt not available", "time_seconds": 0}
+        
+        update_queue.put({"event": "engine_start", "engine": "donut-receipt"})
+        start = time_module.time()
+        try:
+            data = extract_receipt_with_donut_receipt(str(temp_path))
+            elapsed = time_module.time() - start
+            result = {
+                "merchant": data.get("merchant"),
+                "total": data.get("total"),
+                "line_items_count": len(data.get("line_items", [])),
+                "data_quality": "good" if data.get("total") else "poor",
+                "time_seconds": round(elapsed, 2)
+            }
+            update_queue.put({
+                "event": "engine_complete",
+                "engine": "donut-receipt",
+                "data": result
+            })
+            return result
+        except Exception as e:
+            error_result = {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
+            update_queue.put({
+                "event": "engine_complete",
+                "engine": "donut-receipt",
+                "data": error_result
+            })
+            return error_result
+    
+    def run_layoutlm():
+        if not LAYOUTLM_AVAILABLE:
+            return {"error": "LayoutLM not available", "time_seconds": 0}
+        
+        update_queue.put({"event": "engine_start", "engine": "layoutlm"})
+        start = time_module.time()
+        try:
+            data = extract_receipt_with_layoutlm(str(temp_path))
+            elapsed = time_module.time() - start
+            result = {
+                "merchant": data.get("merchant"),
+                "total": data.get("total"),
+                "entities_found": len(data.get("entities", [])),
+                "confidence": data.get("confidence", 0.0),
+                "time_seconds": round(elapsed, 2)
+            }
+            update_queue.put({
+                "event": "engine_complete",
+                "engine": "layoutlm",
+                "data": result
+            })
+            return result
+        except Exception as e:
+            error_result = {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
+            update_queue.put({
+                "event": "engine_complete",
+                "engine": "layoutlm",
+                "data": error_result
+            })
+            return error_result
+    
     def run_vision():
         if not VISION_AVAILABLE:
             return {"error": "Vision LLM not available", "time_seconds": 0}
@@ -882,20 +941,22 @@ async def analyze_hybrid_stream(file: UploadFile = File(...)):
         """Generate SSE events as engines complete."""
         
         # Send initial event
-        yield f"event: analysis_start\ndata: {json_module.dumps({'message': 'Starting 3-engine analysis'})}\n\n"
+        yield f"event: analysis_start\ndata: {json_module.dumps({'message': 'Starting 5-engine analysis'})}\n\n"
         
         # Start all engines in parallel
         loop = asyncio.get_event_loop()
         start_time = time_module.time()
         
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             rule_future = loop.run_in_executor(executor, run_rule_based)
             donut_future = loop.run_in_executor(executor, run_donut)
+            donut_receipt_future = loop.run_in_executor(executor, run_donut_receipt)
+            layoutlm_future = loop.run_in_executor(executor, run_layoutlm)
             vision_future = loop.run_in_executor(executor, run_vision)
             
             # Stream updates as they come
             engines_completed = 0
-            while engines_completed < 3:
+            while engines_completed < 5:
                 try:
                     # Check queue for updates (non-blocking with timeout)
                     update = update_queue.get(timeout=0.1)
@@ -915,6 +976,8 @@ async def analyze_hybrid_stream(file: UploadFile = File(...)):
             # Wait for all futures to complete
             results["rule_based"] = await rule_future
             results["donut"] = await donut_future
+            results["donut_receipt"] = await donut_receipt_future
+            results["layoutlm"] = await layoutlm_future
             results["vision_llm"] = await vision_future
         
         total_time = time_module.time() - start_time
@@ -925,6 +988,10 @@ async def analyze_hybrid_stream(file: UploadFile = File(...)):
             results["engines_used"].append("rule-based")
         if not results["donut"].get("error"):
             results["engines_used"].append("donut")
+        if not results["donut_receipt"].get("error"):
+            results["engines_used"].append("donut-receipt")
+        if not results["layoutlm"].get("error"):
+            results["engines_used"].append("layoutlm")
         if not results["vision_llm"].get("error"):
             results["engines_used"].append("vision-llm")
         
@@ -980,11 +1047,8 @@ async def analyze_hybrid_stream(file: UploadFile = File(...)):
         # Send final event with complete results
         yield f"event: analysis_complete\ndata: {json_module.dumps(results)}\n\n"
         
-        # Cleanup
-        try:
-            temp_path.unlink()
-        except:
-            pass
+        # Don't cleanup - keep file for feedback submission
+        # File will be cleaned up later or by a background job
     
     return StreamingResponse(
         event_generator(),
@@ -1026,19 +1090,40 @@ async def submit_feedback(feedback: FeedbackRequest):
         storage = FeedbackStorage()
         
         # Get the receipt file path
-        # In production, this would look up the actual receipt file
-        receipt_path = UPLOAD_DIR / f"{feedback.receipt_id}.jpg"
+        # The receipt_id might be a UUID or filename without extension
+        receipt_path = None
         
-        # For now, use a placeholder if file doesn't exist
-        if not receipt_path.exists():
-            # Try to find any recent receipt
-            recent_receipts = list(UPLOAD_DIR.glob("*.jpg")) + list(UPLOAD_DIR.glob("*.pdf"))
-            if recent_receipts:
-                receipt_path = recent_receipts[-1]  # Use most recent
+        # Try different variations
+        possible_paths = [
+            UPLOAD_DIR / f"{feedback.receipt_id}",
+            UPLOAD_DIR / f"{feedback.receipt_id}.jpg",
+            UPLOAD_DIR / f"{feedback.receipt_id}.jpeg",
+            UPLOAD_DIR / f"{feedback.receipt_id}.png",
+            UPLOAD_DIR / f"{feedback.receipt_id}.pdf",
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                receipt_path = path
+                break
+        
+        # If still not found, try to find the most recent receipt
+        if not receipt_path:
+            all_receipts = sorted(
+                list(UPLOAD_DIR.glob("*.jpg")) + 
+                list(UPLOAD_DIR.glob("*.jpeg")) + 
+                list(UPLOAD_DIR.glob("*.png")) + 
+                list(UPLOAD_DIR.glob("*.pdf")),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True
+            )
+            if all_receipts:
+                receipt_path = all_receipts[0]  # Use most recent
+                print(f"ℹ️ Receipt ID '{feedback.receipt_id}' not found, using most recent: {receipt_path.name}")
             else:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Receipt file not found"
+                    detail=f"Receipt file not found for ID: {feedback.receipt_id}"
                 )
         
         # Get model predictions (would be stored with the receipt in production)
