@@ -55,6 +55,13 @@ def _load_image(path: str) -> Image.Image:
     from PIL import ImageFile
     ImageFile.LOAD_TRUNCATED_IMAGES = True  # Allow truncated/corrupted images
     
+    # Try to register HEIF support if available (for iPhone photos)
+    try:
+        from pillow_heif import register_heif_opener
+        register_heif_opener()
+    except ImportError:
+        pass  # HEIF support not available
+    
     try:
         img = Image.open(path)
         # Load the image data to ensure it's valid

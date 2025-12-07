@@ -100,6 +100,13 @@ class DonutExtractor:
         from PIL import ImageFile
         ImageFile.LOAD_TRUNCATED_IMAGES = True  # Allow truncated/corrupted images
         
+        # Try to register HEIF support if available (for iPhone photos)
+        try:
+            from pillow_heif import register_heif_opener
+            register_heif_opener()
+        except ImportError:
+            pass  # HEIF support not available
+        
         image = Image.open(image_path)
         image.load()  # Ensure image data is loaded
         image = image.convert("RGB")

@@ -161,6 +161,13 @@ def _save_upload_to_disk(upload: UploadFile) -> Path:
             from PIL import ImageFile
             ImageFile.LOAD_TRUNCATED_IMAGES = True  # Allow truncated images
             
+            # Try to register HEIF support if available
+            try:
+                from pillow_heif import register_heif_opener
+                register_heif_opener()
+            except ImportError:
+                pass  # HEIF support not available, will fail on HEIC files
+            
             img = Image.open(dest)
             print(f"📷 Image opened: format={img.format}, mode={img.mode}, size={img.size}")
             
