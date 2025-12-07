@@ -65,11 +65,25 @@ class DonutReceiptExtractor:
         # Check if model is in meta state
         first_param = next(self.model.parameters())
         if first_param.is_meta:
-            print("⚠️ Model in meta state, forcing weight materialization...")
-            self.model = self.model.float()
-            first_param = next(self.model.parameters())
-            if first_param.is_meta:
-                raise RuntimeError("Cannot materialize model weights - PyTorch/Transformers version issue")
+            print("⚠️ Model in meta state - trying alternative loading...")
+            # Try loading with weights_only and no optimizations
+            try:
+                import torch
+                self.model = VisionEncoderDecoderModel.from_pretrained(
+                    model_name,
+                    torch_dtype=torch.float32,
+                    device_map=None,
+                    cache_dir=cache_dir,
+                    local_files_only=True,
+                    use_safetensors=False  # Force use of pytorch_model.bin
+                )
+                first_param = next(self.model.parameters())
+                if first_param.is_meta:
+                    print("❌ Still in meta state - skipping Donut-Receipt")
+                    raise RuntimeError("Model weights cannot be loaded (PyTorch/Transformers compatibility issue)")
+            except Exception as e:
+                print(f"❌ Alternative loading failed: {e}")
+                raise RuntimeError(f"Cannot load Donut-Receipt model: {str(e)}")
         
         # Move to device AFTER loading
         print(f"Moving model to {self.device}...")
