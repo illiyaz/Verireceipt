@@ -90,38 +90,63 @@
             const receiptId = new URLSearchParams(window.location.search).get('id');
             
             useEffect(() => {
-                // Load receipt data
-                // In production, this would fetch from API
-                // For now, we'll use mock data
-                setTimeout(() => {
-                    setReceipt({
-                        id: receiptId,
-                        image_url: '/uploads/sample-receipt.jpg', // Replace with actual path
-                        verdict: 'suspicious',
-                        confidence: 0.65,
-                        models: {
-                            rule_based: { verdict: 'suspicious', score: 0.65 },
-                            donut: { verdict: 'real' },
-                            donut_receipt: { 
-                                merchant: { name: 'Sample Store' },
-                                total: 1234.56,
-                                items: [
-                                    { name: 'Item 1', quantity: 1, total: 100.00 },
-                                    { name: 'Item 2', quantity: 2, total: 200.00 }
-                                ]
+                // Load receipt data from sessionStorage (set by main page)
+                const storedData = sessionStorage.getItem('currentReceipt');
+                if (storedData) {
+                    try {
+                        const data = JSON.parse(storedData);
+                        setReceipt({
+                            id: receiptId || data.receipt_id || 'unknown',
+                            image_url: data.image_url || data.uploaded_image || '',
+                            verdict: data.verdict || data.final_label || 'suspicious',
+                            confidence: data.confidence || 0.5,
+                            models: data.models || {
+                                rule_based: { verdict: 'unknown', score: 0 },
+                                donut: { verdict: 'unknown' },
+                                donut_receipt: {},
+                                layoutlm: { verdict: 'unknown' },
+                                vision_llm: { verdict: 'unknown' }
                             },
-                            layoutlm: { verdict: 'suspicious' },
-                            vision_llm: { verdict: 'fake' }
+                            extracted: data.extracted || {}
+                        });
+                        setLoading(false);
+                    } catch (e) {
+                        console.error('Error loading receipt data:', e);
+                        // Fallback to basic data
+                        setReceipt({
+                            id: receiptId || 'unknown',
+                            image_url: '',
+                            verdict: 'suspicious',
+                            confidence: 0.5,
+                            models: {
+                                rule_based: { verdict: 'unknown', score: 0 },
+                                donut: { verdict: 'unknown' },
+                                donut_receipt: {},
+                                layoutlm: { verdict: 'unknown' },
+                                vision_llm: { verdict: 'unknown' }
+                            },
+                            extracted: {}
+                        });
+                        setLoading(false);
+                    }
+                } else {
+                    // No stored data - use minimal fallback
+                    setReceipt({
+                        id: receiptId || 'unknown',
+                        image_url: '',
+                        verdict: 'suspicious',
+                        confidence: 0.5,
+                        models: {
+                            rule_based: { verdict: 'unknown', score: 0 },
+                            donut: { verdict: 'unknown' },
+                            donut_receipt: {},
+                            layoutlm: { verdict: 'unknown' },
+                            vision_llm: { verdict: 'unknown' }
                         },
-                        extracted: {
-                            merchant: { name: 'Sample Store' },
-                            total: 1234.56,
-                            tax: { amount: 123.45 },
-                            date: '2025-12-03'
-                        }
+                        extracted: {}
                     });
                     setLoading(false);
-                }, 500);
+                }
             }, [receiptId]);
             
             const handleReasonToggle = (reason) => {
@@ -152,23 +177,35 @@
                 console.log('Submitting feedback:', feedback);
                 
                 try {
-                    const response = await fetch('/api/feedback', {
+                    const response = await fetch('http://localhost:8000/api/feedback', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(feedback)
                     });
                     
-                    const result = await response.json();
-                    console.log('Response:', result);
+                    console.log('Response status:', response.status);
+                    console.log('Response headers:', response.headers.get('content-type'));
                     
-                    if (response.ok) {
-                        setSubmitted(true);
-                        setTimeout(() => {
-                            window.location.href = '/';
-                        }, 2000);
+                    // Check if response is JSON
+                    const contentType = response.headers.get('content-type');
+                    if (contentType && contentType.includes('application/json')) {
+                        const result = await response.json();
+                        console.log('Response:', result);
+                        
+                        if (response.ok) {
+                            setSubmitted(true);
+                            setTimeout(() => {
+                                window.location.href = '/';
+                            }, 2000);
+                        } else {
+                            console.error('Server error:', result);
+                            alert(`Failed to submit feedback: ${result.detail || 'Unknown error'}`);
+                        }
                     } else {
-                        console.error('Server error:', result);
-                        alert(`Failed to submit feedback: ${result.detail || 'Unknown error'}`);
+                        // Non-JSON response (probably an error page)
+                        const text = await response.text();
+                        console.error('Non-JSON response:', text);
+                        alert(`Failed to submit feedback: Server returned non-JSON response (status ${response.status})`);
                     }
                 } catch (error) {
                     console.error('Error submitting feedback:', error);

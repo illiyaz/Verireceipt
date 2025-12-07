@@ -737,7 +737,25 @@
                                 </p>
                             </div>
                             <button 
-                                onClick={() => window.location.href = `/review.html?id=${verdict.receipt_id || 'current'}`}
+                                onClick={() => {
+                                    // Store receipt data for review page
+                                    const receiptData = {
+                                        receipt_id: verdict.receipt_id || 'current',
+                                        image_url: uploadedImage,
+                                        verdict: verdict.final_label,
+                                        confidence: verdict.confidence,
+                                        models: {
+                                            rule_based: engineResults['rule-based'] || {},
+                                            donut: engineResults['donut'] || {},
+                                            donut_receipt: engineResults['donut-receipt'] || {},
+                                            layoutlm: engineResults['layoutlm'] || {},
+                                            vision_llm: engineResults['vision-llm'] || {}
+                                        },
+                                        extracted: verdict.extracted || {}
+                                    };
+                                    sessionStorage.setItem('currentReceipt', JSON.stringify(receiptData));
+                                    window.location.href = `/review.html?id=${verdict.receipt_id || 'current'}`;
+                                }}
                                 className="ml-4 px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold rounded-lg hover:from-indigo-700 hover:to-purple-700 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105"
                             >
                                 <i className="fas fa-clipboard-check mr-2"></i>

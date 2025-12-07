@@ -116,18 +116,52 @@ class FeedbackResponse(BaseModel):
 
 def _save_upload_to_disk(upload: UploadFile) -> Path:
     """
-    Save uploaded file to a temp path inside the container.
+    Save uploaded file to a temp path and validate it's a valid image.
 
     We keep it simple:
     - generate a random UUID-based filename
     - preserve original extension
+    - validate image can be opened
     """
-    suffix = Path(upload.filename or "").suffix
+    from PIL import Image
+    
+    suffix = Path(upload.filename or "").suffix.lower()
+    # Ensure we have a valid image extension
+    if suffix not in [".jpg", ".jpeg", ".png", ".pdf"]:
+        suffix = ".jpg"  # Default to jpg
+    
     tmp_name = f"{uuid.uuid4().hex}{suffix}"
     dest = UPLOAD_DIR / tmp_name
 
+    # Save the file
     with dest.open("wb") as f:
         shutil.copyfileobj(upload.file, f)
+    
+    # Validate and convert if needed
+    if suffix != ".pdf":
+        try:
+            img = Image.open(dest)
+            # Convert to RGB if needed (handles RGBA, P, etc.)
+            if img.mode not in ["RGB", "L"]:
+                img = img.convert("RGB")
+            # Save as JPEG to ensure compatibility
+            if suffix != ".jpg" and suffix != ".jpeg":
+                new_dest = dest.with_suffix(".jpg")
+                img.save(new_dest, "JPEG", quality=95)
+                dest.unlink()  # Remove original
+                dest = new_dest
+            else:
+                # Re-save to ensure proper format
+                img.save(dest, "JPEG", quality=95)
+            img.close()
+        except Exception as e:
+            # If image validation fails, remove the file
+            if dest.exists():
+                dest.unlink()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid image file: {str(e)}"
+            )
 
     return dest
 
@@ -727,14 +761,12 @@ async def analyze_hybrid_stream(file: UploadFile = File(...)):
     import time as time_module
     import queue
     
-    # Save uploaded file
-    file_id = str(uuid.uuid4())
-    file_ext = Path(file.filename).suffix
-    temp_path = UPLOAD_DIR / f"{file_id}{file_ext}"
-    
+    # Save uploaded file with validation
     try:
-        with open(temp_path, "wb") as f:
-            shutil.copyfileobj(file.file, f)
+        temp_path = _save_upload_to_disk(file)
+        file_id = temp_path.stem
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
