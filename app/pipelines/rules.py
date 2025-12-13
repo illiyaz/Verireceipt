@@ -762,6 +762,7 @@ def analyze_receipt(
     if extracted_total and not feats.text_features.get("total"):
         logger.info(f"✨ Using pre-extracted total: {extracted_total}")
         feats.text_features["total"] = extracted_total
+        feats.text_features["total_line_present"] = True  # Mark that total exists
     
     if extracted_merchant and not feats.text_features.get("merchant"):
         logger.info(f"✨ Using pre-extracted merchant: {extracted_merchant}")
