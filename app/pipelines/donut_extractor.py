@@ -93,12 +93,25 @@ class DonutExtractor:
             # Check if model is in meta state
             first_param = next(self.model.parameters())
             if first_param.is_meta:
-                print("   ⚠️ Model in meta state, forcing weight materialization...")
-                # Force materialize weights
-                self.model = self.model.float()
+                print("   ⚠️ Model in meta state, forcing complete reload...")
+                # Delete and reload with different settings
+                del self.model
+                import gc
+                gc.collect()
+                
+                # Try loading with use_safetensors=False
+                self.model = VisionEncoderDecoderModel.from_pretrained(
+                    self.model_name,
+                    torch_dtype=torch.float32,
+                    low_cpu_mem_usage=False,
+                    device_map=None,
+                    cache_dir=cache_dir,
+                    use_safetensors=False  # Force legacy loading
+                )
+                
                 first_param = next(self.model.parameters())
                 if first_param.is_meta:
-                    raise RuntimeError("Cannot materialize model weights - PyTorch/Transformers version issue")
+                    raise RuntimeError("Cannot materialize model weights - try: pip install --upgrade transformers torch")
             
             # Move to device AFTER loading
             print(f"   Moving model to {self.device}...")
