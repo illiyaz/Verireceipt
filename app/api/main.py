@@ -695,15 +695,26 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         for failure in failed_engines:
             hybrid["reasoning"].append(f"❌ {failure}")
     else:
-        # ENSEMBLE SYSTEM TEMPORARILY DISABLED - needs debugging
-        # TODO: Re-enable after fixing bugs
-        # ensemble = get_ensemble()
-        # converged_data = ensemble.converge_extraction(results)
-        # ensemble_verdict = ensemble.build_ensemble_verdict(results, converged_data)
+        # Try Ensemble Intelligence System (with fallback to legacy logic)
+        try:
+            ensemble = get_ensemble()
+            converged_data = ensemble.converge_extraction(results)
+            ensemble_verdict = ensemble.build_ensemble_verdict(results, converged_data)
+            
+            # Update hybrid with ensemble results
+            hybrid["final_label"] = ensemble_verdict["final_label"]
+            hybrid["confidence"] = ensemble_verdict["confidence"]
+            hybrid["recommended_action"] = ensemble_verdict["recommended_action"]
+            hybrid["reasoning"] = ensemble_verdict["reasoning"]
+            
+            print(f"✅ Ensemble: {hybrid['final_label']} ({hybrid['confidence']*100:.0f}%)")
+        except Exception as e:
+            print(f"⚠️ Ensemble error: {e}, using legacy logic")
         
-        # Using legacy logic for now
-        # All engines completed - generate hybrid verdict
-        rule_label = results["rule_based"].get("label", "unknown")
+        # Legacy logic (runs if ensemble didn't set values or failed)
+        if "final_label" not in hybrid or hybrid["final_label"] == "unknown":
+            # All engines completed - generate hybrid verdict using legacy logic
+            rule_label = results["rule_based"].get("label", "unknown")
         rule_score = results["rule_based"].get("score", 0.5)
         vision_verdict = results["vision_llm"].get("verdict", "unknown")
         vision_confidence = results["vision_llm"].get("confidence", 0.0)
