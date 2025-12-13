@@ -756,20 +756,20 @@ def analyze_receipt(
     """
     inp = ReceiptInput(file_path=file_path)
     raw = ingest_and_ocr(inp)
-    
-    # Enhance OCR with pre-extracted data if available
-    if extracted_total and not raw.text_features.get("total"):
-        logger.info(f"✨ Using pre-extracted total: {extracted_total}")
-        raw.text_features["total"] = extracted_total
-    
-    if extracted_merchant and not raw.text_features.get("merchant"):
-        logger.info(f"✨ Using pre-extracted merchant: {extracted_merchant}")
-        raw.text_features["merchant"] = extracted_merchant
-    
-    if extracted_date and not raw.text_features.get("date"):
-        logger.info(f"✨ Using pre-extracted date: {extracted_date}")
-        raw.text_features["date"] = extracted_date
-    
     feats = build_features(raw)
+    
+    # Enhance features with pre-extracted data if available
+    if extracted_total and not feats.text_features.get("total"):
+        logger.info(f"✨ Using pre-extracted total: {extracted_total}")
+        feats.text_features["total"] = extracted_total
+    
+    if extracted_merchant and not feats.text_features.get("merchant"):
+        logger.info(f"✨ Using pre-extracted merchant: {extracted_merchant}")
+        feats.text_features["merchant"] = extracted_merchant
+    
+    if extracted_date and not feats.text_features.get("date"):
+        logger.info(f"✨ Using pre-extracted date: {extracted_date}")
+        feats.text_features["date"] = extracted_date
+    
     decision = _score_and_explain(feats)
     return decision
