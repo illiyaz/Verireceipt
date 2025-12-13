@@ -744,16 +744,45 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 hybrid["reasoning"].append("ℹ️ Vision LLM shows lower confidence")
                 
         elif rule_label == "fake" or rule_score > 0.7:
-            hybrid["final_label"] = "fake"
-            hybrid["confidence"] = min(0.90 + optional_boost, 0.95)
-            hybrid["recommended_action"] = "reject"
-            
-            engines_count = 2 + sum(optional_engines.values())
-            hybrid["reasoning"].append(f"❌ {engines_count}/{hybrid['total_engines']} engines indicate fraudulent receipt")
-            hybrid["reasoning"].append("❌ High fraud score detected by rule-based engine")
-            
-            if vision_verdict == "fake":
-                hybrid["reasoning"].append("❌ Vision LLM confirms fraud indicators")
+            # Rule-Based flagged as fake - but check if Vision LLM disagrees
+            if vision_verdict == "real" and vision_confidence > 0.8:
+                # Strong disagreement - Vision LLM says real with high confidence
+                # Check if DONUT/LayoutLM extracted data successfully (suggests real receipt)
+                donut_extracted = results["donut"].get("total") is not None
+                layoutlm_extracted = results["layoutlm"].get("total") is not None
+                
+                if donut_extracted or layoutlm_extracted:
+                    # Advanced models extracted data successfully - likely a false positive
+                    hybrid["final_label"] = "suspicious"
+                    hybrid["confidence"] = 0.70
+                    hybrid["recommended_action"] = "human_review"
+                    hybrid["reasoning"].append("⚠️ Conflicting signals detected")
+                    hybrid["reasoning"].append("❌ Rule-Based flagged fraud indicators")
+                    hybrid["reasoning"].append("✅ Vision LLM indicates authentic receipt")
+                    if donut_extracted:
+                        hybrid["reasoning"].append("✅ DONUT successfully extracted structured data")
+                    if layoutlm_extracted:
+                        hybrid["reasoning"].append("✅ LayoutLM successfully extracted structured data")
+                    hybrid["reasoning"].append("💡 Recommendation: Human review needed - possible OCR error in Rule-Based engine")
+                else:
+                    # No extraction data - trust Rule-Based
+                    hybrid["final_label"] = "fake"
+                    hybrid["confidence"] = 0.85
+                    hybrid["recommended_action"] = "reject"
+                    hybrid["reasoning"].append("❌ Rule-Based detected fraud indicators")
+                    hybrid["reasoning"].append("⚠️ Vision LLM disagrees but extraction engines found no data")
+            else:
+                # Vision LLM agrees or has low confidence
+                hybrid["final_label"] = "fake"
+                hybrid["confidence"] = min(0.90 + optional_boost, 0.95)
+                hybrid["recommended_action"] = "reject"
+                
+                engines_count = 2 + sum(optional_engines.values())
+                hybrid["reasoning"].append(f"❌ {engines_count}/{hybrid['total_engines']} engines indicate fraudulent receipt")
+                hybrid["reasoning"].append("❌ High fraud score detected by rule-based engine")
+                
+                if vision_verdict == "fake":
+                    hybrid["reasoning"].append("❌ Vision LLM confirms fraud indicators")
                 
         else:
             # Suspicious case - use vision as tiebreaker
