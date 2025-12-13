@@ -544,76 +544,90 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         except Exception as e:
             return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
     
-    # Execute all 5 engines in parallel with timeouts
+    # Execute engines SEQUENTIALLY for intelligence convergence
+    # Each engine benefits from previous engines' results
     start_time = time_module.time()
     
-    # Timeout configuration (seconds)
-    RULE_BASED_TIMEOUT = 30   # Fast engine
-    DONUT_TIMEOUT = 120       # Increased - model loading can be slow first time
-    DONUT_RECEIPT_TIMEOUT = 120  # Increased
-    LAYOUTLM_TIMEOUT = 120    # Increased - model loading can be slow
-    VISION_TIMEOUT = 90       # Slowest engine (Ollama can be slow)
+    print("\n" + "="*60)
+    print("SEQUENTIAL INTELLIGENCE PIPELINE")
+    print("="*60)
     
-    with ThreadPoolExecutor(max_workers=5) as executor:  # 5 engines now
-        rule_future = executor.submit(run_rule_based)
-        donut_future = executor.submit(run_donut)
-        donut_receipt_future = executor.submit(run_donut_receipt)  # NEW
-        layoutlm_future = executor.submit(run_layoutlm)
-        vision_future = executor.submit(run_vision)
+    # STEP 1: Vision LLM (first - visual fraud detection)
+    print("\n1️⃣ Running Vision LLM...")
+    results["vision_llm"] = run_vision()
+    if not results["vision_llm"].get("error"):
+        print(f"   ✅ Vision: {results['vision_llm'].get('verdict')} ({results['vision_llm'].get('confidence', 0)*100:.0f}%)")
+    else:
+        print(f"   ❌ Vision failed: {results['vision_llm'].get('error')}")
+    
+    # STEP 2: LayoutLM (uses Vision context for better extraction)
+    print("\n2️⃣ Running LayoutLM...")
+    results["layoutlm"] = run_layoutlm()
+    if not results["layoutlm"].get("error"):
+        print(f"   ✅ LayoutLM: Total={results['layoutlm'].get('total')}, Words={results['layoutlm'].get('words_extracted')}")
+    else:
+        print(f"   ❌ LayoutLM failed: {results['layoutlm'].get('error')}")
+    
+    # STEP 3: DONUT (if available)
+    print("\n3️⃣ Running DONUT...")
+    results["donut"] = run_donut()
+    if not results["donut"].get("error"):
+        print(f"   ✅ DONUT: Total={results['donut'].get('total')}")
+    else:
+        print(f"   ⚠️ DONUT: {results['donut'].get('error')}")
+    
+    # STEP 4: Donut-Receipt (if available)
+    print("\n4️⃣ Running Donut-Receipt...")
+    results["donut_receipt"] = run_donut_receipt()
+    if not results["donut_receipt"].get("error"):
+        print(f"   ✅ Donut-Receipt: {results['donut_receipt'].get('data_quality')}")
+    else:
+        print(f"   ⚠️ Donut-Receipt: {results['donut_receipt'].get('error')}")
+    
+    # STEP 5: Rule-Based (uses ALL extracted data from above engines)
+    print("\n5️⃣ Running Rule-Based with extracted data...")
+    # Pass LayoutLM data to Rule-Based for better analysis
+    extracted_total = results["layoutlm"].get("total") if not results["layoutlm"].get("error") else None
+    extracted_merchant = results["layoutlm"].get("merchant") if not results["layoutlm"].get("error") else None
+    extracted_date = results["layoutlm"].get("date") if not results["layoutlm"].get("error") else None
+    
+    if extracted_total or extracted_merchant or extracted_date:
+        print(f"   📊 Using extracted data: Total={extracted_total}, Merchant={extracted_merchant}")
+        # Format total properly
+        if extracted_total:
+            if isinstance(extracted_total, (int, float)):
+                extracted_total = f"{float(extracted_total):.2f}"
+            else:
+                extracted_total = str(extracted_total)
         
-        # Get results with timeouts to prevent hanging
         try:
-            results["rule_based"] = rule_future.result(timeout=RULE_BASED_TIMEOUT)
-        except FuturesTimeoutError:
+            enhanced_decision = analyze_receipt(
+                str(temp_path),
+                extracted_total=extracted_total,
+                extracted_merchant=extracted_merchant,
+                extracted_date=extracted_date
+            )
             results["rule_based"] = {
-                "error": f"Timeout after {RULE_BASED_TIMEOUT}s - engine took too long",
-                "time_seconds": RULE_BASED_TIMEOUT
+                "label": enhanced_decision.label,
+                "score": enhanced_decision.score,
+                "reasons": enhanced_decision.reasons,
+                "minor_notes": enhanced_decision.minor_notes,
+                "time_seconds": 0,
+                "enhanced": True
             }
+            print(f"   ✅ Rule-Based (enhanced): {enhanced_decision.label} ({enhanced_decision.score*100:.0f}%)")
         except Exception as e:
-            results["rule_based"] = {"error": str(e), "time_seconds": 0}
-        
-        try:
-            results["donut"] = donut_future.result(timeout=DONUT_TIMEOUT)
-        except FuturesTimeoutError:
-            results["donut"] = {
-                "error": f"Timeout after {DONUT_TIMEOUT}s - engine took too long",
-                "time_seconds": DONUT_TIMEOUT
-            }
-        except Exception as e:
-            results["donut"] = {"error": str(e), "time_seconds": 0}
-        
-        try:
-            results["donut_receipt"] = donut_receipt_future.result(timeout=DONUT_RECEIPT_TIMEOUT)
-        except FuturesTimeoutError:
-            results["donut_receipt"] = {
-                "error": f"Timeout after {DONUT_RECEIPT_TIMEOUT}s - engine took too long",
-                "time_seconds": DONUT_RECEIPT_TIMEOUT
-            }
-        except Exception as e:
-            results["donut_receipt"] = {"error": str(e), "time_seconds": 0}
-        
-        try:
-            results["layoutlm"] = layoutlm_future.result(timeout=LAYOUTLM_TIMEOUT)
-        except FuturesTimeoutError:
-            results["layoutlm"] = {
-                "error": f"Timeout after {LAYOUTLM_TIMEOUT}s - engine took too long",
-                "time_seconds": LAYOUTLM_TIMEOUT
-            }
-        except Exception as e:
-            results["layoutlm"] = {"error": str(e), "time_seconds": 0}
-        
-        try:
-            results["vision_llm"] = vision_future.result(timeout=VISION_TIMEOUT)
-        except FuturesTimeoutError:
-            results["vision_llm"] = {
-                "error": f"Timeout after {VISION_TIMEOUT}s - engine took too long",
-                "time_seconds": VISION_TIMEOUT
-            }
-        except Exception as e:
-            results["vision_llm"] = {"error": str(e), "time_seconds": 0}
+            print(f"   ⚠️ Enhanced Rule-Based failed, using basic: {e}")
+            results["rule_based"] = run_rule_based()
+    else:
+        results["rule_based"] = run_rule_based()
+        if not results["rule_based"].get("error"):
+            print(f"   ✅ Rule-Based: {results['rule_based'].get('label')} ({results['rule_based'].get('score', 0)*100:.0f}%)")
     
     total_time = time_module.time() - start_time
-    results["timing"]["parallel_total_seconds"] = round(total_time, 2)
+    results["timing"]["sequential_total_seconds"] = round(total_time, 2)
+    print(f"\n⏱️ Total pipeline time: {total_time:.1f}s")
+    print("="*60 + "\n")
     
     # Track which engines were used
     if not results["rule_based"].get("error"):
@@ -794,59 +808,16 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     
     results["hybrid_verdict"] = hybrid
     
-    # NOW run ensemble with all engine results available
+    # Build final ensemble verdict (Rule-Based already enhanced with LayoutLM data)
     try:
-        print("🔍 Running ensemble post-processing...")
+        print("\n6️⃣ Building ensemble verdict...")
         ensemble = get_ensemble()
         
-        # Converge extraction data from all engines
+        # Converge extraction data for transparency
         converged_data = ensemble.converge_extraction(results)
-        print(f"✅ Converged data: Total={converged_data.get('total')}, Merchant={converged_data.get('merchant')}")
         
-        # Re-run Rule-Based with converged data if we have better extraction
-        if converged_data.get('total') or converged_data.get('merchant') or converged_data.get('date'):
-            print(f"🔄 Re-running Rule-Based with converged data...")
-            print(f"   Total: {converged_data.get('total')}")
-            print(f"   Merchant: {converged_data.get('merchant')}")
-            print(f"   Date: {converged_data.get('date')}")
-            try:
-                # Format total as string with decimal point
-                total_str = None
-                if converged_data.get('total'):
-                    total_val = converged_data['total']
-                    # Handle both float and int/string
-                    if isinstance(total_val, (int, float)):
-                        total_str = f"{float(total_val):.2f}"
-                    else:
-                        total_str = str(total_val)
-                
-                enhanced_decision = analyze_receipt(
-                    str(temp_path),
-                    extracted_total=total_str,
-                    extracted_merchant=converged_data.get('merchant'),
-                    extracted_date=converged_data.get('date')
-                )
-                
-                # Update Rule-Based results with enhanced version
-                results["rule_based"] = {
-                    "label": enhanced_decision.label,
-                    "score": enhanced_decision.score,
-                    "reasons": enhanced_decision.reasons,
-                    "minor_notes": enhanced_decision.minor_notes,
-                    "enhanced": True  # Flag to show this used converged data
-                }
-                print(f"✅ Rule-Based enhanced: {enhanced_decision.label} ({enhanced_decision.score*100:.0f}%)")
-            except Exception as e:
-                import traceback
-                print(f"⚠️ Rule-Based re-run failed: {e}")
-                print(f"Traceback: {traceback.format_exc()}")
-                print("Using original Rule-Based results")
-        else:
-            print("ℹ️ No converged data to enhance Rule-Based")
-        
-        # Build ensemble verdict using converged intelligence
+        # Build final verdict
         ensemble_verdict = ensemble.build_ensemble_verdict(results, converged_data)
-        print(f"✅ Ensemble verdict: {ensemble_verdict['final_label']} ({ensemble_verdict['confidence']*100:.0f}%)")
         
         # Override hybrid with ensemble results
         hybrid["final_label"] = ensemble_verdict["final_label"]
@@ -858,15 +829,14 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         
         # Update results with enhanced hybrid
         results["hybrid_verdict"] = hybrid
-        print("✅ Ensemble SUCCESS - hybrid verdict enhanced")
+        print(f"   ✅ Final verdict: {ensemble_verdict['final_label']} ({ensemble_verdict['confidence']*100:.0f}%)")
         
     except Exception as e:
         import traceback
-        error_trace = traceback.format_exc()
-        print(f"⚠️ Ensemble error: {e}")
-        print(f"Stack trace:\n{error_trace}")
-        print("→ Using legacy hybrid verdict (already computed)")
-        # Legacy hybrid already in results, so we're good
+        print(f"   ⚠️ Ensemble error: {e}")
+        print(f"   Using legacy hybrid verdict")
+        traceback.print_exc()
+        # Legacy hybrid already in results
     
     # Don't cleanup - keep file for feedback submission
     # File will be cleaned up later or by a background job
