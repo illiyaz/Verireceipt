@@ -810,9 +810,19 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             print(f"   Merchant: {converged_data.get('merchant')}")
             print(f"   Date: {converged_data.get('date')}")
             try:
+                # Format total as string with decimal point
+                total_str = None
+                if converged_data.get('total'):
+                    total_val = converged_data['total']
+                    # Handle both float and int/string
+                    if isinstance(total_val, (int, float)):
+                        total_str = f"{float(total_val):.2f}"
+                    else:
+                        total_str = str(total_val)
+                
                 enhanced_decision = analyze_receipt(
                     str(temp_path),
-                    extracted_total=converged_data.get('total'),
+                    extracted_total=total_str,
                     extracted_merchant=converged_data.get('merchant'),
                     extracted_date=converged_data.get('date')
                 )
