@@ -695,15 +695,20 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         for failure in failed_engines:
             hybrid["reasoning"].append(f"❌ {failure}")
     else:
-        # ENSEMBLE DISABLED - has bugs, needs more debugging
-        # TODO: Fix ensemble system bugs
-        USE_ENSEMBLE = False
+        # Try Ensemble Intelligence System with detailed error logging
+        USE_ENSEMBLE = True  # Re-enabled for debugging
         
         if USE_ENSEMBLE:
             try:
+                print("🔍 Attempting ensemble system...")
                 ensemble = get_ensemble()
+                print("✅ Ensemble instance created")
+                
                 converged_data = ensemble.converge_extraction(results)
+                print(f"✅ Data converged: {converged_data}")
+                
                 ensemble_verdict = ensemble.build_ensemble_verdict(results, converged_data)
+                print(f"✅ Verdict built: {ensemble_verdict['final_label']}")
                 
                 # Update hybrid with ensemble results
                 hybrid["final_label"] = ensemble_verdict["final_label"]
@@ -711,9 +716,13 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 hybrid["recommended_action"] = ensemble_verdict["recommended_action"]
                 hybrid["reasoning"] = ensemble_verdict["reasoning"]
                 
-                print(f"✅ Ensemble: {hybrid['final_label']} ({hybrid['confidence']*100:.0f}%)")
+                print(f"✅ Ensemble SUCCESS: {hybrid['final_label']} ({hybrid['confidence']*100:.0f}%)")
             except Exception as e:
-                print(f"⚠️ Ensemble error: {e}, using legacy logic")
+                import traceback
+                error_trace = traceback.format_exc()
+                print(f"❌ Ensemble error: {e}")
+                print(f"Full trace:\n{error_trace}")
+                print("⚠️ Falling back to legacy logic")
         
         # Legacy logic (runs if ensemble didn't set values or failed)
         if "final_label" not in hybrid or hybrid["final_label"] == "unknown":
