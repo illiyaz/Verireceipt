@@ -60,6 +60,11 @@ class EnsembleIntelligence:
             "sources": {}
         }
         
+        # Safety check
+        if not results or not isinstance(results, dict):
+            logger.warning("Invalid results passed to converge_extraction")
+            return converged
+        
         # Extract merchant (prefer LayoutLM > DONUT > Donut-Receipt)
         merchant_candidates = []
         if results.get("layoutlm", {}).get("merchant"):
@@ -167,6 +172,10 @@ class EnsembleIntelligence:
         vision_verdict = results.get("vision_llm", {}).get("verdict", "unknown")
         vision_confidence = results.get("vision_llm", {}).get("confidence", 0.0)
         vision_reasoning = results.get("vision_llm", {}).get("reasoning", "")
+        
+        # Ensure vision_reasoning is a string
+        if not isinstance(vision_reasoning, str):
+            vision_reasoning = str(vision_reasoning) if vision_reasoning else ""
         
         # Check for explicit fraud indicators in Vision LLM
         fraud_keywords = ["fake", "edited", "manipulated", "screenshot", "receiptfaker", "watermark"]
