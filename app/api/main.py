@@ -696,7 +696,8 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             hybrid["reasoning"].append(f"❌ {failure}")
     else:
         # Try Ensemble Intelligence System with detailed error logging
-        USE_ENSEMBLE = True  # Re-enabled for debugging
+        USE_ENSEMBLE = False  # Disabled - causes 500 errors in production
+        # TODO: Debug why ensemble works in isolation but fails in API
         
         if USE_ENSEMBLE:
             try:
