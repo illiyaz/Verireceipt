@@ -1,1 +1,2 @@
 pillow-heif>=0.13.0  # For HEIF/HEIC image support (iPhone photos)
+easyocr>=1.7.0  # Better OCR accuracy (~85-90% vs Tesseract's 60-70%)
