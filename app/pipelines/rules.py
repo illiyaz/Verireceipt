@@ -1,6 +1,7 @@
 # app/pipelines/rules.py
 
-from typing import List
+from typing import List, Optional
+import logging
 
 from app.schemas.receipt import (
     ReceiptFeatures,
@@ -9,6 +10,8 @@ from app.schemas.receipt import (
 )
 from app.pipelines.ingest import ingest_and_ocr
 from app.pipelines.features import build_features
+
+logger = logging.getLogger(__name__)
 
 
 def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
@@ -732,14 +735,41 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
     )
 
 
-def analyze_receipt(file_path: str) -> ReceiptDecision:
+def analyze_receipt(
+    file_path: str,
+    extracted_total: Optional[str] = None,
+    extracted_merchant: Optional[str] = None,
+    extracted_date: Optional[str] = None
+) -> ReceiptDecision:
     """
     High-level orchestrator:
     file_path -> ingest+OCR -> features -> rule-based decision.
-    This is the function described in the README.
+    
+    Args:
+        file_path: Path to receipt image/PDF
+        extracted_total: Pre-extracted total from advanced models (DONUT/LayoutLM)
+        extracted_merchant: Pre-extracted merchant from advanced models
+        extracted_date: Pre-extracted date from advanced models
+    
+    If extracted data is provided, it will be used to enhance OCR results.
+    This allows advanced vision models to help Rule-Based engine.
     """
     inp = ReceiptInput(file_path=file_path)
     raw = ingest_and_ocr(inp)
+    
+    # Enhance OCR with pre-extracted data if available
+    if extracted_total and not raw.text_features.get("total"):
+        logger.info(f"✨ Using pre-extracted total: {extracted_total}")
+        raw.text_features["total"] = extracted_total
+    
+    if extracted_merchant and not raw.text_features.get("merchant"):
+        logger.info(f"✨ Using pre-extracted merchant: {extracted_merchant}")
+        raw.text_features["merchant"] = extracted_merchant
+    
+    if extracted_date and not raw.text_features.get("date"):
+        logger.info(f"✨ Using pre-extracted date: {extracted_date}")
+        raw.text_features["date"] = extracted_date
+    
     feats = build_features(raw)
     decision = _score_and_explain(feats)
     return decision

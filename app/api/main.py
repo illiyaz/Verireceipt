@@ -818,6 +818,29 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         converged_data = ensemble.converge_extraction(results)
         print(f"✅ Converged data: Total={converged_data.get('total')}, Merchant={converged_data.get('merchant')}")
         
+        # Re-run Rule-Based with converged data if we have better extraction
+        if converged_data.get('total') or converged_data.get('merchant') or converged_data.get('date'):
+            print("🔄 Re-running Rule-Based with converged data...")
+            try:
+                enhanced_decision = analyze_receipt(
+                    str(temp_path),
+                    extracted_total=converged_data.get('total'),
+                    extracted_merchant=converged_data.get('merchant'),
+                    extracted_date=converged_data.get('date')
+                )
+                
+                # Update Rule-Based results with enhanced version
+                results["rule_based"] = {
+                    "label": enhanced_decision.label,
+                    "score": enhanced_decision.score,
+                    "reasons": enhanced_decision.reasons,
+                    "minor_notes": enhanced_decision.minor_notes,
+                    "enhanced": True  # Flag to show this used converged data
+                }
+                print(f"✅ Rule-Based enhanced: {enhanced_decision.label} ({enhanced_decision.score*100:.0f}%)")
+            except Exception as e:
+                print(f"⚠️ Rule-Based re-run failed: {e}, using original")
+        
         # Build ensemble verdict using converged intelligence
         ensemble_verdict = ensemble.build_ensemble_verdict(results, converged_data)
         print(f"✅ Ensemble verdict: {ensemble_verdict['final_label']} ({ensemble_verdict['confidence']*100:.0f}%)")
