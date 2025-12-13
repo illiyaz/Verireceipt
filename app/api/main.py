@@ -564,9 +564,9 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     
     # Timeout configuration (seconds)
     RULE_BASED_TIMEOUT = 30   # Fast engine
-    DONUT_TIMEOUT = 60        # Medium speed
-    DONUT_RECEIPT_TIMEOUT = 60  # NEW: Medium speed
-    LAYOUTLM_TIMEOUT = 60     # Medium speed
+    DONUT_TIMEOUT = 120       # Increased - model loading can be slow first time
+    DONUT_RECEIPT_TIMEOUT = 120  # Increased
+    LAYOUTLM_TIMEOUT = 120    # Increased - model loading can be slow
     VISION_TIMEOUT = 90       # Slowest engine (Ollama can be slow)
     
     with ThreadPoolExecutor(max_workers=5) as executor:  # 5 engines now
