@@ -54,9 +54,9 @@ class DonutExtractor:
         print(f"   Device: {self.device}")
     
     def load_model(self):
-        """Load DONUT model and processor."""
+        """Load the DONUT model and processor."""
         if self.model is not None:
-            print("   Model already loaded, skipping...")
+            # Model already loaded
             return
             
         print("   Loading processor...")
@@ -64,31 +64,21 @@ class DonutExtractor:
         
         print("   Loading model...")
         try:
-            # CRITICAL: Load model with state_dict to avoid meta tensors
+            # CRITICAL: Disable all lazy loading mechanisms
             import os
+            os.environ["TRANSFORMERS_OFFLINE"] = "0"  # Allow online if needed
             cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
             
-            # WORKAROUND: Force load with weights by using local_files_only after first download
-            try:
-                self.model = VisionEncoderDecoderModel.from_pretrained(
-                    self.model_name,
-                    torch_dtype=torch.float32,
-                    low_cpu_mem_usage=False,  # MUST be False
-                    device_map=None,
-                    cache_dir=cache_dir,
-                    local_files_only=False  # Allow download if needed
-                )
-            except Exception as e:
-                print(f"   First attempt failed: {e}")
-                print("   Trying with explicit weight loading...")
-                # Force load from disk
-                self.model = VisionEncoderDecoderModel.from_pretrained(
-                    self.model_name,
-                    torch_dtype=torch.float32,
-                    device_map=None,
-                    cache_dir=cache_dir,
-                    local_files_only=True  # Use cached files
-                )
+            # Force eager loading with ALL lazy mechanisms disabled
+            self.model = VisionEncoderDecoderModel.from_pretrained(
+                self.model_name,
+                torch_dtype=torch.float32,
+                low_cpu_mem_usage=False,  # Disable lazy loading
+                device_map=None,  # No device mapping
+                cache_dir=cache_dir,
+                local_files_only=False,
+                _fast_init=False  # Disable fast initialization
+            )
             
             # Check if model is in meta state
             first_param = next(self.model.parameters())
