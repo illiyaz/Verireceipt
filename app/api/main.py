@@ -695,40 +695,9 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         for failure in failed_engines:
             hybrid["reasoning"].append(f"❌ {failure}")
     else:
-        # Try Ensemble Intelligence System with detailed error logging
-        USE_ENSEMBLE = False  # Disabled - causes 500 errors in production
-        # TODO: Debug why ensemble works in isolation but fails in API
-        
-        if USE_ENSEMBLE:
-            try:
-                print("🔍 Attempting ensemble system...")
-                ensemble = get_ensemble()
-                print("✅ Ensemble instance created")
-                
-                converged_data = ensemble.converge_extraction(results)
-                print(f"✅ Data converged: {converged_data}")
-                
-                ensemble_verdict = ensemble.build_ensemble_verdict(results, converged_data)
-                print(f"✅ Verdict built: {ensemble_verdict['final_label']}")
-                
-                # Update hybrid with ensemble results
-                hybrid["final_label"] = ensemble_verdict["final_label"]
-                hybrid["confidence"] = ensemble_verdict["confidence"]
-                hybrid["recommended_action"] = ensemble_verdict["recommended_action"]
-                hybrid["reasoning"] = ensemble_verdict["reasoning"]
-                
-                print(f"✅ Ensemble SUCCESS: {hybrid['final_label']} ({hybrid['confidence']*100:.0f}%)")
-            except Exception as e:
-                import traceback
-                error_trace = traceback.format_exc()
-                print(f"❌ Ensemble error: {e}")
-                print(f"Full trace:\n{error_trace}")
-                print("⚠️ Falling back to legacy logic")
-        
-        # Legacy logic (runs if ensemble didn't set values or failed)
-        if "final_label" not in hybrid or hybrid["final_label"] == "unknown":
-            # All engines completed - generate hybrid verdict using legacy logic
-            rule_label = results["rule_based"].get("label", "unknown")
+        # Generate hybrid verdict using legacy logic
+        # (Ensemble will enhance this later, after all engines complete)
+        rule_label = results["rule_based"].get("label", "unknown")
         rule_score = results["rule_based"].get("score", 0.5)
         vision_verdict = results["vision_llm"].get("verdict", "unknown")
         vision_confidence = results["vision_llm"].get("confidence", 0.0)
@@ -839,6 +808,39 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 hybrid["reasoning"].append("ℹ️ Mixed signals from engines")
     
     results["hybrid_verdict"] = hybrid
+    
+    # NOW run ensemble with all engine results available
+    try:
+        print("🔍 Running ensemble post-processing...")
+        ensemble = get_ensemble()
+        
+        # Converge extraction data from all engines
+        converged_data = ensemble.converge_extraction(results)
+        print(f"✅ Converged data: Total={converged_data.get('total')}, Merchant={converged_data.get('merchant')}")
+        
+        # Build ensemble verdict using converged intelligence
+        ensemble_verdict = ensemble.build_ensemble_verdict(results, converged_data)
+        print(f"✅ Ensemble verdict: {ensemble_verdict['final_label']} ({ensemble_verdict['confidence']*100:.0f}%)")
+        
+        # Override hybrid with ensemble results
+        hybrid["final_label"] = ensemble_verdict["final_label"]
+        hybrid["confidence"] = ensemble_verdict["confidence"]
+        hybrid["recommended_action"] = ensemble_verdict["recommended_action"]
+        hybrid["reasoning"] = ensemble_verdict["reasoning"]
+        hybrid["agreement_score"] = ensemble_verdict.get("agreement_score", 0.0)
+        hybrid["converged_data"] = converged_data
+        
+        # Update results with enhanced hybrid
+        results["hybrid_verdict"] = hybrid
+        print("✅ Ensemble SUCCESS - hybrid verdict enhanced")
+        
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"⚠️ Ensemble error: {e}")
+        print(f"Stack trace:\n{error_trace}")
+        print("→ Using legacy hybrid verdict (already computed)")
+        # Legacy hybrid already in results, so we're good
     
     # Don't cleanup - keep file for feedback submission
     # File will be cleaned up later or by a background job
