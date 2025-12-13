@@ -474,22 +474,29 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
     
     def run_donut():
-        if not DONUT_AVAILABLE:
-            return {"error": "DONUT not available", "time_seconds": 0}
-        
-        start = time_module.time()
-        try:
-            data = extract_receipt_with_donut(str(temp_path))
-            elapsed = time_module.time() - start
-            return {
-                "merchant": data.get("merchant"),
-                "total": data.get("total"),
-                "line_items_count": len(data.get("line_items", [])),
-                "data_quality": "good" if data.get("total") else "poor",
-                "time_seconds": round(elapsed, 2)
-            }
-        except Exception as e:
-            return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
+        # TEMPORARILY DISABLED - meta tensor issues with PyTorch/Transformers
+        # TODO: Fix DONUT model loading or upgrade transformers library
+        return {
+            "error": "DONUT temporarily disabled due to model loading issues",
+            "merchant": None,
+            "total": None,
+            "line_items_count": 0,
+            "data_quality": "N/A",
+            "time_seconds": 0
+        }
+    
+    def run_donut_receipt():
+        # TEMPORARILY DISABLED - same meta tensor issues as DONUT
+        # TODO: Fix model loading
+        return {
+            "error": "Donut-Receipt temporarily disabled due to model loading issues",
+            "merchant": None,
+            "total": None,
+            "date": None,
+            "line_items_count": 0,
+            "data_quality": "N/A",
+            "time_seconds": 0
+        }
     
     def run_layoutlm():
         if not LAYOUTLM_AVAILABLE:
@@ -506,33 +513,6 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 "words_extracted": data.get("words_extracted", 0),
                 "data_quality": data.get("data_quality", "unknown"),
                 "confidence": data.get("confidence", "unknown"),
-                "time_seconds": round(elapsed, 2)
-            }
-        except Exception as e:
-            return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
-    
-    def run_donut_receipt():
-        if not DONUT_RECEIPT_AVAILABLE:
-            return {"error": "Donut-Receipt not available", "time_seconds": 0}
-        
-        start = time_module.time()
-        try:
-            extractor = DonutReceiptExtractor()
-            data = extractor.extract(str(temp_path))
-            elapsed = time_module.time() - start
-            return {
-                "status": data.get("status"),
-                "merchant": data.get("merchant"),
-                "items": data.get("items", []),
-                "items_count": len(data.get("items", [])),
-                "subtotal": data.get("subtotal"),
-                "tax": data.get("tax"),
-                "total": data.get("total"),
-                "payment_method": data.get("payment_method"),
-                "date": data.get("date"),
-                "time": data.get("time"),
-                "receipt_number": data.get("receipt_number"),
-                "confidence": data.get("confidence", 0.0),
                 "time_seconds": round(elapsed, 2)
             }
         except Exception as e:
