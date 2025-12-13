@@ -695,21 +695,25 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         for failure in failed_engines:
             hybrid["reasoning"].append(f"❌ {failure}")
     else:
-        # Try Ensemble Intelligence System (with fallback to legacy logic)
-        try:
-            ensemble = get_ensemble()
-            converged_data = ensemble.converge_extraction(results)
-            ensemble_verdict = ensemble.build_ensemble_verdict(results, converged_data)
-            
-            # Update hybrid with ensemble results
-            hybrid["final_label"] = ensemble_verdict["final_label"]
-            hybrid["confidence"] = ensemble_verdict["confidence"]
-            hybrid["recommended_action"] = ensemble_verdict["recommended_action"]
-            hybrid["reasoning"] = ensemble_verdict["reasoning"]
-            
-            print(f"✅ Ensemble: {hybrid['final_label']} ({hybrid['confidence']*100:.0f}%)")
-        except Exception as e:
-            print(f"⚠️ Ensemble error: {e}, using legacy logic")
+        # ENSEMBLE DISABLED - has bugs, needs more debugging
+        # TODO: Fix ensemble system bugs
+        USE_ENSEMBLE = False
+        
+        if USE_ENSEMBLE:
+            try:
+                ensemble = get_ensemble()
+                converged_data = ensemble.converge_extraction(results)
+                ensemble_verdict = ensemble.build_ensemble_verdict(results, converged_data)
+                
+                # Update hybrid with ensemble results
+                hybrid["final_label"] = ensemble_verdict["final_label"]
+                hybrid["confidence"] = ensemble_verdict["confidence"]
+                hybrid["recommended_action"] = ensemble_verdict["recommended_action"]
+                hybrid["reasoning"] = ensemble_verdict["reasoning"]
+                
+                print(f"✅ Ensemble: {hybrid['final_label']} ({hybrid['confidence']*100:.0f}%)")
+            except Exception as e:
+                print(f"⚠️ Ensemble error: {e}, using legacy logic")
         
         # Legacy logic (runs if ensemble didn't set values or failed)
         if "final_label" not in hybrid or hybrid["final_label"] == "unknown":
