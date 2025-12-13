@@ -504,8 +504,10 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         
         start = time_module.time()
         try:
+            print(f"🔍 LayoutLM extracting from: {temp_path}")
             data = extract_receipt_with_layoutlm(str(temp_path), method="simple")
             elapsed = time_module.time() - start
+            print(f"✅ LayoutLM extracted: {data}")
             return {
                 "merchant": data.get("merchant"),
                 "total": data.get("total"),
@@ -516,6 +518,9 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 "time_seconds": round(elapsed, 2)
             }
         except Exception as e:
+            import traceback
+            print(f"❌ LayoutLM error: {e}")
+            print(f"Traceback: {traceback.format_exc()}")
             return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
     
     def run_vision():
