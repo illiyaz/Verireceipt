@@ -18,6 +18,7 @@ import json as json_module
 
 from app.pipelines.rules import analyze_receipt
 from app.repository.receipt_store import get_receipt_store
+from app.pipelines.ensemble import get_ensemble
 
 # Import hybrid analysis engines
 try:
@@ -694,13 +695,40 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         for failure in failed_engines:
             hybrid["reasoning"].append(f"❌ {failure}")
     else:
-        # All engines completed - generate hybrid verdict
-        rule_label = results["rule_based"].get("label", "unknown")
-        rule_score = results["rule_based"].get("score", 0.5)
-        vision_verdict = results["vision_llm"].get("verdict", "unknown")
-        vision_confidence = results["vision_llm"].get("confidence", 0.0)
-        donut_quality = results["donut"].get("data_quality", "unknown")
-        layoutlm_quality = results["layoutlm"].get("data_quality", "unknown")
+        # Use Ensemble Intelligence System
+        ensemble = get_ensemble()
+        
+        # Step 1: Converge extraction data from all engines
+        converged_data = ensemble.converge_extraction(results)
+        
+        # Step 2: Build ensemble verdict using converged intelligence
+        ensemble_verdict = ensemble.build_ensemble_verdict(results, converged_data)
+        
+        # Update hybrid with ensemble results
+        hybrid["final_label"] = ensemble_verdict["final_label"]
+        hybrid["confidence"] = ensemble_verdict["confidence"]
+        hybrid["recommended_action"] = ensemble_verdict["recommended_action"]
+        hybrid["reasoning"] = ensemble_verdict["reasoning"]
+        hybrid["agreement_score"] = ensemble_verdict["agreement_score"]
+        hybrid["converged_data"] = converged_data
+        
+        # Add extraction summary to reasoning
+        if converged_data.get("total"):
+            hybrid["reasoning"].append(
+                f"📊 Converged Total: {converged_data['total']} "
+                f"(from {converged_data['sources'].get('total', 'N/A')}, "
+                f"confidence: {converged_data['confidence'].get('total', 0)*100:.0f}%)"
+            )
+        
+        # Legacy logic below (keeping for backward compatibility but ensemble takes precedence)
+        if False:  # Disabled - ensemble system is now primary
+            # All engines completed - generate hybrid verdict
+            rule_label = results["rule_based"].get("label", "unknown")
+            rule_score = results["rule_based"].get("score", 0.5)
+            vision_verdict = results["vision_llm"].get("verdict", "unknown")
+            vision_confidence = results["vision_llm"].get("confidence", 0.0)
+            donut_quality = results["donut"].get("data_quality", "unknown")
+            layoutlm_quality = results["layoutlm"].get("data_quality", "unknown")
         
         # Critical engines completed - generate verdict with tiered confidence
         
