@@ -235,16 +235,29 @@
 
                 try {
                     addLog('📤 Uploading receipt...', 'info');
-                    addLog('🚀 Starting 5-engine analysis (this may take 10-20 seconds)...', 'info');
+                    addLog('🚀 Starting 5-engine analysis (this may take 30-60 seconds)...', 'info');
                     
-                    // Using regular endpoint for now (streaming has async issues)
-                    const response = await fetch(`${API_BASE_URL}/analyze/hybrid`, {
-                        method: 'POST',
-                        body: formData,
-                    });
+                    // Using regular endpoint with extended timeout
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
+                    
+                    try {
+                        const response = await fetch(`${API_BASE_URL}/analyze/hybrid`, {
+                            method: 'POST',
+                            body: formData,
+                            signal: controller.signal
+                        });
+                        clearTimeout(timeoutId);
 
-                    if (!response.ok) {
-                        throw new Error(`Analysis failed: ${response.statusText}`);
+                        if (!response.ok) {
+                            throw new Error(`Analysis failed: ${response.statusText}`);
+                        }
+                    } catch (error) {
+                        clearTimeout(timeoutId);
+                        if (error.name === 'AbortError') {
+                            throw new Error('Analysis timed out after 2 minutes. The server may be overloaded.');
+                        }
+                        throw error;
                     }
 
                     // Get JSON response (not streaming)
