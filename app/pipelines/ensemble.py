@@ -71,8 +71,12 @@ class EnsembleIntelligence:
             merchant_candidates.append(("layoutlm", results["layoutlm"]["merchant"], 0.40))
         if results.get("donut", {}).get("merchant"):
             merchant_candidates.append(("donut", results["donut"]["merchant"], 0.35))
-        if results.get("donut_receipt", {}).get("merchant", {}).get("name"):
-            merchant_candidates.append(("donut_receipt", results["donut_receipt"]["merchant"]["name"], 0.25))
+        
+        # Handle donut_receipt merchant safely (could be None or dict)
+        donut_receipt_merchant = results.get("donut_receipt", {}).get("merchant")
+        if donut_receipt_merchant and isinstance(donut_receipt_merchant, dict):
+            if donut_receipt_merchant.get("name"):
+                merchant_candidates.append(("donut_receipt", donut_receipt_merchant["name"], 0.25))
         
         if merchant_candidates:
             # Use highest weighted source
