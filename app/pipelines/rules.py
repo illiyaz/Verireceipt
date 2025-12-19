@@ -46,9 +46,10 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
     # ---------------------------------------------------------------------------
 
     # R1: Suspicious PDF producer/creator (e.g. Canva/Photoshop/WPS/etc.)
-    # High severity because many fake receipts originate from these tools.
+    # CRITICAL: High severity because many fake receipts originate from these tools.
+    # Increased from 0.3 to 0.5 to ensure "fake" verdict for PDF editor-generated receipts.
     if ff.get("suspicious_producer"):
-        score += 0.3
+        score += 0.5
         producer_name = ff.get('producer') or ff.get('creator')
         reasons.append(
             f"🚨 Suspicious Software Detected: '{producer_name}' - "
