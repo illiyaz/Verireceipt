@@ -171,6 +171,24 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
         reasons.append(
             "Low variety of characters detected in the text, which may indicate repetitive or template-generated content."
         )
+    
+    # R14b: Abnormal spacing patterns — excessive or inconsistent spacing
+    has_excessive_spacing = fr.get("has_excessive_spacing", False)
+    has_inconsistent_spacing = fr.get("has_inconsistent_spacing", False)
+    max_consecutive_spaces = fr.get("max_consecutive_spaces", 0)
+    
+    if has_excessive_spacing or max_consecutive_spaces >= 5:
+        score += 0.20
+        reasons.append(
+            f"📏 Abnormal Text Spacing Detected: Found {max_consecutive_spaces} consecutive spaces between words. "
+            f"This is unusual for legitimate receipts and may indicate text manipulation or PDF generation artifacts."
+        )
+    elif has_inconsistent_spacing:
+        score += 0.10
+        minor_notes.append(
+            f"Inconsistent spacing detected between words (variance: {fr.get('spacing_variance', 0):.1f}). "
+            f"May indicate manual text placement or PDF editing."
+        )
 
     # ---------------------------------------------------------------------------
     # RULE GROUP 5: Date mismatch (creation date vs receipt date)

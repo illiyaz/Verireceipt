@@ -45,6 +45,87 @@ def _normalize_text(text: str) -> str:
     return text.strip()
 
 
+def _detect_spacing_anomalies(raw_text: str) -> Dict[str, Any]:
+    """
+    Detect abnormal spacing patterns in OCR text that may indicate manipulation.
+    
+    Suspicious patterns:
+    - Excessive spaces between words (e.g., "TOTAL    300,000")
+    - Inconsistent spacing (some words close, others far apart)
+    - Multiple consecutive spaces that survived OCR
+    - Abnormal line breaks in the middle of words
+    
+    Returns dict with anomaly flags and metrics.
+    """
+    anomalies = {
+        "has_excessive_spacing": False,
+        "has_inconsistent_spacing": False,
+        "excessive_space_count": 0,
+        "max_consecutive_spaces": 0,
+        "avg_word_spacing": 0.0,
+        "spacing_variance": 0.0,
+    }
+    
+    if not raw_text or len(raw_text) < 10:
+        return anomalies
+    
+    lines = raw_text.split('\n')
+    
+    # Track spacing between words across all lines
+    word_spacings = []
+    excessive_space_lines = []
+    
+    for line_idx, line in enumerate(lines):
+        if len(line.strip()) < 3:
+            continue
+        
+        # Count consecutive spaces in this line
+        consecutive_spaces = re.findall(r' {2,}', line)
+        if consecutive_spaces:
+            max_spaces = max(len(s) for s in consecutive_spaces)
+            anomalies["max_consecutive_spaces"] = max(
+                anomalies["max_consecutive_spaces"], 
+                max_spaces
+            )
+            
+            # If we have 3+ consecutive spaces, it's suspicious
+            if max_spaces >= 3:
+                anomalies["excessive_space_count"] += len([s for s in consecutive_spaces if len(s) >= 3])
+                excessive_space_lines.append(line_idx)
+        
+        # Analyze word spacing patterns
+        words = line.split()
+        if len(words) >= 2:
+            # Measure spacing by looking at original line
+            for i in range(len(words) - 1):
+                # Find position of word in original line
+                word_pos = line.find(words[i])
+                next_word_pos = line.find(words[i + 1], word_pos + len(words[i]))
+                if next_word_pos > 0:
+                    spacing = next_word_pos - (word_pos + len(words[i]))
+                    word_spacings.append(spacing)
+    
+    # Calculate spacing statistics
+    if word_spacings:
+        avg_spacing = sum(word_spacings) / len(word_spacings)
+        anomalies["avg_word_spacing"] = round(avg_spacing, 2)
+        
+        # Calculate variance
+        variance = sum((s - avg_spacing) ** 2 for s in word_spacings) / len(word_spacings)
+        anomalies["spacing_variance"] = round(variance, 2)
+        
+        # Flag excessive spacing if we have 3+ spaces between words
+        if anomalies["max_consecutive_spaces"] >= 3:
+            anomalies["has_excessive_spacing"] = True
+        
+        # Flag inconsistent spacing if variance is high
+        # High variance means some words are very close, others very far
+        if variance > 10 and avg_spacing > 2:
+            anomalies["has_inconsistent_spacing"] = True
+    
+    return anomalies
+
+
 def _get_all_text_pages(raw: ReceiptRaw) -> Tuple[str, List[str]]:
     page_texts = [_normalize_text(t or "") for t in raw.ocr_text_per_page]
     full_text = "\n".join(page_texts)
@@ -545,7 +626,7 @@ def _guess_merchant_line(lines: List[str]) -> Optional[str]:
 
 # --- Helper: basic layout + forensic stats ----------------------------------
 
-def _compute_text_stats(lines: List[str]) -> Dict[str, Any]:
+def _compute_text_stats(lines: List[str], raw_text: str = None) -> Dict[str, Any]:
     num_lines = len(lines)
     num_chars = sum(len(l) for l in lines)
     num_numeric_lines = 0
@@ -565,8 +646,13 @@ def _compute_text_stats(lines: List[str]) -> Dict[str, Any]:
     alpha_chars = sum(1 for c in all_text if c.isalpha())
 
     uppercase_ratio = uppercase_chars / max(1, alpha_chars)
+    
+    # Add spacing anomaly detection
+    spacing_anomalies = {}
+    if raw_text:
+        spacing_anomalies = _detect_spacing_anomalies(raw_text)
 
-    return {
+    result = {
         "num_lines": num_lines,
         "num_chars": num_chars,
         "num_numeric_lines": num_numeric_lines,
@@ -574,6 +660,11 @@ def _compute_text_stats(lines: List[str]) -> Dict[str, Any]:
         "unique_char_count": len(unique_chars),
         "uppercase_ratio": uppercase_ratio,
     }
+    
+    # Merge spacing anomalies into result
+    result.update(spacing_anomalies)
+    
+    return result
 
 
 # --- Main feature builder ----------------------------------------------------
@@ -655,7 +746,9 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     merchant_phone = _extract_merchant_phone(full_text)
     city, pin_code = _extract_city_and_pin(full_text)
 
-    text_stats = _compute_text_stats(lines)
+    # Get raw OCR text before normalization for spacing analysis
+    raw_ocr_text = "\n".join(raw.ocr_text_per_page) if raw.ocr_text_per_page else ""
+    text_stats = _compute_text_stats(lines, raw_text=raw_ocr_text)
 
     text_features: Dict[str, Any] = {
         "has_any_amount": bool(all_amounts),
