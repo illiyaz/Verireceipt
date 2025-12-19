@@ -525,7 +525,13 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     
     def run_vision():
         if not VISION_AVAILABLE:
-            return {"error": "Vision LLM not available", "time_seconds": 0}
+            return {
+                "error": "Vision LLM not available",
+                "verdict": "unknown",
+                "confidence": 0.0,
+                "reasoning": "Vision LLM module not available",
+                "time_seconds": 0
+            }
         
         start = time_module.time()
         try:
@@ -533,16 +539,42 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             elapsed = time_module.time() - start
             auth = vision_results.get("authenticity_assessment", {})
             fraud = vision_results.get("fraud_detection", {})
+            
+            # Check if we got valid results
+            verdict = auth.get("verdict", "unknown")
+            confidence = auth.get("confidence", 0.0)
+            reasoning = auth.get("reasoning", "")
+            
+            # If verdict is unknown and reasoning indicates parse failure, it's a network/service issue
+            if verdict == "unknown" and "Failed to parse" in reasoning:
+                print(f"⚠️ Vision LLM parse failure - likely Ollama service issue")
+                return {
+                    "error": "Vision LLM service unavailable",
+                    "verdict": "unknown",
+                    "confidence": 0.0,
+                    "reasoning": "Vision LLM service not responding (check Ollama)",
+                    "time_seconds": round(elapsed, 2)
+                }
+            
             return {
-                "verdict": auth.get("verdict", "unknown"),
-                "confidence": auth.get("confidence", 0.0),
+                "verdict": verdict,
+                "confidence": confidence,
                 "authenticity_score": auth.get("authenticity_score", 0.0),
                 "fraud_indicators": fraud.get("fraud_indicators", []),
-                "reasoning": auth.get("reasoning", ""),
+                "reasoning": reasoning,
                 "time_seconds": round(elapsed, 2)
             }
         except Exception as e:
-            return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
+            import traceback
+            print(f"❌ Vision LLM exception: {e}")
+            traceback.print_exc()
+            return {
+                "error": str(e),
+                "verdict": "unknown",
+                "confidence": 0.0,
+                "reasoning": f"Vision LLM error: {str(e)}",
+                "time_seconds": round(time_module.time() - start, 2)
+            }
     
     # Execute engines SEQUENTIALLY for intelligence convergence
     # Each engine benefits from previous engines' results

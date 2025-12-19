@@ -34,42 +34,62 @@ def query_vision_model(
     image_path: str,
     prompt: str,
     model: str = DEFAULT_VISION_MODEL,
-    temperature: float = 0.1
+    temperature: float = 0.3,
+    timeout: int = 120
 ) -> str:
     """
     Query Ollama vision model with an image and prompt.
     
     Args:
-        image_path: Path to receipt image
-        prompt: Question/instruction for the model
-        model: Ollama model name (must be a vision model)
-        temperature: Lower = more deterministic (0.0-1.0)
+        image_path: Path to image file
+        prompt: Text prompt for the model
+        model: Ollama model name
+        temperature: Sampling temperature (0.0-1.0)
+        timeout: Request timeout in seconds
     
     Returns:
         Model response as string
     """
-    # Encode image
-    image_b64 = encode_image_to_base64(image_path)
-    
-    # Prepare request
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "images": [image_b64],
-        "stream": False,
-        "temperature": temperature,
-        "options": {
-            "num_predict": 500,  # Max tokens
-        }
-    }
-    
     try:
-        response = requests.post(OLLAMA_API_URL, json=payload, timeout=60)
+        # Encode image
+        image_b64 = encode_image_to_base64(image_path)
+        
+        # Prepare request
+        url = "http://localhost:11434/api/generate"
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "images": [image_b64],
+            "stream": False,
+            "options": {
+                "temperature": temperature
+            }
+        }
+        
+        # Make request
+        response = requests.post(url, json=payload, timeout=timeout)
         response.raise_for_status()
+        
+        # Parse response
         result = response.json()
-        return result.get("response", "").strip()
+        return result.get("response", "")
+        
+    except requests.exceptions.Timeout:
+        print(f"⚠️ Vision model timeout after {timeout}s")
+        print(f"   Try increasing timeout or using a smaller model")
+        return ""
+    except requests.exceptions.ConnectionError as e:
+        print(f"⚠️ Cannot connect to Ollama service: {e}")
+        print(f"   Check if Ollama is running: ollama list")
+        print(f"   Start Ollama if needed: ollama serve")
+        return ""
     except requests.exceptions.RequestException as e:
-        print(f"⚠️  Ollama API error: {e}")
+        print(f"⚠️ Vision model request error: {e}")
+        return ""
+    except Exception as e:
+        print(f"⚠️ Vision model unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
         return ""
 
 
