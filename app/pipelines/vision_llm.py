@@ -201,9 +201,12 @@ Only return the JSON, no other text."""
             data = json.loads(json_str)
             return data
         else:
-            return {"verdict": "unknown", "confidence": 0.0, "reasoning": "Failed to parse response"}
-    except json.JSONDecodeError:
-        return {"verdict": "unknown", "confidence": 0.0, "reasoning": "Failed to parse response"}
+            print(f"⚠️ Vision LLM response has no JSON: {response[:200]}")
+            return {"verdict": "unknown", "confidence": 0.0, "reasoning": f"Failed to parse response (no JSON found)"}
+    except json.JSONDecodeError as e:
+        print(f"⚠️ Vision LLM JSON parse error: {e}")
+        print(f"   Response: {response[:200]}")
+        return {"verdict": "unknown", "confidence": 0.0, "reasoning": f"Failed to parse response: {str(e)}"}
 
 
 def analyze_receipt_with_vision(
