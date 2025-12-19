@@ -189,6 +189,17 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
             f"Inconsistent spacing detected between words (variance: {fr.get('spacing_variance', 0):.1f}). "
             f"May indicate manual text placement or PDF editing."
         )
+    
+    # R14c: Check for jumbled/disordered text (indicates manual PDF text placement)
+    # If text extraction shows words in wrong order, it means text was manually positioned
+    avg_line_length = sum(len(line) for line in lf.get("lines", [])) / max(1, num_lines)
+    if avg_line_length < 15 and num_lines > 10:
+        # Very short average line length with many lines suggests text fragmentation
+        score += 0.15
+        minor_notes.append(
+            f"📝 Text Layout Anomaly: Average line length is only {avg_line_length:.1f} characters. "
+            f"This may indicate text was manually placed in a PDF editor rather than naturally generated."
+        )
 
     # ---------------------------------------------------------------------------
     # RULE GROUP 5: Date mismatch (creation date vs receipt date)
