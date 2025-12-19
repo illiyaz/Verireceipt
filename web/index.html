@@ -236,26 +236,37 @@
                 try {
                     addLog('📤 Uploading receipt...', 'info');
                     addLog('🚀 Starting 5-engine analysis (this may take 30-60 seconds)...', 'info');
+                    addLog(`📡 Connecting to: ${API_BASE_URL}/analyze/hybrid`, 'info');
                     
                     // Using regular endpoint with extended timeout
                     const controller = new AbortController();
                     const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
                     
+                    let response;
                     try {
-                        const response = await fetch(`${API_BASE_URL}/analyze/hybrid`, {
+                        response = await fetch(`${API_BASE_URL}/analyze/hybrid`, {
                             method: 'POST',
                             body: formData,
-                            signal: controller.signal
+                            signal: controller.signal,
+                            mode: 'cors',
+                            cache: 'no-cache'
                         });
                         clearTimeout(timeoutId);
+                        addLog(`✅ Server responded with status: ${response.status}`, 'info');
 
                         if (!response.ok) {
                             throw new Error(`Analysis failed: ${response.statusText}`);
                         }
                     } catch (error) {
                         clearTimeout(timeoutId);
+                        console.error('Fetch error details:', error);
+                        addLog(`❌ Fetch error: ${error.name} - ${error.message}`, 'error');
+                        
                         if (error.name === 'AbortError') {
                             throw new Error('Analysis timed out after 2 minutes. The server may be overloaded.');
+                        }
+                        if (error.name === 'TypeError' && error.message.includes('NetworkError')) {
+                            throw new Error(`Cannot connect to backend at ${API_BASE_URL}. Please check:\n1. Backend is running on port 8000\n2. No firewall blocking localhost\n3. Try refreshing the page`);
                         }
                         throw error;
                     }
