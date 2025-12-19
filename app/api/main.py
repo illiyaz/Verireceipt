@@ -20,6 +20,14 @@ from app.pipelines.rules import analyze_receipt
 from app.repository.receipt_store import get_receipt_store
 from app.pipelines.ensemble import get_ensemble
 
+# PDF to image conversion
+try:
+    from pdf2image import convert_from_path
+    PDF2IMAGE_AVAILABLE = True
+except ImportError:
+    PDF2IMAGE_AVAILABLE = False
+    print("⚠️ pdf2image not available - PDFs will have limited support")
+
 # Import hybrid analysis engines
 try:
     from app.pipelines.vision_llm import analyze_receipt_with_vision
@@ -418,16 +426,54 @@ class HybridAnalyzeResponse(BaseModel):
     engines_used: List[str] = Field(..., description="List of engines that were used")
 
 
+def _convert_pdf_to_image(pdf_path: Path) -> Optional[Path]:
+    """
+    Convert first page of PDF to image for LayoutLM and Vision LLM.
+    
+    Args:
+        pdf_path: Path to PDF file
+        
+    Returns:
+        Path to converted image, or None if conversion fails
+    """
+    if not PDF2IMAGE_AVAILABLE:
+        print("⚠️ pdf2image not available - cannot convert PDF")
+        return None
+    
+    try:
+        print(f"🔄 Converting PDF to image: {pdf_path.name}")
+        
+        # Convert first page only (receipts are typically 1 page)
+        images = convert_from_path(str(pdf_path), first_page=1, last_page=1, dpi=200)
+        
+        if not images:
+            print("❌ No images extracted from PDF")
+            return None
+        
+        # Save as JPG in same directory
+        image_path = pdf_path.parent / f"{pdf_path.stem}_page1.jpg"
+        images[0].save(str(image_path), 'JPEG', quality=95)
+        
+        print(f"✅ PDF converted to image: {image_path.name}")
+        return image_path
+        
+    except Exception as e:
+        print(f"❌ PDF conversion failed: {e}")
+        return None
+
+
 @app.post("/analyze/hybrid", response_model=HybridAnalyzeResponse, tags=["analysis"])
 async def analyze_hybrid(file: UploadFile = File(...)):
     """
-    Analyze receipt using all 5 engines in parallel:
-    1. Rule-Based (OCR + Metadata + Rules) - Fast, reliable baseline
-    2. DONUT (Document Understanding Transformer) - Specialized for receipts
-    3. Donut-Receipt (Structured Extraction) - NEW! Extracts items, merchant, payment
-    4. LayoutLM (Multimodal Document Understanding) - Best for diverse formats
-    5. Vision LLM (Ollama) - Visual fraud detection
+    Analyze receipt using all 5 engines sequentially:
+    1. Vision LLM (Ollama) - Visual fraud detection
+    2. LayoutLM (Multimodal Document Understanding) - Extracts total, merchant, date
+    3. DONUT (Document Understanding Transformer) - Specialized for receipts
+    4. Donut-Receipt (Structured Extraction) - Extracts items, merchant, payment
+    5. Rule-Based (OCR + Metadata + Rules) - Enhanced with extracted data
+    6. Ensemble - Final verdict combining all engines
     
+    PDFs are automatically converted to images for LayoutLM and Vision LLM.
     Returns results from all engines plus a hybrid verdict.
     """
     from concurrent.futures import ThreadPoolExecutor
@@ -444,6 +490,20 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save uploaded file: {str(e)}"
         )
+    
+    # Convert PDF to image if needed (for LayoutLM and Vision LLM)
+    image_path = temp_path
+    is_pdf = temp_path.suffix.lower() == '.pdf'
+    
+    if is_pdf:
+        print(f"📄 PDF detected: {temp_path.name}")
+        converted_image = _convert_pdf_to_image(temp_path)
+        if converted_image:
+            image_path = converted_image
+            print(f"✅ Using converted image for LayoutLM/Vision: {image_path.name}")
+        else:
+            print(f"⚠️ PDF conversion failed - LayoutLM/Vision will use PDF (may fail)")
+            image_path = temp_path
     
     results = {
         "receipt_id": file_id,  # Include receipt ID in response
@@ -504,8 +564,10 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         
         start = time_module.time()
         try:
-            print(f"🔍 LayoutLM extracting from: {temp_path}")
-            data = extract_receipt_with_layoutlm(str(temp_path), method="simple")
+            # Use converted image for PDFs, original file otherwise
+            layoutlm_path = image_path if is_pdf else temp_path
+            print(f"🔍 LayoutLM extracting from: {layoutlm_path.name}")
+            data = extract_receipt_with_layoutlm(str(layoutlm_path), method="simple")
             elapsed = time_module.time() - start
             print(f"✅ LayoutLM extracted: {data}")
             return {
@@ -535,7 +597,10 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         
         start = time_module.time()
         try:
-            vision_results = analyze_receipt_with_vision(str(temp_path))
+            # Use converted image for PDFs, original file otherwise
+            vision_path = image_path if is_pdf else temp_path
+            print(f"🔍 Vision LLM analyzing: {vision_path.name}")
+            vision_results = analyze_receipt_with_vision(str(vision_path))
             elapsed = time_module.time() - start
             auth = vision_results.get("authenticity_assessment", {})
             fraud = vision_results.get("fraud_detection", {})
