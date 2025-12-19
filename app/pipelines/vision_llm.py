@@ -148,14 +148,22 @@ def detect_fraud_indicators_with_vision(image_path: str, model: str = DEFAULT_VI
     - Layout anomalies
     - Suspicious patterns
     """
-    prompt = """Analyze this receipt image for signs of fraud or manipulation. Look for:
+    prompt = """Analyze this receipt image for signs of fraud or manipulation. Look CAREFULLY for:
 
-1. Font inconsistencies (different fonts, sizes, or styles)
-2. Alignment issues (misaligned text or numbers)
-3. Editing artifacts (pixelation, blurring, color mismatches)
-4. Suspicious elements (watermarks like "Canva", "Template", editing software traces)
-5. Layout anomalies (unusual spacing, overlapping text)
-6. Quality issues (parts of image look different quality)
+1. **SPACING ANOMALIES** (CRITICAL):
+   - Excessive spaces between words (e.g., "TOTAL     300,000")
+   - Inconsistent spacing (some words close together, others far apart)
+   - Abnormal gaps between text and numbers
+   - Text that looks manually placed rather than naturally printed
+
+2. Font inconsistencies (different fonts, sizes, or styles)
+3. Alignment issues (misaligned text or numbers)
+4. Editing artifacts (pixelation, blurring, color mismatches)
+5. Suspicious elements (watermarks like "Canva", "Template", editing software traces)
+6. Layout anomalies (unusual spacing, overlapping text)
+7. Quality issues (parts of image look different quality)
+
+**PAY SPECIAL ATTENTION TO SPACING** - this is a common sign of fake receipts created in PDF editors.
 
 Respond in JSON format:
 {
@@ -163,6 +171,7 @@ Respond in JSON format:
   "confidence": 0.0-1.0,
   "fraud_indicators": ["indicator 1", "indicator 2", ...],
   "visual_anomalies": ["anomaly 1", "anomaly 2", ...],
+  "spacing_issues": ["spacing issue 1", "spacing issue 2", ...],
   "overall_assessment": "brief explanation"
 }
 
