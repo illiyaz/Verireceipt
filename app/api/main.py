@@ -19,6 +19,7 @@ import json as json_module
 from app.pipelines.rules import analyze_receipt
 from app.repository.receipt_store import get_receipt_store
 from app.pipelines.ensemble import get_ensemble
+from app.api.feedback import router as feedback_router
 
 # PDF to image conversion
 try:
@@ -58,6 +59,9 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# Include feedback router
+app.include_router(feedback_router)
 
 # Enable CORS for web demo
 app.add_middleware(
