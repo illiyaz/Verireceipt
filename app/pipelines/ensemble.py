@@ -212,8 +212,8 @@ class EnsembleIntelligence:
             if "Suspicious Software Detected" in reason or "iLovePDF" in reason or "Canva" in reason:
                 has_critical_indicator = True
                 critical_reasons.append(reason)
-            # Check for date manipulation
-            elif "created AFTER the receipt date" in reason:
+            # Check for date manipulation (various phrasings)
+            elif "AFTER the receipt date" in reason or "Suspicious Date Gap" in reason or "backdated" in reason.lower():
                 has_critical_indicator = True
                 critical_reasons.append(reason)
         
