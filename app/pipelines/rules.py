@@ -14,7 +14,7 @@ from app.pipelines.features import build_features
 logger = logging.getLogger(__name__)
 
 
-def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
+def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) -> ReceiptDecision:
     """
     Convert ReceiptFeatures into a fraud score, label, and reasons.
     v1 is fully rule-based, with transparent reasoning.
@@ -755,6 +755,33 @@ def _score_and_explain(feats: ReceiptFeatures) -> ReceiptDecision:
     # If there are no reasons but score is low, add a generic explanation
     if not reasons and label == "real":
         reasons.append("No strong anomalies detected based on current rule set.")
+    
+    # Apply learned rules from feedback (if enabled)
+    if apply_learned:
+        try:
+            from app.pipelines.learning import apply_learned_rules
+            
+            learned_adjustment, triggered_rules = apply_learned_rules(feats.__dict__)
+            
+            if learned_adjustment != 0.0:
+                score += learned_adjustment
+                score = max(0.0, min(1.0, score))  # Clamp to [0, 1]
+                
+                # Re-evaluate label with adjusted score
+                if score < 0.3:
+                    label = "real"
+                elif score < 0.6:
+                    label = "suspicious"
+                else:
+                    label = "fake"
+                
+                # Add learned rules to reasoning
+                for rule in triggered_rules:
+                    reasons.append(f"📚 Learned Rule: {rule}")
+                
+                logger.info(f"Applied {len(triggered_rules)} learned rules, adjustment: {learned_adjustment:+.2f}")
+        except Exception as e:
+            logger.warning(f"Failed to apply learned rules: {e}")
 
     return ReceiptDecision(
         label=label,
