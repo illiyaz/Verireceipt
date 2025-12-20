@@ -202,6 +202,21 @@ class EnsembleIntelligence:
         rule_score = results.get("rule_based", {}).get("score", 0.5)
         rule_reasons = results.get("rule_based", {}).get("reasons", [])
         
+        # Step 3.5: Check for CRITICAL fraud indicators that override Vision LLM
+        # These are high-confidence signals that should not be overridden
+        has_critical_indicator = False
+        critical_reasons = []
+        
+        for reason in rule_reasons:
+            # Check for suspicious software (iLovePDF, Canva, etc.)
+            if "Suspicious Software Detected" in reason or "iLovePDF" in reason or "Canva" in reason:
+                has_critical_indicator = True
+                critical_reasons.append(reason)
+            # Check for date manipulation
+            elif "created AFTER the receipt date" in reason:
+                has_critical_indicator = True
+                critical_reasons.append(reason)
+        
         # Step 4: Converge signals
         if vision_verdict == "real" and vision_confidence > 0.8:
             if rule_label == "real" or rule_score < 0.3:
@@ -216,8 +231,20 @@ class EnsembleIntelligence:
             
             elif rule_label == "fake" or rule_score > 0.7:
                 # Conflict: Vision says real, Rules say fake
+                
+                # CRITICAL: If we have critical fraud indicators, ALWAYS flag as fake
+                if has_critical_indicator:
+                    verdict["final_label"] = "fake"
+                    verdict["confidence"] = 0.85
+                    verdict["recommended_action"] = "reject"
+                    verdict["reasoning"].append("🚨 CRITICAL FRAUD INDICATORS DETECTED")
+                    verdict["reasoning"].append(f"❌ Rule-Based: {rule_label} ({rule_score*100:.0f}%)")
+                    for reason in critical_reasons:
+                        verdict["reasoning"].append(f"   • {reason}")
+                    verdict["reasoning"].append(f"⚠️ Vision LLM says 'real' but critical indicators override this assessment")
+                
                 # Check if it's likely an OCR error
-                if converged_data.get("total") and converged_data.get("confidence", {}).get("total", 0) > 0.6:
+                elif converged_data.get("total") and converged_data.get("confidence", {}).get("total", 0) > 0.6:
                     # We have good extraction data - likely OCR error in Rule-Based
                     verdict["final_label"] = "suspicious"
                     verdict["confidence"] = 0.65
