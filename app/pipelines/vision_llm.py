@@ -1,8 +1,13 @@
 """
-Vision LLM Feature Extraction using Ollama.
+Vision LLM Feature Extraction.
 
-This module uses local vision models (LLaVA, Qwen2.5-VL, etc.) to extract
-receipt features in parallel with the rule-based engine.
+Supports two modes:
+1. Ollama (Development): Fast prototyping with quantized models
+2. PyTorch (Production): Full-precision models for maximum accuracy
+
+Mode is controlled by USE_OLLAMA environment variable:
+- USE_OLLAMA=true (default): Use Ollama for development
+- USE_OLLAMA=false: Use direct PyTorch for production
 
 Advantages:
 - Understands visual context (logos, layouts, fonts)
@@ -14,14 +19,19 @@ Advantages:
 import json
 import base64
 import requests
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from PIL import Image
 import io
 
 
+# Configuration
+USE_OLLAMA = os.getenv("USE_OLLAMA", "true").lower() == "true"
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
 DEFAULT_VISION_MODEL = "llama3.2-vision:latest"  # Smaller, faster model
+
+print(f"🔧 Vision LLM Mode: {'Ollama (Development)' if USE_OLLAMA else 'PyTorch (Production)'}")
 
 
 def encode_image_to_base64(image_path: str) -> str:
@@ -248,9 +258,11 @@ def analyze_receipt_with_vision(
     """
     Complete vision-based receipt analysis.
     
+    Routes to either Ollama (dev) or PyTorch (prod) based on USE_OLLAMA env var.
+    
     Args:
         image_path: Path to receipt image
-        model: Ollama vision model to use
+        model: Vision model to use
         extract_data: Extract structured data
         detect_fraud: Detect fraud indicators
         assess_authenticity: Overall authenticity assessment
@@ -258,6 +270,12 @@ def analyze_receipt_with_vision(
     Returns:
         Dictionary with all vision analysis results
     """
+    # Production mode: Use full-precision PyTorch
+    if not USE_OLLAMA:
+        from app.pipelines.vision_llm_pytorch import analyze_receipt_with_vision_pytorch
+        return analyze_receipt_with_vision_pytorch(image_path)
+    
+    # Development mode: Use Ollama (quantized, faster)
     results = {
         "model": model,
         "image_path": image_path,
@@ -266,7 +284,7 @@ def analyze_receipt_with_vision(
         "authenticity_assessment": None,
     }
     
-    print(f"🔍 Analyzing with vision model: {model}")
+    print(f"🔍 Analyzing with vision model (Ollama): {model}")
     
     if extract_data:
         print("   Extracting receipt data...")

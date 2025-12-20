@@ -1,0 +1,59 @@
+# Production Dockerfile with Full-Precision PyTorch Models
+# For maximum fraud detection accuracy in compliance environments
+
+FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV USE_OLLAMA=false
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3-pip \
+    tesseract-ocr \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    wget \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt /app/requirements.txt
+RUN pip3 install --no-cache-dir -r /app/requirements.txt
+
+# Install additional production dependencies
+RUN pip3 install --no-cache-dir \
+    transformers>=4.35.0 \
+    accelerate>=0.24.0 \
+    bitsandbytes>=0.41.0
+
+# Copy application code
+COPY . /app
+
+# Download models (full-precision)
+# This will be done during build to bundle models in container
+RUN python3 -c "from transformers import AutoProcessor, LlavaForConditionalGeneration; \
+    print('Downloading LLaVA model...'); \
+    AutoProcessor.from_pretrained('llava-hf/llava-1.5-7b-hf'); \
+    LlavaForConditionalGeneration.from_pretrained('llava-hf/llava-1.5-7b-hf')"
+
+# Set production environment variables
+ENV VISION_MODEL_NAME=llava-hf/llava-1.5-7b-hf
+ENV VISION_DEVICE=auto
+ENV VISION_DTYPE=float16
+
+# Create data directory for local storage
+RUN mkdir -p /app/data
+
+# Expose API port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Run application
+CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
