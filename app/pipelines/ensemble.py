@@ -183,15 +183,6 @@ class EnsembleIntelligence:
         
         # Check for explicit fraud indicators in Vision LLM
         fraud_keywords = ["fake", "edited", "manipulated", "screenshot", "receiptfaker", "watermark"]
-        has_fraud_indicator = any(keyword in vision_reasoning.lower() for keyword in fraud_keywords)
-        
-        if has_fraud_indicator:
-            verdict["final_label"] = "fake"
-            verdict["confidence"] = max(0.85, vision_confidence)
-            verdict["recommended_action"] = "reject"
-            verdict["reasoning"].append("🚨 Vision LLM detected fraud indicators:")
-            verdict["reasoning"].append(f"   {vision_reasoning}")
-            return verdict
         
         # Step 2: Calculate agreement score
         agreement_score = self._calculate_agreement(results, converged_data)
@@ -201,6 +192,9 @@ class EnsembleIntelligence:
         rule_label = results.get("rule_based", {}).get("label", "unknown")
         rule_score = results.get("rule_based", {}).get("score", 0.5)
         rule_reasons = results.get("rule_based", {}).get("reasons", [])
+        
+        print(f"   Rule-Based: {rule_label} ({rule_score*100:.0f}%)")
+        print(f"   Agreement Score: {agreement_score:.2f}")
         
         # Step 3.5: Check for CRITICAL fraud indicators that override Vision LLM
         # These are high-confidence signals that should not be overridden
@@ -225,9 +219,16 @@ class EnsembleIntelligence:
         print(f"   Total critical reasons: {len(critical_reasons)}")
         
         # Step 4: Converge signals
+        print(f"\n🎯 ENSEMBLE DECISION LOGIC:")
+        print(f"   Vision: {vision_verdict} @ {vision_confidence*100:.0f}%")
+        print(f"   Rule: {rule_label} @ {rule_score*100:.0f}%")
+        print(f"   Critical indicators: {has_critical_indicator}")
+        
         if vision_verdict == "real" and vision_confidence > 0.8:
+            print(f"   → Path: Vision says REAL (high confidence)")
             if rule_label == "real" or rule_score < 0.3:
                 # Both agree: REAL
+                print(f"   → Both agree: REAL")
                 verdict["final_label"] = "real"
                 verdict["confidence"] = min(0.95, 0.80 + (agreement_score * 0.15))
                 verdict["recommended_action"] = "approve"
