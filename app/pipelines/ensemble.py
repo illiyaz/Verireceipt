@@ -207,15 +207,22 @@ class EnsembleIntelligence:
         has_critical_indicator = False
         critical_reasons = []
         
+        print(f"\n🔍 Checking for critical indicators in {len(rule_reasons)} reasons...")
         for reason in rule_reasons:
+            print(f"   Checking: {reason[:80]}...")
             # Check for suspicious software (iLovePDF, Canva, etc.)
             if "Suspicious Software Detected" in reason or "iLovePDF" in reason or "Canva" in reason:
                 has_critical_indicator = True
                 critical_reasons.append(reason)
+                print(f"   ✅ CRITICAL: Suspicious software detected!")
             # Check for date manipulation (various phrasings)
             elif "AFTER the receipt date" in reason or "Suspicious Date Gap" in reason or "backdated" in reason.lower():
                 has_critical_indicator = True
                 critical_reasons.append(reason)
+                print(f"   ✅ CRITICAL: Date manipulation detected!")
+        
+        print(f"\n🚨 Critical indicators found: {has_critical_indicator}")
+        print(f"   Total critical reasons: {len(critical_reasons)}")
         
         # Step 4: Converge signals
         if vision_verdict == "real" and vision_confidence > 0.8:
