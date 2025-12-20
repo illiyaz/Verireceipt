@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Feedback Stats - VeriReceipt</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        
+        function StatsPage() {
+            const [stats, setStats] = useState(null);
+            const [rules, setRules] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [days, setDays] = useState(30);
+            
+            useEffect(() => {
+                loadStats();
+                loadRules();
+            }, [days]);
+            
+            const loadStats = async () => {
+                try {
+                    const response = await fetch(`http://localhost:8000/feedback/stats?days=${days}`);
+                    const data = await response.json();
+                    setStats(data);
+                } catch (error) {
+                    console.error('Error loading stats:', error);
+                }
+            };
+            
+            const loadRules = async () => {
+                try {
+                    const response = await fetch('http://localhost:8000/feedback/learned-rules');
+                    const data = await response.json();
+                    setRules(data);
+                    setLoading(false);
+                } catch (error) {
+                    console.error('Error loading rules:', error);
+                    setLoading(false);
+                }
+            };
+            
+            const toggleRule = async (ruleId, enabled) => {
+                try {
+                    await fetch(`http://localhost:8000/feedback/rules/${ruleId}/toggle?enabled=${!enabled}`, {
+                        method: 'POST'
+                    });
+                    loadRules();
+                } catch (error) {
+                    console.error('Error toggling rule:', error);
+                }
+            };
+            
+            if (loading) {
+                return (
+                    <div className="flex items-center justify-center h-screen">
+                        <i className="fas fa-spinner fa-spin text-4xl text-purple-600"></i>
+                    </div>
+                );
+            }
+            
+            return (
+                <div className="min-h-screen bg-gray-50">
+                    {/* Header */}
+                    <header className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white py-6 shadow-lg">
+                        <div className="container mx-auto px-4">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <h1 className="text-3xl font-bold">Feedback & Learning Stats</h1>
+                                    <p className="text-purple-200 mt-1">System accuracy and learned patterns</p>
+                                </div>
+                                <a href="/" className="px-4 py-2 bg-white text-purple-600 rounded-lg hover:bg-purple-50 transition">
+                                    <i className="fas fa-home mr-2"></i>
+                                    Back to Home
+                                </a>
+                            </div>
+                        </div>
+                    </header>
+                    
+                    <div className="container mx-auto px-4 py-8">
+                        {/* Time Period Selector */}
+                        <div className="mb-6 flex items-center space-x-4">
+                            <span className="text-gray-700 font-semibold">Time Period:</span>
+                            {[7, 30, 90, 365].map(d => (
+                                <button
+                                    key={d}
+                                    onClick={() => setDays(d)}
+                                    className={`px-4 py-2 rounded-lg transition ${
+                                        days === d 
+                                            ? 'bg-purple-600 text-white' 
+                                            : 'bg-white text-gray-700 hover:bg-gray-100'
+                                    }`}
+                                >
+                                    {d} days
+                                </button>
+                            ))}
+                        </div>
+                        
+                        {/* Stats Cards */}
+                        {stats && (
+                            <div className="grid md:grid-cols-4 gap-6 mb-8">
+                                <div className="bg-white rounded-xl p-6 shadow-lg">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <i className="fas fa-clipboard-check text-3xl text-blue-600"></i>
+                                        <span className="text-3xl font-bold text-gray-800">{stats.total_feedback}</span>
+                                    </div>
+                                    <div className="text-gray-600">Total Feedback</div>
+                                </div>
+                                
+                                <div className="bg-white rounded-xl p-6 shadow-lg">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <i className="fas fa-check-circle text-3xl text-green-600"></i>
+                                        <span className="text-3xl font-bold text-gray-800">{stats.accuracy.toFixed(1)}%</span>
+                                    </div>
+                                    <div className="text-gray-600">Accuracy</div>
+                                </div>
+                                
+                                <div className="bg-white rounded-xl p-6 shadow-lg">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <i className="fas fa-exclamation-triangle text-3xl text-yellow-600"></i>
+                                        <span className="text-3xl font-bold text-gray-800">{stats.false_positives}</span>
+                                    </div>
+                                    <div className="text-gray-600">False Positives</div>
+                                </div>
+                                
+                                <div className="bg-white rounded-xl p-6 shadow-lg">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <i className="fas fa-times-circle text-3xl text-red-600"></i>
+                                        <span className="text-3xl font-bold text-gray-800">{stats.false_negatives}</span>
+                                    </div>
+                                    <div className="text-gray-600">False Negatives</div>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* Verdict Distribution */}
+                        {stats && (
+                            <div className="bg-white rounded-xl p-6 shadow-lg mb-8">
+                                <h2 className="text-xl font-bold text-gray-800 mb-4">
+                                    <i className="fas fa-chart-pie mr-2 text-purple-600"></i>
+                                    Verdict Distribution
+                                </h2>
+                                <div className="grid md:grid-cols-3 gap-4">
+                                    <div className="text-center p-4 bg-green-50 rounded-lg">
+                                        <div className="text-3xl font-bold text-green-600">{stats.real_receipts}</div>
+                                        <div className="text-gray-600 mt-1">Real Receipts</div>
+                                    </div>
+                                    <div className="text-center p-4 bg-red-50 rounded-lg">
+                                        <div className="text-3xl font-bold text-red-600">{stats.fake_receipts}</div>
+                                        <div className="text-gray-600 mt-1">Fake Receipts</div>
+                                    </div>
+                                    <div className="text-center p-4 bg-yellow-50 rounded-lg">
+                                        <div className="text-3xl font-bold text-yellow-600">{stats.suspicious_receipts}</div>
+                                        <div className="text-gray-600 mt-1">Suspicious</div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* Learned Rules */}
+                        <div className="bg-white rounded-xl p-6 shadow-lg">
+                            <h2 className="text-xl font-bold text-gray-800 mb-4">
+                                <i className="fas fa-brain mr-2 text-purple-600"></i>
+                                Learned Rules ({rules.length})
+                            </h2>
+                            
+                            {rules.length === 0 ? (
+                                <div className="text-center py-8 text-gray-500">
+                                    <i className="fas fa-info-circle text-4xl mb-3"></i>
+                                    <p>No rules learned yet. Submit feedback to train the system!</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-3">
+                                    {rules.map(rule => (
+                                        <div key={rule.rule_id} className="border rounded-lg p-4 hover:bg-gray-50 transition">
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex-1">
+                                                    <div className="flex items-center space-x-3 mb-2">
+                                                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                                                            rule.enabled ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                                                        }`}>
+                                                            {rule.enabled ? 'Active' : 'Disabled'}
+                                                        </span>
+                                                        <span className="px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-xs font-semibold">
+                                                            {rule.rule_type.replace(/_/g, ' ')}
+                                                        </span>
+                                                    </div>
+                                                    <div className="font-semibold text-gray-800">{rule.pattern}</div>
+                                                    <div className="text-sm text-gray-600 mt-1">
+                                                        Action: {rule.action} | Confidence: +{(rule.confidence_adjustment * 100).toFixed(0)}%
+                                                    </div>
+                                                    <div className="text-xs text-gray-500 mt-1">
+                                                        Learned from {rule.learned_from_feedback_count} feedback(s) | 
+                                                        Accuracy: {(rule.accuracy_on_validation * 100).toFixed(1)}%
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    onClick={() => toggleRule(rule.rule_id, rule.enabled)}
+                                                    className={`ml-4 px-4 py-2 rounded-lg transition ${
+                                                        rule.enabled 
+                                                            ? 'bg-red-100 text-red-700 hover:bg-red-200' 
+                                                            : 'bg-green-100 text-green-700 hover:bg-green-200'
+                                                    }`}
+                                                >
+                                                    {rule.enabled ? 'Disable' : 'Enable'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                        
+                        {/* Common Missed Indicators */}
+                        {stats && stats.most_common_missed_indicators && stats.most_common_missed_indicators.length > 0 && (
+                            <div className="bg-white rounded-xl p-6 shadow-lg mt-8">
+                                <h2 className="text-xl font-bold text-gray-800 mb-4">
+                                    <i className="fas fa-exclamation-circle mr-2 text-orange-600"></i>
+                                    Most Common Missed Indicators
+                                </h2>
+                                <div className="space-y-2">
+                                    {stats.most_common_missed_indicators.map((item, idx) => (
+                                        <div key={idx} className="flex items-center justify-between p-3 bg-orange-50 rounded-lg">
+                                            <span className="text-gray-800">{item.indicator}</span>
+                                            <span className="px-3 py-1 bg-orange-200 text-orange-800 rounded-full text-sm font-semibold">
+                                                {item.count} times
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+        
+        ReactDOM.render(<StatsPage />, document.getElementById('root'));
+    </script>
+</body>
+</html>
