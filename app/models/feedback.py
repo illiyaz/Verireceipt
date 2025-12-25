@@ -58,6 +58,7 @@ class ReceiptFeedback(BaseModel):
     
     # Fraud Indicators
     detected_indicators: List[str] = Field(default_factory=list, description="Fraud indicators found")
+    confirmed_indicators: List[str] = Field(default_factory=list, description="Indicators user confirmed as correct")
     missed_indicators: List[str] = Field(default_factory=list, description="Indicators user says were missed")
     false_indicators: List[str] = Field(default_factory=list, description="Indicators that were wrong")
     
@@ -66,6 +67,9 @@ class ReceiptFeedback(BaseModel):
     software_detected: Optional[str] = Field(None, description="PDF software detected")
     has_date_issue: bool = Field(False, description="Date manipulation detected")
     has_spacing_issue: bool = Field(False, description="Spacing anomaly detected")
+    
+    # Data Corrections
+    data_corrections: Dict[str, Any] = Field(default_factory=dict, description="User corrections to extracted data")
     
     # Metadata
     user_id: Optional[str] = Field(None, description="User who provided feedback")

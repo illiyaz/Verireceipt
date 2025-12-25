@@ -21,6 +21,12 @@ def learn_from_feedback(feedback: ReceiptFeedback) -> Tuple[int, List[str]]:
     """
     Learn from user feedback and update rules.
     
+    Enhanced to use:
+    - Confirmed indicators (what AI got right)
+    - False indicators with explanations (what AI got wrong and why)
+    - Missed indicators (what AI should have caught)
+    - Data corrections (improve extraction accuracy)
+    
     Returns:
         Tuple of (rules_updated, new_patterns_learned)
     """
@@ -36,17 +42,29 @@ def learn_from_feedback(feedback: ReceiptFeedback) -> Tuple[int, List[str]]:
     elif feedback.feedback_type == FeedbackType.FALSE_POSITIVE:
         rules_updated, new_patterns = _learn_from_false_positive(feedback, store)
     
+    # Reinforce confirmed indicators (AI got these right!)
+    if feedback.confirmed_indicators:
+        confirmed_rules, confirmed_patterns = _reinforce_confirmed_indicators(feedback, store)
+        rules_updated += confirmed_rules
+        new_patterns.extend(confirmed_patterns)
+    
     # Learn from missed indicators
     if feedback.missed_indicators:
         missed_rules, missed_patterns = _learn_from_missed_indicators(feedback, store)
         rules_updated += missed_rules
         new_patterns.extend(missed_patterns)
     
-    # Learn from false indicators
+    # Learn from false indicators (with explanations)
     if feedback.false_indicators:
         false_rules, false_patterns = _learn_from_false_indicators(feedback, store)
         rules_updated += false_rules
         new_patterns.extend(false_patterns)
+    
+    # Learn from data corrections
+    if feedback.data_corrections:
+        correction_rules, correction_patterns = _learn_from_data_corrections(feedback, store)
+        rules_updated += correction_rules
+        new_patterns.extend(correction_patterns)
     
     return rules_updated, new_patterns
 
@@ -198,17 +216,16 @@ def _learn_from_missed_indicators(feedback: ReceiptFeedback, store) -> Tuple[int
     return rules_updated, new_patterns
 
 
-def _learn_from_false_indicators(feedback: ReceiptFeedback, store) -> Tuple[int, List[str]]:
+def _reinforce_confirmed_indicators(feedback: ReceiptFeedback, store) -> Tuple[int, List[str]]:
     """
-    Learn from indicators that were incorrectly flagged.
+    Reinforce indicators that the user confirmed as correct.
     
-    These are false alarms that should be reduced or disabled.
+    When users confirm an indicator, we increase its confidence slightly.
     """
     rules_updated = 0
     new_patterns = []
     
-    for indicator in feedback.false_indicators:
-        # Find and reduce/disable the rule that caused this false indicator
+    for indicator in feedback.confirmed_indicators:
         pattern = _extract_pattern_from_indicator(indicator)
         
         if pattern:
@@ -219,14 +236,93 @@ def _learn_from_false_indicators(feedback: ReceiptFeedback, store) -> Tuple[int,
             )
             
             if matching_rule:
-                # Reduce confidence or disable
-                matching_rule.confidence_adjustment = max(0.0, matching_rule.confidence_adjustment - 0.05)
-                if matching_rule.confidence_adjustment == 0.0:
-                    matching_rule.enabled = False
+                matching_rule.confidence_adjustment = min(0.5, matching_rule.confidence_adjustment + 0.02)
+                matching_rule.learned_from_feedback_count += 1
                 matching_rule.last_updated = datetime.utcnow()
                 store.save_learned_rule(matching_rule)
                 rules_updated += 1
-                new_patterns.append(f"Reduced sensitivity for: {pattern}")
+                new_patterns.append(f"Reinforced: {pattern}")
+    
+    return rules_updated, new_patterns
+
+
+def _learn_from_data_corrections(feedback: ReceiptFeedback, store) -> Tuple[int, List[str]]:
+    """
+    Learn from user corrections to extracted data.
+    """
+    rules_updated = 0
+    new_patterns = []
+    
+    corrections = feedback.data_corrections
+    
+    if 'merchant' in corrections and corrections['merchant']:
+        rule = LearningRule(
+            rule_id=f"lr_merchant_{uuid.uuid4().hex[:8]}",
+            rule_type="merchant_pattern",
+            pattern=corrections['merchant'][:50],
+            action="validate_merchant",
+            confidence_adjustment=0.0,
+            learned_from_feedback_count=1,
+            auto_learned=True
+        )
+        store.save_learned_rule(rule)
+        rules_updated += 1
+        new_patterns.append("Merchant pattern learned")
+    
+    return rules_updated, new_patterns
+
+
+def _learn_from_false_indicators(feedback: ReceiptFeedback, store) -> Tuple[int, List[str]]:
+    """
+    Learn from indicators that were incorrectly flagged.
+    
+    Enhanced to parse user explanations from format: "indicator: explanation"
+    """
+    rules_updated = 0
+    new_patterns = []
+    
+    for false_indicator in feedback.false_indicators:
+        # Parse indicator and explanation
+        parts = false_indicator.split(':', 2)
+        indicator_text = parts[0].strip()
+        explanation = parts[-1].strip() if len(parts) > 2 else "No reason"
+        
+        pattern = _extract_pattern_from_indicator(indicator_text)
+        
+        if pattern:
+            existing_rules = store.get_learned_rules(enabled_only=False)
+            matching_rule = next(
+                (r for r in existing_rules if pattern.lower() in r.pattern.lower()),
+                None
+            )
+            
+            if matching_rule:
+                # Reduce confidence based on false alarm
+                matching_rule.confidence_adjustment = max(0.0, matching_rule.confidence_adjustment - 0.08)
+                
+                if matching_rule.confidence_adjustment <= 0.0:
+                    matching_rule.enabled = False
+                    new_patterns.append(f"Disabled: {pattern}")
+                else:
+                    new_patterns.append(f"Reduced: {pattern}")
+                
+                matching_rule.last_updated = datetime.utcnow()
+                store.save_learned_rule(matching_rule)
+                rules_updated += 1
+            else:
+                # Create whitelist rule
+                rule = LearningRule(
+                    rule_id=f"lr_whitelist_{uuid.uuid4().hex[:8]}",
+                    rule_type="whitelist",
+                    pattern=pattern,
+                    action="reduce_fraud_score",
+                    confidence_adjustment=-0.10,
+                    learned_from_feedback_count=1,
+                    auto_learned=True
+                )
+                store.save_learned_rule(rule)
+                rules_updated += 1
+                new_patterns.append(f"Whitelisted: {pattern}")
     
     return rules_updated, new_patterns
 
