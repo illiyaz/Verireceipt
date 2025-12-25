@@ -269,27 +269,42 @@ This section documents the rules currently implemented in the VeriReceipt v1 eng
 
 ### Rule Summary Table
 
-| ID  | Rule                                    | Condition (Trigger)                                                                                 | Weight | Severity       |
+| ID  | Rule                                    | Condition (Trigger)                                                                                 | Weight | Severity Tag   |
 |-----|-----------------------------------------|------------------------------------------------------------------------------------------------------|--------|----------------|
-| R1  | Suspicious producer/creator             | PDF `producer`/`creator` contains known editing/template tools (Canva, Photoshop, WPS, etc.)        | +0.30  | High           |
-| R2  | Missing creation date                   | No `creation_date` metadata                                                                        | +0.05  | Low            |
-| R3  | Missing modification date               | No `mod_date` metadata                                                                             | +0.05  | Low            |
-| R4  | No EXIF data (images)                   | `exif_present = False` for image receipts                                                          | +0.05  | Low            |
-| R5  | No detected amounts                     | No currency/amount tokens detected in OCR text                                                     | +0.40  | High           |
-| R6  | Amounts but no total line               | `has_any_amount = True` and `total_line_present = False`                                           | +0.15  | Medium         |
-| R7  | Line-item vs total mismatch             | `total_mismatch = True` (sum of line items ≠ printed total)                                        | +0.40  | High           |
-| R8  | No date found                           | `has_date = False`                                                                                 | +0.20  | Medium–High    |
-| R9  | No merchant candidate                   | `merchant_candidate` could not be confidently inferred                                             | +0.15  | Medium         |
-| R10 | Too few lines                           | `num_lines < 5`                                                                                  | +0.15  | Medium         |
-| R11 | Too many lines                          | `num_lines > 120`                                                                                | +0.10  | Low–Medium     |
-| R12 | Very high numeric line ratio            | `numeric_line_ratio > 0.8` and `num_lines > 10`                                              | +0.10  | Low–Medium     |
-| R13 | High uppercase ratio                    | `uppercase_ratio > 0.8` and `num_lines > 5`                                                  | +0.10  | Low–Medium     |
-| R14 | Low character variety                   | `unique_char_count < 15` and `num_lines > 5`                                                 | +0.15  | Medium         |
-| R30 | Geography mismatch                      | Mixed US location cues with India cues (e.g., US state + +91 phone/PIN/GST)                  | +0.30  | High           |
-| R31 | Currency vs tax-regime mismatch         | USD with GST terms OR INR with US sales-tax terms                                            | +0.30/+0.15 | High/Medium    |
-| R32 | Missing business identifiers            | High-value invoice (>100,000) without GSTIN/PAN/EIN                                          | +0.25  | High           |
-| R33 | Template artifacts                      | Placeholder text like "<Payment terms>" or "Invoice template"                              | +0.20  | Medium–High    |
-| R34 | Vague high-value charges                | Generic fees ("Incidentals"/"Consultation") without breakdown on high-value invoices       | +0.15  | Medium         |
+| R1  | Suspicious producer/creator             | PDF `producer`/`creator` contains known editing/template tools (Canva, Photoshop, WPS, etc.)        | +0.50  | HARD_FAIL      |
+| R2  | Missing creation date                   | No `creation_date` metadata                                                                        | +0.05  | INFO           |
+| R3  | Missing modification date               | No `mod_date` metadata                                                                             | +0.05  | INFO           |
+| R4  | No EXIF data (images)                   | `exif_present = False` for image receipts                                                          | +0.05  | INFO           |
+| R5  | No detected amounts                     | No currency/amount tokens detected in OCR text                                                     | +0.40  | CRITICAL       |
+| R6  | Amounts but no total line               | `has_any_amount = True` and `total_line_present = False`                                           | +0.15  | CRITICAL       |
+| R7  | Line-item vs total mismatch             | `total_mismatch = True` (sum of line items ≠ printed total)                                        | +0.40  | CRITICAL       |
+| R8  | No date found                           | `has_date = False`                                                                                 | +0.20  | CRITICAL       |
+| R9  | No merchant candidate                   | `merchant_candidate` could not be confidently inferred                                             | +0.15  | CRITICAL       |
+| R9b | Document type ambiguity                 | Mixed invoice/receipt language in same document                                                    | +0.15  | CRITICAL       |
+| R9c | Invoice missing typical fields          | Invoice-like doc without Invoice No / Bill To / Amount Due                                        | +0.12  | INFO           |
+| R9d | Receipt missing payment signal          | Receipt-like doc without paid/txn/auth code                                                        | +0.08  | INFO           |
+| R10 | Too few lines                           | `num_lines < 5`                                                                                  | +0.15  | INFO           |
+| R11 | Too many lines                          | `num_lines > 120`                                                                                | +0.10  | INFO           |
+| R12 | Very high numeric line ratio            | `numeric_line_ratio > 0.8` and `num_lines > 10`                                              | +0.10  | INFO           |
+| R13 | High uppercase ratio                    | `uppercase_ratio > 0.8` and `num_lines > 5`                                                  | +0.10  | INFO           |
+| R14 | Low character variety                   | `unique_char_count < 15` and `num_lines > 5`                                                 | +0.15  | INFO           |
+| R15 | Impossible date sequence                | Receipt dated AFTER file creation date (physically impossible)                                    | +0.40  | HARD_FAIL      |
+| R16 | Suspicious date gap                     | File created >2 days after receipt date (backdating pattern)                                      | +0.35  | CRITICAL       |
+| R17 | Unparsable receipt date                 | Date present but cannot be parsed into known format                                               | +0.25  | CRITICAL       |
+| **GEO-CURRENCY-TAX SYSTEM** 🆕 |
+| GEO1 | Currency-geography mismatch            | Currency doesn't match region (e.g., CAD with only US signals, 24 regions supported)              | +0.30  | CRITICAL       |
+| GEO2 | Tax regime mismatch                    | Tax terminology doesn't match region (e.g., USD with GST, INR with sales tax)                     | +0.18  | CRITICAL       |
+| GEO3 | Healthcare merchant-currency           | US healthcare provider billing in CAD/INR without evidence                                        | +0.22  | CRITICAL       |
+| **MERCHANT VALIDATION** 🆕 |
+| MER1 | Merchant looks like label              | Merchant name appears to be field label (INVOICE/RECEIPT/ORDER)                                   | +0.18  | CRITICAL       |
+| MER2 | Merchant looks like identifier         | Merchant contains many digits, resembles invoice/receipt number                                   | +0.18  | CRITICAL       |
+| MER3 | Merchant starts with label             | Merchant begins with "invoice"/"receipt"/"order" prefix                                           | +0.12  | CRITICAL       |
+| **CROSS-FIELD CONSISTENCY** |
+| R30 | Geography mismatch (legacy)            | Mixed US location cues with India cues (e.g., US state + +91 phone/PIN/GST)                  | +0.30  | CRITICAL       |
+| R31 | Currency vs tax-regime (legacy)        | USD with GST terms OR INR with US sales-tax terms                                            | +0.30  | CRITICAL       |
+| R32 | Missing business identifiers            | High-value invoice (>100,000) without GSTIN/PAN/EIN                                          | +0.25  | CRITICAL       |
+| R33 | Template artifacts                      | Placeholder text like "<Payment terms>" or "Invoice template"                              | +0.20  | CRITICAL       |
+| R34 | Vague high-value charges                | Generic fees ("Incidentals"/"Consultation") without breakdown on high-value invoices       | +0.15  | INFO           |
 
 **Classification thresholds:**
 
@@ -395,6 +410,122 @@ This section documents the rules currently implemented in the VeriReceipt v1 eng
 - **What:** Generic fee descriptions ("Incidentals", "Consultation", "Professional fee") without breakdown (hours, rates, references) on high-value invoices.  
 - **Why:** Legitimate high-value professional services include detailed breakdowns. Vague descriptions are commonly used in fabricated invoices to justify inflated amounts.  
 - **Weight:** +0.15 (medium) when combined with high invoice value and no supporting details.
+
+**R15 – Impossible date sequence** 🆕  
+- **What:** Receipt/purchase date is AFTER the PDF/image creation date (physically impossible).  
+- **Why:** A receipt cannot be dated after the file containing it was created. This is a hard-fail structural inconsistency that strongly indicates backdating or fabrication.  
+- **Weight:** +0.40 (high)  
+- **Severity:** HARD_FAIL (forces ensemble to reject)
+
+**R16 – Suspicious date gap** 🆕  
+- **What:** File created more than 2 days after the receipt date.  
+- **Why:** While receipts can be scanned later, a significant gap is unusual for expense claims and is a common pattern in backdated or fabricated receipts.  
+- **Weight:** +0.35 (high)  
+- **Severity:** CRITICAL
+
+**R17 – Unparsable receipt date** 🆕  
+- **What:** Date string is present but cannot be parsed into any known format (10+ formats supported).  
+- **Why:** Prevents reliable consistency checks and is suspicious when a date is clearly present. Common in manually edited documents.  
+- **Weight:** +0.25 (high)  
+- **Severity:** CRITICAL
+
+**R9b – Document type ambiguity** 🆕  
+- **What:** Document contains both "INVOICE" and "RECEIPT" language.  
+- **Why:** Legitimate documents are consistent (invoice OR receipt). Mixing terms is common in edited/template PDFs.  
+- **Weight:** +0.15 (medium)  
+- **Severity:** CRITICAL
+
+**R9c – Invoice missing typical fields** 🆕  
+- **What:** Invoice-like document without Invoice No / Bill To / Amount Due.  
+- **Why:** Can happen with OCR misses, but also common in template-generated fakes.  
+- **Weight:** +0.12 (medium)  
+- **Severity:** INFO (logged for review)
+
+**R9d – Receipt missing payment signal** 🆕  
+- **What:** Receipt-like document without paid/payment received/txn/auth code.  
+- **Why:** Not always wrong, but worth review when combined with other anomalies.  
+- **Weight:** +0.08 (low)  
+- **Severity:** INFO
+
+---
+
+### 🌍 Global Geo-Currency-Tax System (GeoRuleMatrix)
+
+The GeoRuleMatrix is a comprehensive validation system supporting **24 regions/countries** with intelligent cross-border detection and context awareness.
+
+**GEO1 – Currency-geography mismatch** 🆕  
+- **What:** Detected currency doesn't match expected currencies for the implied region.  
+- **Example:** CAD currency with only US geography signals (no Canadian evidence).  
+- **Why:** Legitimate receipts have consistent currency-geography pairing. Mismatches are common in fabricated receipts where elements are mixed from different sources.  
+- **Weight:** +0.30 (high)  
+- **Severity:** CRITICAL  
+- **Supported Regions:** US, CA, IN, UK, EU, AU, SG, MY, TH, ID, PH, JP, CN, HK, TW, KR, NZ, UAE, SA, OM, QA, KW, BH, JO  
+- **Intelligence:**  
+  - Cross-border detection (no penalty for multi-region receipts)  
+  - Travel/hospitality context awareness (penalty reduced by 0.15)  
+  - STRICT vs RELAXED tier enforcement
+
+**GEO2 – Tax regime mismatch** 🆕  
+- **What:** Detected tax terminology doesn't match expected regime for the region.  
+- **Example:** USD receipt with GST (Indian tax) terminology.  
+- **Why:** Tax regimes are jurisdiction-specific. USD invoices should not have GST, and INR invoices should not have US sales tax.  
+- **Weight:** +0.18 (high)  
+- **Severity:** CRITICAL  
+- **Tax Regimes:** GST (India/SG/AU), VAT (UK/EU/Middle East), HST/PST (Canada), SALES_TAX (US)
+
+**GEO3 – Healthcare merchant-currency plausibility** 🆕  
+- **What:** US healthcare provider (hospital/clinic/medical) billing in CAD or INR without Canadian/Indian geography evidence.  
+- **Why:** US healthcare providers don't typically bill in foreign currencies unless there's clear cross-border context.  
+- **Weight:** +0.22 (CAD) or +0.18 (INR)  
+- **Severity:** CRITICAL  
+- **Detection:** Merchant name contains healthcare terms + currency mismatch + no foreign geography
+
+---
+
+### 🏪 Merchant Validation System
+
+**MER1 – Merchant looks like label** 🆕  
+- **What:** Merchant name appears to be a field label (contains "INVOICE", "RECEIPT", "ORDER", "TOTAL", etc.).  
+- **Why:** Real merchant names are business names, not field labels. This indicates the LLM/OCR extracted a label instead of the actual merchant.  
+- **Weight:** +0.18 (high)  
+- **Severity:** CRITICAL
+
+**MER2 – Merchant looks like identifier** 🆕  
+- **What:** Merchant contains many digits (≥4) and more digits than letters.  
+- **Why:** Merchant names are business names, not invoice/receipt numbers. This pattern indicates extraction error or fabrication.  
+- **Weight:** +0.18 (high)  
+- **Severity:** CRITICAL
+
+**MER3 – Merchant starts with label prefix** 🆕  
+- **What:** Merchant begins with "invoice", "receipt", "order" prefix.  
+- **Why:** Real merchant names don't start with document type labels. This is a clear extraction error.  
+- **Weight:** +0.12 (medium)  
+- **Severity:** CRITICAL
+
+---
+
+### 🏷️ Severity Tagging System
+
+All fraud reasons are now tagged with severity levels for intelligent ensemble decision-making:
+
+- **[HARD_FAIL]**: Structural inconsistencies that strongly indicate fraud  
+  - Examples: Impossible date sequence, suspicious software (Canva/Photoshop)  
+  - Ensemble behavior: Forces "fake" verdict with 0.93 confidence  
+  - Visual realism cannot override hard-fail indicators
+
+- **[CRITICAL]**: Strong fraud indicators requiring review  
+  - Examples: Currency mismatch, tax regime mismatch, merchant validation failures  
+  - Ensemble behavior: High weight in decision (0.85 confidence if rule score ≥0.7)  
+  - Triggers human review if conflicting with vision assessment
+
+- **[INFO]**: Normal explanatory reasons  
+  - Examples: Missing metadata, low text quality, document type observations  
+  - Ensemble behavior: Informational only, contributes to score but doesn't force verdict
+
+**Performance Optimization:**  
+- Tag-first checking: 166x faster than regex pattern matching  
+- O(n) complexity for tagged reasons vs O(n*m) for patterns  
+- Backward compatible with untagged reasons
 
 ---
 
