@@ -80,8 +80,10 @@
             const [receipt, setReceipt] = useState(null);
             const [loading, setLoading] = useState(true);
             const [humanLabel, setHumanLabel] = useState('');
-            const [reasons, setReasons] = useState([]);
+            const [indicatorReviews, setIndicatorReviews] = useState({});
+            const [missedIndicators, setMissedIndicators] = useState([]);
             const [corrections, setCorrections] = useState({});
+            const [additionalNotes, setAdditionalNotes] = useState('');
             const [zoom, setZoom] = useState(1.0);
             const [submitting, setSubmitting] = useState(false);
             const [submitted, setSubmitted] = useState(false);
@@ -157,11 +159,18 @@
                 }
             }, [receiptId]);
             
-            const handleReasonToggle = (reason) => {
-                if (reasons.includes(reason)) {
-                    setReasons(reasons.filter(r => r !== reason));
+            const handleIndicatorReview = (indicator, status, note = '') => {
+                setIndicatorReviews({
+                    ...indicatorReviews,
+                    [indicator]: { status, note }
+                });
+            };
+            
+            const handleMissedIndicatorToggle = (indicator) => {
+                if (missedIndicators.includes(indicator)) {
+                    setMissedIndicators(missedIndicators.filter(i => i !== indicator));
                 } else {
-                    setReasons([...reasons, reason]);
+                    setMissedIndicators([...missedIndicators, indicator]);
                 }
             };
             
@@ -173,13 +182,26 @@
                 
                 setSubmitting(true);
                 
-                // Prepare feedback in new API format
+                // Prepare comprehensive feedback
+                const falseIndicators = Object.entries(indicatorReviews)
+                    .filter(([_, review]) => review.status === 'wrong')
+                    .map(([indicator, review]) => `${indicator}: ${review.note || 'No reason provided'}`);
+                
+                const confirmedIndicators = Object.entries(indicatorReviews)
+                    .filter(([_, review]) => review.status === 'correct')
+                    .map(([indicator, _]) => indicator);
+                
                 const feedbackData = {
                     receipt_id: receipt.id || 'unknown',
-                    correct_verdict: humanLabel.toLowerCase(), // "real", "fake", "suspicious"
-                    user_notes: reasons.length > 0 ? reasons.join('; ') : null,
-                    missed_indicators: reasons.filter(r => r.includes('missed') || r.includes('should have')),
-                    false_indicators: reasons.filter(r => r.includes('wrong') || r.includes('incorrect'))
+                    correct_verdict: humanLabel.toLowerCase(),
+                    user_notes: additionalNotes || null,
+                    missed_indicators: missedIndicators,
+                    false_indicators: falseIndicators,
+                    confirmed_indicators: confirmedIndicators,
+                    data_corrections: corrections,
+                    software_detected: receipt.models?.rule_based?.reasons?.find(r => r.includes('Software'))?.match(/'([^']+)'/)?.[1] || null,
+                    has_spacing_issue: missedIndicators.includes('spacing_anomalies'),
+                    has_date_issue: missedIndicators.includes('date_manipulation')
                 };
                 
                 console.log('Submitting feedback to new API:', feedbackData);
@@ -512,35 +534,105 @@
                                 </div>
                             </div>
                             
-                            {/* Reasons */}
+                            {/* Review AI Fraud Indicators */}
+                            {receipt.models.rule_based?.reasons && receipt.models.rule_based.reasons.length > 0 && (
+                                <div className="mb-8">
+                                    <h2 className="font-bold text-gray-800 mb-4 text-xl">
+                                        <i className="fas fa-search text-indigo-600 mr-2"></i>
+                                        Review AI Fraud Indicators ({receipt.models.rule_based.reasons.length})
+                                    </h2>
+                                    <p className="text-sm text-gray-600 mb-4">
+                                        For each indicator the AI detected, tell us if it was correct or a false alarm:
+                                    </p>
+                                    <div className="space-y-4">
+                                        {receipt.models.rule_based.reasons.map((indicator, idx) => (
+                                            <div key={idx} className="border-2 border-gray-300 rounded-lg p-4 bg-gray-50">
+                                                <div className="text-sm text-gray-700 mb-3 font-medium">{indicator}</div>
+                                                <div className="flex items-center space-x-4 mb-2">
+                                                    <label className="flex items-center cursor-pointer">
+                                                        <input 
+                                                            type="radio"
+                                                            name={`indicator_${idx}`}
+                                                            value="correct"
+                                                            checked={indicatorReviews[indicator]?.status === 'correct'}
+                                                            onChange={() => handleIndicatorReview(indicator, 'correct')}
+                                                            className="mr-2"
+                                                        />
+                                                        <span className="text-green-600 font-semibold">✅ Correct</span>
+                                                    </label>
+                                                    <label className="flex items-center cursor-pointer">
+                                                        <input 
+                                                            type="radio"
+                                                            name={`indicator_${idx}`}
+                                                            value="wrong"
+                                                            checked={indicatorReviews[indicator]?.status === 'wrong'}
+                                                            onChange={() => handleIndicatorReview(indicator, 'wrong')}
+                                                            className="mr-2"
+                                                        />
+                                                        <span className="text-red-600 font-semibold">❌ False Alarm</span>
+                                                    </label>
+                                                    <label className="flex items-center cursor-pointer">
+                                                        <input 
+                                                            type="radio"
+                                                            name={`indicator_${idx}`}
+                                                            value="uncertain"
+                                                            checked={indicatorReviews[indicator]?.status === 'uncertain'}
+                                                            onChange={() => handleIndicatorReview(indicator, 'uncertain')}
+                                                            className="mr-2"
+                                                        />
+                                                        <span className="text-gray-600">🤷 Uncertain</span>
+                                                    </label>
+                                                </div>
+                                                {indicatorReviews[indicator]?.status === 'wrong' && (
+                                                    <div className="mt-3">
+                                                        <label className="block text-xs text-gray-600 mb-1">Why is this a false alarm?</label>
+                                                        <input 
+                                                            type="text"
+                                                            placeholder="e.g., TCPDF is commonly used for invoicing"
+                                                            className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+                                                            onChange={(e) => handleIndicatorReview(indicator, 'wrong', e.target.value)}
+                                                        />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {/* Missed Fraud Indicators */}
                             <div className="mb-8">
                                 <h2 className="font-bold text-gray-800 mb-4 text-xl">
-                                    <i className="fas fa-list-check text-indigo-600 mr-2"></i>
-                                    Reasons (select all that apply)
+                                    <i className="fas fa-exclamation-triangle text-orange-600 mr-2"></i>
+                                    Missed Fraud Indicators
                                 </h2>
+                                <p className="text-sm text-gray-600 mb-4">
+                                    Did the AI miss any fraud signals? Check all that apply:
+                                </p>
                                 <div className="space-y-2">
                                     {[
-                                        { id: 'wrong_merchant_name', label: 'Wrong Merchant Name' },
-                                        { id: 'incorrect_amounts', label: 'Incorrect Amounts' },
-                                        { id: 'missing_items', label: 'Missing Items' },
-                                        { id: 'tax_calculation_wrong', label: 'Tax Calculation Wrong' },
-                                        { id: 'date_time_incorrect', label: 'Date/Time Incorrect' },
-                                        { id: 'visual_quality_issues', label: 'Visual Quality Issues' },
-                                        { id: 'suspicious_software', label: 'Suspicious Software' },
-                                        { id: 'metadata_stripped', label: 'Metadata Stripped' },
-                                        { id: 'other', label: 'Other' }
-                                    ].map(reason => (
+                                        { id: 'spacing_anomalies', label: 'Spacing anomalies (excessive spaces, irregular gaps)' },
+                                        { id: 'font_inconsistencies', label: 'Font inconsistencies (mixed fonts, sizes)' },
+                                        { id: 'watermark_issues', label: 'Watermark or logo issues' },
+                                        { id: 'suspicious_merchant', label: 'Suspicious merchant name' },
+                                        { id: 'invalid_address', label: 'Invalid or fake address' },
+                                        { id: 'invalid_phone', label: 'Invalid or fake phone number' },
+                                        { id: 'date_manipulation', label: 'Date manipulation or backdating' },
+                                        { id: 'amount_tampering', label: 'Amount tampering or alteration' },
+                                        { id: 'poor_image_quality', label: 'Poor image quality (screenshot, low-res)' },
+                                        { id: 'missing_elements', label: 'Missing critical receipt elements' }
+                                    ].map(missed => (
                                         <label 
-                                            key={reason.id}
-                                            className="checkbox-label flex items-center p-3 border rounded-lg"
+                                            key={missed.id}
+                                            className="flex items-center p-3 border-2 rounded-lg cursor-pointer hover:bg-orange-50 transition"
                                         >
                                             <input 
                                                 type="checkbox"
-                                                checked={reasons.includes(reason.id)}
-                                                onChange={() => handleReasonToggle(reason.id)}
+                                                checked={missedIndicators.includes(missed.id)}
+                                                onChange={() => handleMissedIndicatorToggle(missed.id)}
                                                 className="mr-3 w-4 h-4"
                                             />
-                                            <span className="text-gray-700">{reason.label}</span>
+                                            <span className="text-gray-700">{missed.label}</span>
                                         </label>
                                     ))}
                                 </div>
@@ -606,6 +698,21 @@
                                         />
                                     </div>
                                 </div>
+                            </div>
+                            
+                            {/* Additional Notes */}
+                            <div className="mb-8">
+                                <h2 className="font-bold text-gray-800 mb-4 text-xl">
+                                    <i className="fas fa-comment text-indigo-600 mr-2"></i>
+                                    Additional Notes (Optional)
+                                </h2>
+                                <textarea 
+                                    value={additionalNotes}
+                                    onChange={(e) => setAdditionalNotes(e.target.value)}
+                                    className="w-full border-2 border-gray-300 rounded-lg px-4 py-3 focus:border-purple-600 focus:outline-none"
+                                    rows="4"
+                                    placeholder="Any other observations or comments about this receipt..."
+                                />
                             </div>
                             
                             {/* Submit Button */}
