@@ -19,6 +19,7 @@ Key Principles:
 
 from typing import Dict, Any, List, Tuple, Optional
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,43 @@ class EnsembleIntelligence:
             "layoutlm": 0.10,       # Confidence signal
             "donut": 0.10,          # Data quality signal
         }
+
+    def _detect_hard_fail_indicators(self, rule_reasons: List[str]) -> Tuple[bool, List[str]]:
+        """
+        Detect hard-fail structural fraud indicators from rule-based reasons.
+        Returns (has_hard_fail, hard_fail_reasons).
+        """
+        # Patterns (case-insensitive)
+        hard_fail_patterns = [
+            # a) Currency/format mismatch
+            r"currency mismatch",
+            r"\bUSD\b.*\blakh[s]?\b",
+            r"\blakh[s]?\b.*\bUSD\b",
+            r"indian numbering",
+            r"\b\d{1,3},\d{2},\d{3}\b",
+            # b) Invalid tax identifier
+            r"invalid tax",
+            r"invalid tin",
+            r"TIN:\s*123-45-6789",
+            r"placeholder",
+            r"\bssn\b",
+            # c) Geo/jurisdiction mismatch
+            r"cross-country",
+            r"jurisdiction",
+            r"country mismatch",
+            r"geography mismatch",
+        ]
+        matched = []
+        seen = set()
+        for reason in rule_reasons:
+            s = str(reason)
+            for pat in hard_fail_patterns:
+                if re.search(pat, s, re.IGNORECASE):
+                    if s not in seen:
+                        matched.append(s)
+                        seen.add(s)
+                    break  # Only add once per reason
+        return (len(matched) > 0, matched)
     
     def converge_extraction(self, results: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -153,15 +191,6 @@ class EnsembleIntelligence:
     ) -> Dict[str, Any]:
         """
         Build ensemble verdict by converging all signals.
-        
-        Strategy:
-        1. Vision LLM: Primary authenticity filter
-        2. Converged Data: Use best extraction from all engines
-        3. Rule-Based: Validate using converged data (not raw OCR)
-        4. Agreement Score: Higher confidence when engines agree
-        
-        Returns:
-            Ensemble verdict with reasoning
         """
         verdict = {
             "final_label": "unknown",
@@ -171,128 +200,203 @@ class EnsembleIntelligence:
             "agreement_score": 0.0,
             "converged_data": converged_data
         }
-        
+
         # Step 1: Vision LLM as primary filter
         vision_verdict = results.get("vision_llm", {}).get("verdict", "unknown")
         vision_confidence = results.get("vision_llm", {}).get("confidence", 0.0)
         vision_reasoning = results.get("vision_llm", {}).get("reasoning", "")
-        
-        # Ensure vision_reasoning is a string
         if not isinstance(vision_reasoning, str):
             vision_reasoning = str(vision_reasoning) if vision_reasoning else ""
-        
-        # Check for explicit fraud indicators in Vision LLM
-        fraud_keywords = ["fake", "edited", "manipulated", "screenshot", "receiptfaker", "watermark"]
-        
+
         # Step 2: Calculate agreement score
         agreement_score = self._calculate_agreement(results, converged_data)
         verdict["agreement_score"] = agreement_score
-        
-        # Step 3: Get Rule-Based verdict (should use converged data)
+
+        # Step 3: Get Rule-Based verdict
         rule_label = results.get("rule_based", {}).get("label", "unknown")
         rule_score = results.get("rule_based", {}).get("score", 0.5)
         rule_reasons = results.get("rule_based", {}).get("reasons", [])
+        rule_reasons = [str(r) for r in rule_reasons]
+
+        # Step 3.5: Hard-fail and critical indicator detection
+        # Optimization: Check for severity tags first (faster than regex patterns)
+        # This avoids double-detection and improves performance
         
-        print(f"   Rule-Based: {rule_label} ({rule_score*100:.0f}%)")
-        print(f"   Agreement Score: {agreement_score:.2f}")
+        # Check for [HARD_FAIL] tags first
+        has_hard_fail_tagged = any("[HARD_FAIL]" in str(r) for r in rule_reasons)
+        if has_hard_fail_tagged:
+            # Extract all hard-fail tagged reasons
+            has_hard_fail = True
+            hard_fail_reasons = [r for r in rule_reasons if "[HARD_FAIL]" in str(r)]
+        else:
+            # Fallback to pattern matching for backward compatibility (untagged reasons)
+            has_hard_fail, hard_fail_reasons = self._detect_hard_fail_indicators(rule_reasons)
         
-        # Step 3.5: Check for CRITICAL fraud indicators that override Vision LLM
-        # These are high-confidence signals that should not be overridden
-        has_critical_indicator = False
-        critical_reasons = []
-        
-        print(f"\n🔍 Checking for critical indicators in {len(rule_reasons)} reasons...")
-        for reason in rule_reasons:
-            print(f"   Checking: {reason[:80]}...")
-            # Check for suspicious software (iLovePDF, Canva, etc.)
-            if "Suspicious Software Detected" in reason or "iLovePDF" in reason or "Canva" in reason:
-                has_critical_indicator = True
-                critical_reasons.append(reason)
-                print(f"   ✅ CRITICAL: Suspicious software detected!")
-            # Check for date manipulation (various phrasings)
-            elif "AFTER the receipt date" in reason or "Suspicious Date Gap" in reason or "backdated" in reason.lower():
-                has_critical_indicator = True
-                critical_reasons.append(reason)
-                print(f"   ✅ CRITICAL: Date manipulation detected!")
-        
-        print(f"\n🚨 Critical indicators found: {has_critical_indicator}")
-        print(f"   Total critical reasons: {len(critical_reasons)}")
-        
-        # Step 4: Converge signals
-        print(f"\n🎯 ENSEMBLE DECISION LOGIC:")
-        print(f"   Vision: {vision_verdict} @ {vision_confidence*100:.0f}%")
-        print(f"   Rule: {rule_label} @ {rule_score*100:.0f}%")
-        print(f"   Critical indicators: {has_critical_indicator}")
-        
-        if vision_verdict == "real" and vision_confidence > 0.8:
-            print(f"   → Path: Vision says REAL (high confidence)")
-            if rule_label == "real" or rule_score < 0.3:
-                # Both agree: REAL
-                print(f"   → Both agree: REAL")
-                verdict["final_label"] = "real"
-                verdict["confidence"] = min(0.95, 0.80 + (agreement_score * 0.15))
-                verdict["recommended_action"] = "approve"
-                verdict["reasoning"].append(f"✅ Vision LLM confirms authenticity ({vision_confidence*100:.0f}% confidence)")
-                verdict["reasoning"].append(f"✅ Rule-Based validation passed (score: {rule_score*100:.0f}%)")
-                if agreement_score > 0.7:
-                    verdict["reasoning"].append(f"✅ High agreement across engines ({agreement_score*100:.0f}%)")
-            
-            elif rule_label == "fake" or rule_score > 0.7:
-                # Conflict: Vision says real, Rules say fake
-                
-                # CRITICAL: If we have critical fraud indicators, ALWAYS flag as fake
-                if has_critical_indicator:
-                    verdict["final_label"] = "fake"
-                    verdict["confidence"] = 0.85
-                    verdict["recommended_action"] = "reject"
-                    verdict["reasoning"].append("🚨 CRITICAL FRAUD INDICATORS DETECTED")
-                    verdict["reasoning"].append(f"❌ Rule-Based: {rule_label} ({rule_score*100:.0f}%)")
-                    for reason in critical_reasons:
-                        verdict["reasoning"].append(f"   • {reason}")
-                    verdict["reasoning"].append(f"⚠️ Vision LLM says 'real' but critical indicators override this assessment")
-                
-                # Check if it's likely an OCR error
-                elif converged_data.get("total") and converged_data.get("confidence", {}).get("total", 0) > 0.6:
-                    # We have good extraction data - likely OCR error in Rule-Based
-                    verdict["final_label"] = "suspicious"
-                    verdict["confidence"] = 0.65
-                    verdict["recommended_action"] = "human_review"
-                    verdict["reasoning"].append("⚠️ Conflicting signals detected")
-                    verdict["reasoning"].append(f"✅ Vision LLM: {vision_verdict} ({vision_confidence*100:.0f}%)")
-                    verdict["reasoning"].append(f"❌ Rule-Based: {rule_label} ({rule_score*100:.0f}%)")
-                    verdict["reasoning"].append(f"💡 Advanced extraction successful - possible OCR error in Rule-Based")
-                    verdict["reasoning"].append(f"   Extracted Total: {converged_data['total']} (from {converged_data['sources'].get('total', 'N/A')})")
-                else:
-                    # No good extraction - trust Rule-Based
-                    verdict["final_label"] = "fake"
-                    verdict["confidence"] = 0.80
-                    verdict["recommended_action"] = "reject"
-                    verdict["reasoning"].append("❌ Rule-Based detected fraud indicators")
-                    for reason in rule_reasons[:3]:
-                        verdict["reasoning"].append(f"   • {reason}")
-            else:
-                # Moderate signals
-                verdict["final_label"] = "suspicious"
-                verdict["confidence"] = 0.70
-                verdict["recommended_action"] = "human_review"
-                verdict["reasoning"].append("⚠️ Moderate confidence signals")
-        
-        elif vision_verdict == "fake" or vision_confidence < 0.5:
-            # Vision LLM uncertain or says fake
+        # Check for [CRITICAL] tags first
+        has_critical_tagged = any("[CRITICAL]" in str(r) for r in rule_reasons)
+        if has_critical_tagged:
+            # Extract all critical tagged reasons
+            has_critical_indicator = True
+            critical_reasons = [r for r in rule_reasons if "[CRITICAL]" in str(r)]
+        else:
+            # Fallback to pattern matching for backward compatibility (untagged reasons)
+            critical_patterns = [
+                r"Suspicious Software Detected",
+                r"iLovePDF",
+                r"Canva",
+                r"AFTER the receipt date",
+                r"Suspicious Date Gap",
+                r"backdated",
+                r"total mismatch",
+                r"arithmetic",
+                r"duplicate line",
+                r"repeated",
+            ]
+            critical_reasons = []
+            seen_critical = set()
+            for reason in rule_reasons:
+                for pat in critical_patterns:
+                    if re.search(pat, reason, re.IGNORECASE):
+                        if reason not in seen_critical:
+                            critical_reasons.append(reason)
+                            seen_critical.add(reason)
+                        break
+            has_critical_indicator = len(critical_reasons) > 0
+
+        # Step 4: Decision precedence
+        if has_hard_fail:
+            verdict["final_label"] = "fake"
+            verdict["confidence"] = 0.93
+            verdict["recommended_action"] = "reject"
+            lines = ["🚨 HARD FAIL: Structural inconsistencies detected"]
+            for reason in hard_fail_reasons[:5]:
+                lines.append(f"   • {reason}")
+            lines.append("ℹ️ Note: Visual realism cannot override structural inconsistencies.")
+            # Deduplicate, preserve order
+            verdict["reasoning"] = []
+            seen_lines = set()
+            for l in lines:
+                if l not in seen_lines:
+                    verdict["reasoning"].append(l)
+                    seen_lines.add(l)
+            return verdict
+
+        # Rule-based fake with high score or critical
+        if rule_label == "fake" and (rule_score >= 0.7 or has_critical_indicator):
             verdict["final_label"] = "fake"
             verdict["confidence"] = 0.85
             verdict["recommended_action"] = "reject"
-            verdict["reasoning"].append(f"❌ Vision LLM: {vision_verdict} ({vision_confidence*100:.0f}%)")
-            if rule_label == "fake":
-                verdict["reasoning"].append("❌ Rule-Based confirms fraud indicators")
+            lines = ["❌ Rule-Based detected high-risk fraud indicators"]
+            # Prefer critical reasons, else fallback to rule reasons
+            bullet_reasons = critical_reasons[:5] if critical_reasons else rule_reasons[:5]
+            for reason in bullet_reasons:
+                lines.append(f"   • {reason}")
+            # If vision says real with high confidence, add note
+            if vision_verdict == "real" and vision_confidence > 0.7:
+                lines.append("ℹ️ Note: Receipt may look visually authentic, but internal inconsistencies indicate fabrication.")
+            # Deduplicate lines
+            verdict["reasoning"] = []
+            seen_lines = set()
+            for l in lines:
+                if l not in seen_lines:
+                    verdict["reasoning"].append(l)
+                    seen_lines.add(l)
+            return verdict
+
+        # Both vision and rule agree on real, or rule score is low
+        if vision_verdict == "real" and vision_confidence > 0.8 and (rule_label == "real" or rule_score < 0.3):
+            verdict["final_label"] = "real"
+            verdict["confidence"] = min(0.95, 0.75 + (agreement_score * 0.20))
+            verdict["recommended_action"] = "approve"
+            lines = [
+                "✅ Vision LLM confirms authenticity",
+                "✅ Rule-Based validation passed"
+            ]
+            if agreement_score >= 0.7:
+                lines.append("✅ High agreement across engines")
+            # Deduplicate lines
+            verdict["reasoning"] = []
+            seen_lines = set()
+            for l in lines:
+                if l not in seen_lines:
+                    verdict["reasoning"].append(l)
+                    seen_lines.add(l)
+            return verdict
+
         
-        else:
-            # Default: suspicious
+        # Conflicting: vision real (high), rule says fake but not strong
+        # We do NOT auto-reject here (hard-fail / strong-rule fake already handled above).
+        if (
+            vision_verdict == "real"
+            and vision_confidence > 0.8
+            and rule_label == "fake"
+            and rule_score < 0.7
+            and not has_critical_indicator
+            and not has_hard_fail
+        ):
             verdict["final_label"] = "suspicious"
-            verdict["confidence"] = 0.60
+            verdict["confidence"] = 0.65
             verdict["recommended_action"] = "human_review"
-            verdict["reasoning"].append("⚠️ Insufficient confidence for automatic decision")
-        
+
+            lines = [
+                "⚠️ Conflicting signals detected",
+                "✅ Vision LLM: real",
+                "❌ Rule-Based: fake",
+                f"ℹ️ Rule score: {rule_score:.2f} (below auto-reject threshold)",
+            ]
+
+            # Add up to 3 rule reasons to help reviewers debug the conflict.
+            added = 0
+            seen_reason_text = set()
+            for reason in rule_reasons:
+                s = str(reason).strip()
+                if not s:
+                    continue
+                # Deduplicate reasons (by text)
+                if s in seen_reason_text:
+                    continue
+                seen_reason_text.add(s)
+                lines.append(f"   • {s}")
+                added += 1
+                if added >= 3:
+                    break
+
+            # Deduplicate, preserve order
+            verdict["reasoning"] = []
+            seen_lines = set()
+            for l in lines:
+                if l not in seen_lines:
+                    verdict["reasoning"].append(l)
+                    seen_lines.add(l)
+            return verdict
+
+        # Vision is fake or vision_confidence < 0.5
+        if vision_verdict == "fake" or vision_confidence < 0.5:
+            verdict["final_label"] = "fake"
+            verdict["confidence"] = 0.80
+            verdict["recommended_action"] = "reject"
+            lines = [f"❌ Vision LLM: {vision_verdict}"]
+            if rule_label == "fake":
+                lines.append("❌ Rule-Based confirms fraud indicators")
+            verdict["reasoning"] = []
+            seen_lines = set()
+            for l in lines:
+                if l not in seen_lines:
+                    verdict["reasoning"].append(l)
+                    seen_lines.add(l)
+            return verdict
+
+        # Default: suspicious
+        verdict["final_label"] = "suspicious"
+        verdict["confidence"] = 0.60
+        verdict["recommended_action"] = "human_review"
+        lines = ["⚠️ Insufficient confidence for automatic decision"]
+        verdict["reasoning"] = []
+        seen_lines = set()
+        for l in lines:
+            if l not in seen_lines:
+                verdict["reasoning"].append(l)
+                seen_lines.add(l)
         return verdict
     
     def _calculate_agreement(
