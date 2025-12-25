@@ -30,39 +30,67 @@ VeriReceipt stops this using a hybrid AI + forensic rules pipeline.
               │ - Normalization     │
               └──────────┬──────────┘
                          ▼
-              ┌─────────────────────┐
-              │  Metadata Engine    │
-              │ - PDF metadata      │
-              │ - EXIF metadata     │
-              └──────────┬──────────┘
-                         ▼
-              ┌─────────────────────┐
-              │   OCR & Text Layer │
-              │ - Tesseract/EasyOCR │
-              └──────────┬──────────┘
+         ┌───────────────┴───────────────┐
+         ▼                               ▼
+  ┌─────────────┐              ┌─────────────────┐
+  │  Metadata   │              │  OCR & Text     │
+  │  Engine     │              │  Extraction     │
+  │ - PDF meta  │              │ - EasyOCR       │
+  │ - EXIF data │              │ - Tesseract     │
+  └──────┬──────┘              └────────┬────────┘
+         └───────────────┬───────────────┘
                          ▼
               ┌─────────────────────┐
               │ Feature Extraction  │
               │ - Forensic signals  │
               │ - Text patterns     │
               │ - Layout cues       │
+              │ - Spacing anomalies │
               └──────────┬──────────┘
                          ▼
-              ┌─────────────────────┐
-              │   Fraud Engine     │
-              │ - Rules            │
-              │ - Scoring          │
-              └──────────┬──────────┘
+         ┌───────────────┴────────────────────┐
+         ▼                ▼                   ▼
+  ┌─────────────┐  ┌──────────┐      ┌──────────────┐
+  │ Rule-Based  │  │ Vision   │      │  LayoutLM    │
+  │ Engine      │  │ LLM      │      │  Extraction  │
+  │ - 14 Rules  │  │ - Fraud  │      │  - Merchant  │
+  │ - Learned   │  │   Detect │      │  - Total     │
+  │   Rules     │  │ - Auth   │      │  - Date      │
+  └──────┬──────┘  └────┬─────┘      └──────┬───────┘
+         └───────────────┴────────────────────┘
                          ▼
               ┌─────────────────────┐
-              │ AI Model (DONUT/CLIP) │
-              │ - Real vs Fake       │
+              │ Ensemble Verdict    │
+              │ - Converge results  │
+              │ - Critical override │
+              │ - Confidence score  │
               └──────────┬──────────┘
                          ▼
               ┌─────────────────────┐
               │ Final Decision       │
-              │ - real / fake / suspicious │
-              │ - Reasons            │
+              │ - real/fake/suspicious │
+              │ - Confidence %       │
+              │ - Detailed reasons   │
+              └──────────┬──────────┘
+                         ▼
+              ┌─────────────────────┐
+              │ Human Review         │
+              │ - Feedback form      │
+              │ - Indicator review   │
+              │ - Data corrections   │
+              └──────────┬──────────┘
+                         ▼
+              ┌─────────────────────┐
+              │ Learning Engine      │
+              │ - Reinforce correct  │
+              │ - Reduce false alarms│
+              │ - Create new rules   │
+              │ - Learn patterns     │
+              └──────────┬──────────┘
+                         ▼
+              ┌─────────────────────┐
+              │ Improved Detection   │
+              │ (Next Analysis)      │
               └─────────────────────┘
 ```
 
@@ -74,23 +102,39 @@ VeriReceipt stops this using a hybrid AI + forensic rules pipeline.
 VeriReceipt/
   app/
     pipelines/
-      ingest.py
-      metadata.py
-      ocr.py
-      features.py
-      rules.py
+      ingest.py           # PDF/Image ingestion
+      metadata.py         # PDF metadata & EXIF extraction
+      ocr.py              # EasyOCR + Tesseract
+      features.py         # Feature engineering (14+ signals)
+      rules.py            # Rule-based engine + learned rules
+      vision_llm.py       # Vision LLM (Ollama/PyTorch)
+      layoutlm.py         # LayoutLM data extraction
+      ensemble.py         # Multi-engine verdict convergence
+      learning.py         # 🆕 Feedback learning engine
     models/
+      feedback.py         # 🆕 Feedback data models
+    repository/
+      feedback_store.py   # 🆕 SQLite feedback storage
+    api/
+      main.py             # FastAPI endpoints
+      feedback.py         # 🆕 Feedback API routes
     schemas/
       receipt.py
     utils/
     config.py
+  web/
+    index.html            # Main analysis UI
+    review.html           # 🆕 Comprehensive feedback form
+    stats.html            # 🆕 Feedback stats dashboard
   data/
-    raw/
+    raw/                  # Test receipts
     processed/
+    feedback.db           # 🆕 Local feedback database
   notebooks/
   tests/
   requirements.txt
   README.md
+  FEEDBACK_WORKFLOW_SUMMARY.md  # 🆕 Complete feedback docs
 ```
 
 ---
@@ -107,18 +151,37 @@ VeriReceipt/
 
 ## 📌 Current Development Stage
 
-We are currently building:
-- Core folder structure  
-- Receipt ingestion  
-- OCR pipeline  
-- Metadata extraction  
-- v1 Rule-based fraud engine  
+### ✅ **Completed:**
+- ✅ Core folder structure & project setup
+- ✅ Receipt ingestion (PDF/Image support)
+- ✅ OCR pipeline (EasyOCR + Tesseract)
+- ✅ Metadata extraction (PDF + EXIF)
+- ✅ Rule-based fraud engine (14+ rules)
+- ✅ Vision LLM integration (fraud detection + authenticity)
+- ✅ LayoutLM integration (data extraction)
+- ✅ Ensemble verdict system
+- ✅ **Comprehensive Feedback System** 🆕
+  - Detailed feedback form UI
+  - Indicator-level reviews (✅ Correct / ❌ False Alarm)
+  - Missed indicator tracking
+  - Data correction learning
+  - Local learning engine
+- ✅ FastAPI backend with 10+ endpoints
+- ✅ React-based web UI
+- ✅ Docker deployment setup
+- ✅ Stats dashboard
 
-Next:
-- Forensic feature engineering  
-- AI model training  
-- API + UI  
-- Deployment pipeline  
+### 🔄 **In Progress:**
+- Enhanced pattern learning (merchants, addresses)
+- ML model fine-tuning preparation
+- Active learning features
+
+### 📋 **Next:**
+- Collect diverse training dataset
+- Fine-tune Vision LLM on user feedback
+- Fine-tune DONUT on extraction corrections
+- Reinforcement learning for ensemble weights
+- Production deployment with fine-tuned models  
 
 ---
 
@@ -325,13 +388,27 @@ This section documents the rules currently implemented in the VeriReceipt v1 eng
 - [x] Docker deployment setup
 - [x] Human feedback loop & ML training
 
-### **Phase 2 — AI Integration (In Progress)**
-- [x] Human-in-the-loop learning system
-- [x] ML model training from feedback
+### **Phase 2 — AI Integration & Learning System (✅ COMPLETE)**
+- [x] Vision LLM integration (fraud detection + authenticity)
+- [x] LayoutLM integration (data extraction)
+- [x] Ensemble verdict system with critical overrides
+- [x] **Comprehensive Feedback System** 🆕
+  - [x] Detailed feedback form UI
+  - [x] Indicator-level reviews (confirm/false alarm/uncertain)
+  - [x] Missed indicator tracking (10 structured patterns)
+  - [x] Data correction learning
+  - [x] Enhanced learning engine
+    - [x] Reinforce confirmed indicators (+0.02)
+    - [x] Reduce false indicators (-0.08)
+    - [x] Create rules for missed patterns (+0.15)
+    - [x] Learn from data corrections
+    - [x] Whitelist system for false alarms
+  - [x] Stats dashboard with learned rules
+  - [x] Local SQLite storage (GDPR compliant)
 - [ ] Collect diverse dataset (real + fake receipts)
-- [ ] Fine-tune DONUT model for document understanding
-- [ ] Evaluation + accuracy tuning
-- [ ] Introduce image forensics model
+- [ ] Fine-tune Vision LLM on user feedback
+- [ ] Fine-tune DONUT on extraction corrections
+- [ ] Reinforcement learning for ensemble weights
 
 ### **Phase 3 — Production System**
 - [x] FastAPI backend
@@ -366,11 +443,24 @@ python run_api.py
 
 ### Key Endpoints
 
-- **POST /analyze** - Analyze single receipt
-- **POST /analyze/batch** - Batch analysis (up to 50 receipts)
-- **GET /stats** - Get aggregate statistics
-- **POST /feedback** - Submit human feedback for learning
+**Analysis:**
+- **POST /api/analyze/hybrid** - Multi-engine analysis (Rule-Based + Vision LLM + LayoutLM)
+- **POST /api/analyze/rule-based** - Rule-based only analysis
+- **POST /api/analyze/vision** - Vision LLM only analysis
+- **POST /api/analyze/batch** - Batch analysis (up to 50 receipts)
+
+**Feedback & Learning:** 🆕
+- **POST /feedback/submit** - Submit comprehensive feedback
+- **GET /feedback/stats** - Get feedback statistics
+- **GET /feedback/history** - View feedback history
+- **GET /feedback/learned-rules** - List all learned rules
+- **POST /feedback/rules/{id}/toggle** - Enable/disable learned rule
+- **GET /feedback/export** - Export learned rules
+- **POST /feedback/import** - Import learned rules
+
+**System:**
 - **GET /health** - Health check
+- **GET /stats** - System statistics
 
 ### Documentation
 
