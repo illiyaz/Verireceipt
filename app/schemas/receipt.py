@@ -1,6 +1,6 @@
 # app/schemas/receipt.py
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 from PIL import Image
 
@@ -42,20 +42,51 @@ class ReceiptFeatures:
     forensic_features: Dict[str, Any]
 
 
+
+@dataclass
+class AuditEvent:
+    """
+    Append-only, structured explanation for *why* a decision was made.
+    Persist this as JSON for audit/debug/analytics.
+    """
+    source: str                    # rule_engine / ensemble / vision_llm / layoutlm / donut ...
+    type: str                      # rule_triggered / model_vote / override / normalization ...
+    severity: Optional[str] = None # HARD_FAIL / CRITICAL / WARNING / INFO
+    code: Optional[str] = None     # stable id (e.g., R16_SUSPICIOUS_DATE_GAP)
+    message: str = ""
+    evidence: Dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass
 class ReceiptDecision:
     """
     Final decision returned by VeriReceipt.
+
+    - reasons: user-facing summary strings
+    - audit_events: structured, persisted "why we decided" trail (preferred)
+    - events: legacy structured rule events (dicts) kept for compatibility
     """
-    label: str                      # "real", "fake", "suspicious"
-    score: float                    # 0.0 - 1.0
-    reasons: List[str]              # human-readable explanations
+    label: str
+    score: float
+    reasons: List[str]
 
-    # --- Audit / explainability metadata ------------------------------------
-    rule_version: str = "0.0.0"     # Ruleset version used for this verdict
-    engine_version: str = "0.0.0"   # App/build version (optional but useful)
+    # --- Versioning / policy metadata ---------------------------------------
+    rule_version: str = "0.0.0"       # Ruleset version used for this verdict
+    policy_version: str = "0.0.0"     # Ensemble/conflict-resolution policy version used
+    engine_version: str = "0.0.0"     # App/build version (optional but useful)
 
-    # --- Optional debugging payloads ----------------------------------------
-    features: Optional[ReceiptFeatures] = None  # optional, for debugging/analytics
+    # --- Decision identity / provenance -------------------------------------
+    decision_id: str = ""             # UUID or stable id set by API layer
+    created_at: str = ""              # ISO-8601 timestamp set by API layer
+    input_fingerprint: Optional[Dict[str, Any]] = None  # sha256/file_size/filename/mime/etc.
+
+    # --- Optional debugging / audit payloads --------------------------------
+    features: Optional[ReceiptFeatures] = None
     minor_notes: Optional[List[str]] = None
-    debug: Optional[Dict[str, Any]] = None      # structured metadata (model scores, geo/currency, etc.)
+    debug: Optional[Dict[str, Any]] = None
+
+    # Primary "why we decided" trail (persist this)
+    audit_events: List[AuditEvent] = field(default_factory=list)
+
+    # Legacy structured rule events (RuleEvent dicts) - kept for backward compatibility
+    events: Optional[List[Dict[str, Any]]] = None

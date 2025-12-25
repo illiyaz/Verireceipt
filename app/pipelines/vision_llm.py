@@ -147,8 +147,113 @@ If any field is not visible or unclear, use null. Only return the JSON, no other
         print(f"   Response: {response[:200]}")
         return {}
 
-
 def detect_fraud_indicators_with_vision(image_path: str, model: str = DEFAULT_VISION_MODEL) -> Dict[str, Any]:
+    """
+    Ask vision model to detect fraud indicators as structured, observable claims.
+
+    Output is NOT prose. It's a list of verifiable claims with severity + evidence.
+    """
+    prompt = """You are a forensic document examiner.
+
+Analyze this receipt image for signs of fraud or manipulation.
+
+IMPORTANT: Do NOT write generic prose. Output ONLY JSON.
+
+You must produce *observable* claims that a human could verify by looking at the image.
+Each claim must be specific (e.g., "text baseline wobble in totals area", "inconsistent font kerning in merchant name",
+"edge halos around edited numbers").
+
+Return JSON with this exact schema:
+{
+  "is_suspicious": true/false,
+  "confidence": 0.0-1.0,
+  "claims": [
+    {
+      "claim_id": "VCLM_XXX",
+      "category": "spacing|typography|alignment|editing_artifact|quality|layout|watermark",
+      "observable_claim": "short, specific, visually verifiable claim",
+      "severity": "HARD_FAIL|CRITICAL|WARNING|INFO",
+      "confidence": 0.0-1.0,
+      "where": {
+        "region": "merchant|date|items|subtotal|tax|total|footer|unknown",
+        "notes": "where in the receipt this is observed"
+      },
+      "evidence": {
+        "visual_cue": "what you saw (e.g., halos, blur, inconsistent stroke width)",
+        "comparison": "what it should look like vs what it looks like",
+        "alt_explanations": ["scanner noise", "low resolution", "photo angle"],
+        "why_alt_less_likely": "one sentence"
+      }
+    }
+  ],
+  "overall_assessment": "one concise sentence"
+}
+
+Rules:
+- Provide 0..8 claims.
+- If you provide a claim, it must be observable in the image.
+- If image quality is too low to judge a category, do not invent claims; set claims=[] and lower confidence.
+- PAY SPECIAL ATTENTION TO SPACING anomalies (excessive spaces, inconsistent gaps, manual-looking placement).
+
+Only return the JSON, no other text."""
+
+    response = query_vision_model(image_path, prompt, model, temperature=0.2)
+
+    # Parse JSON
+    try:
+        json_start = response.find("{")
+        json_end = response.rfind("}") + 1
+        if json_start >= 0 and json_end > json_start:
+            json_str = response[json_start:json_end]
+            data = json.loads(json_str)
+
+            # Normalize/defensive defaults (models sometimes omit fields)
+            if not isinstance(data, dict):
+                return {
+                    "is_suspicious": False,
+                    "confidence": 0.0,
+                    "claims": [],
+                    "overall_assessment": "unparseable model output",
+                }
+
+            data.setdefault("is_suspicious", False)
+            data.setdefault("confidence", 0.0)
+            data.setdefault("claims", [])
+            data.setdefault("overall_assessment", "")
+
+            # Ensure claims is a list of dicts
+            if not isinstance(data.get("claims"), list):
+                data["claims"] = []
+            else:
+                normalized_claims = []
+                for c in data["claims"]:
+                    if not isinstance(c, dict):
+                        continue
+                    c.setdefault("claim_id", "VCLM_UNK")
+                    c.setdefault("category", "unknown")
+                    c.setdefault("observable_claim", "")
+                    c.setdefault("severity", "INFO")
+                    c.setdefault("confidence", 0.0)
+                    c.setdefault("where", {"region": "unknown", "notes": ""})
+                    c.setdefault(
+                        "evidence",
+                        {
+                            "visual_cue": "",
+                            "comparison": "",
+                            "alt_explanations": [],
+                            "why_alt_less_likely": "",
+                        },
+                    )
+                    normalized_claims.append(c)
+                data["claims"] = normalized_claims
+
+            return data
+        else:
+            return {"is_suspicious": False, "confidence": 0.0, "claims": [], "overall_assessment": "no JSON found"}
+    except json.JSONDecodeError:
+        return {"is_suspicious": False, "confidence": 0.0, "claims": [], "overall_assessment": "JSON parse error"}
+        
+def detect_fraud_indicators_with_vision_old(image_path: str, model: str = DEFAULT_VISION_MODEL) -> Dict[str, Any]:
     """
     Ask vision model to detect fraud indicators.
     

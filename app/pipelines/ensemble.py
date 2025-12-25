@@ -19,7 +19,6 @@ Key Principles:
 
 from typing import Dict, Any, List, Tuple, Optional
 import logging
-import re
 
 logger = logging.getLogger(__name__)
 
@@ -43,43 +42,6 @@ class EnsembleIntelligence:
             "layoutlm": 0.10,       # Confidence signal
             "donut": 0.10,          # Data quality signal
         }
-
-    def _detect_hard_fail_indicators(self, rule_reasons: List[str]) -> Tuple[bool, List[str]]:
-        """
-        Detect hard-fail structural fraud indicators from rule-based reasons.
-        Returns (has_hard_fail, hard_fail_reasons).
-        """
-        # Patterns (case-insensitive)
-        hard_fail_patterns = [
-            # a) Currency/format mismatch
-            r"currency mismatch",
-            r"\bUSD\b.*\blakh[s]?\b",
-            r"\blakh[s]?\b.*\bUSD\b",
-            r"indian numbering",
-            r"\b\d{1,3},\d{2},\d{3}\b",
-            # b) Invalid tax identifier
-            r"invalid tax",
-            r"invalid tin",
-            r"TIN:\s*123-45-6789",
-            r"placeholder",
-            r"\bssn\b",
-            # c) Geo/jurisdiction mismatch
-            r"cross-country",
-            r"jurisdiction",
-            r"country mismatch",
-            r"geography mismatch",
-        ]
-        matched = []
-        seen = set()
-        for reason in rule_reasons:
-            s = str(reason)
-            for pat in hard_fail_patterns:
-                if re.search(pat, s, re.IGNORECASE):
-                    if s not in seen:
-                        matched.append(s)
-                        seen.add(s)
-                    break  # Only add once per reason
-        return (len(matched) > 0, matched)
     
     def converge_extraction(self, results: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -184,6 +146,81 @@ class EnsembleIntelligence:
         except:
             return None
     
+    def _normalize_rule_score(self, score: Any) -> float:
+        """Normalize rule score into [0,1]. Accepts 0-1 floats, 0-100 percents, or strings like '70%'."""
+        if score is None:
+            return 0.5
+
+        if isinstance(score, str):
+            s = score.strip()
+            try:
+                if s.endswith("%"):
+                    v = float(s[:-1].strip()) / 100.0
+                else:
+                    v = float(s)
+                if v > 1.0:
+                    v = v / 100.0
+                return max(0.0, min(1.0, v))
+            except Exception:
+                return 0.5
+
+        try:
+            v = float(score)
+            if v > 1.0:
+                v = v / 100.0
+            return max(0.0, min(1.0, v))
+        except Exception:
+            return 0.5
+
+    def _extract_severity_reasons(self, rule_reasons: List[str]) -> Dict[str, List[str]]:
+        """Extract tagged severities from rules.py output (preferred)."""
+        hard, crit, info = [], [], []
+        for r in (rule_reasons or []):
+            s = str(r)
+            if "[HARD_FAIL]" in s:
+                hard.append(s)
+            elif "[CRITICAL]" in s:
+                crit.append(s)
+            elif "[INFO]" in s:
+                info.append(s)
+        return {"hard_fail": hard, "critical": crit, "info": info}
+    
+    def _extract_severity_from_events(self, events: Any) -> Dict[str, List[dict]]:
+        """
+        Extract severities from structured rule events emitted by rules.py.
+        Expected event shape (dict-like):
+        { "rule_id": "...", "severity": "HARD_FAIL|CRITICAL|INFO", "weight": 0.0-1.0, "evidence": {...}, "message": "..." }
+        Returns dict with keys: hard_fail, critical, info (lists of event dicts).
+        """
+        hard, crit, info = [], [], []
+        if not events:
+            return {"hard_fail": hard, "critical": crit, "info": info}
+
+        for e in events:
+            if e is None:
+                continue
+            if isinstance(e, dict):
+                ev = e
+            else:
+                # best-effort conversion
+                try:
+                    ev = e.dict()  # pydantic v1
+                except Exception:
+                    try:
+                        ev = dict(e)
+                    except Exception:
+                        continue
+
+            sev = str(ev.get("severity", "")).upper().strip()
+            if sev == "HARD_FAIL":
+                hard.append(ev)
+            elif sev == "CRITICAL":
+                crit.append(ev)
+            elif sev == "INFO":
+                info.append(ev)
+
+        return {"hard_fail": hard, "critical": crit, "info": info}
+
     def build_ensemble_verdict(
         self,
         results: Dict[str, Any],
@@ -212,56 +249,44 @@ class EnsembleIntelligence:
         agreement_score = self._calculate_agreement(results, converged_data)
         verdict["agreement_score"] = agreement_score
 
-        # Step 3: Get Rule-Based verdict
-        rule_label = results.get("rule_based", {}).get("label", "unknown")
-        rule_score = results.get("rule_based", {}).get("score", 0.5)
-        rule_reasons = results.get("rule_based", {}).get("reasons", [])
+        # Step 3: Get Rule-Based verdict (and structured events if provided)
+        rb = results.get("rule_based", {}) or {}
+        rule_label = rb.get("label", "unknown")
+        raw_rule_score = rb.get("score", 0.5)
+        rule_score = self._normalize_rule_score(raw_rule_score)
+
+        rule_reasons = rb.get("reasons", []) or []
         rule_reasons = [str(r) for r in rule_reasons]
 
-        # Step 3.5: Hard-fail and critical indicator detection
-        # Optimization: Check for severity tags first (faster than regex patterns)
-        # This avoids double-detection and improves performance
-        
-        # Check for [HARD_FAIL] tags first
-        has_hard_fail_tagged = any("[HARD_FAIL]" in str(r) for r in rule_reasons)
-        if has_hard_fail_tagged:
-            # Extract all hard-fail tagged reasons
-            has_hard_fail = True
-            hard_fail_reasons = [r for r in rule_reasons if "[HARD_FAIL]" in str(r)]
-        else:
-            # Fallback to pattern matching for backward compatibility (untagged reasons)
-            has_hard_fail, hard_fail_reasons = self._detect_hard_fail_indicators(rule_reasons)
-        
-        # Check for [CRITICAL] tags first
-        has_critical_tagged = any("[CRITICAL]" in str(r) for r in rule_reasons)
-        if has_critical_tagged:
-            # Extract all critical tagged reasons
-            has_critical_indicator = True
-            critical_reasons = [r for r in rule_reasons if "[CRITICAL]" in str(r)]
-        else:
-            # Fallback to pattern matching for backward compatibility (untagged reasons)
-            critical_patterns = [
-                r"Suspicious Software Detected",
-                r"iLovePDF",
-                r"Canva",
-                r"AFTER the receipt date",
-                r"Suspicious Date Gap",
-                r"backdated",
-                r"total mismatch",
-                r"arithmetic",
-                r"duplicate line",
-                r"repeated",
-            ]
+        # NEW: Prefer structured rule events (no regex). Fallback only to severity tags in reasons.
+        rule_events = rb.get("events") or rb.get("rule_events") or []
+        sev_events = self._extract_severity_from_events(rule_events)
+
+        if sev_events["hard_fail"] or sev_events["critical"] or sev_events["info"]:
+            # Use events as source of truth
+            has_hard_fail = len(sev_events["hard_fail"]) > 0
+            has_critical_indicator = len(sev_events["critical"]) > 0
+
+            hard_fail_reasons = []
+            for ev in sev_events["hard_fail"][:10]:
+                rid = ev.get("rule_id", "RULE")
+                msg = ev.get("message") or ev.get("reason") or ""
+                hard_fail_reasons.append(f"[HARD_FAIL] {rid}: {msg}".strip())
+
             critical_reasons = []
-            seen_critical = set()
-            for reason in rule_reasons:
-                for pat in critical_patterns:
-                    if re.search(pat, reason, re.IGNORECASE):
-                        if reason not in seen_critical:
-                            critical_reasons.append(reason)
-                            seen_critical.add(reason)
-                        break
+            for ev in sev_events["critical"][:10]:
+                rid = ev.get("rule_id", "RULE")
+                msg = ev.get("message") or ev.get("reason") or ""
+                critical_reasons.append(f"[CRITICAL] {rid}: {msg}".strip())
+        else:
+            # Tag-based fallback (no regex)
+            sev = self._extract_severity_reasons(rule_reasons)
+            hard_fail_reasons = sev["hard_fail"]
+            critical_reasons = sev["critical"]
+            has_hard_fail = len(hard_fail_reasons) > 0
             has_critical_indicator = len(critical_reasons) > 0
+
+        critical_count = len(critical_reasons)
 
         # Step 4: Decision precedence
         if has_hard_fail:
@@ -282,7 +307,7 @@ class EnsembleIntelligence:
             return verdict
 
         # Rule-based fake with high score or critical
-        if rule_label == "fake" and (rule_score >= 0.7 or has_critical_indicator):
+        if rule_label == "fake" and (rule_score >= 0.7 or critical_count >= 2 or has_critical_indicator):
             verdict["final_label"] = "fake"
             verdict["confidence"] = 0.85
             verdict["recommended_action"] = "reject"
@@ -331,7 +356,7 @@ class EnsembleIntelligence:
             and vision_confidence > 0.8
             and rule_label == "fake"
             and rule_score < 0.7
-            and not has_critical_indicator
+            and (critical_count <= 1)
             and not has_hard_fail
         ):
             verdict["final_label"] = "suspicious"
@@ -371,7 +396,7 @@ class EnsembleIntelligence:
             return verdict
 
         # Vision is fake or vision_confidence < 0.5
-        if vision_verdict == "fake" or vision_confidence < 0.5:
+        if vision_verdict == "fake":
             verdict["final_label"] = "fake"
             verdict["confidence"] = 0.80
             verdict["recommended_action"] = "reject"
@@ -384,6 +409,29 @@ class EnsembleIntelligence:
                 if l not in seen_lines:
                     verdict["reasoning"].append(l)
                     seen_lines.add(l)
+            return verdict
+        
+        # Low-confidence vision: do NOT auto-reject. Defer to rules + agreement.
+        if vision_confidence < 0.5:
+            verdict["final_label"] = rule_label if rule_label in ("real", "fake", "suspicious") else "suspicious"
+
+            if (rule_label == "real" or rule_score < 0.3) and not has_hard_fail and critical_count == 0 and agreement_score >= 0.7:
+                verdict["final_label"] = "real"
+                verdict["confidence"] = 0.70
+                verdict["recommended_action"] = "approve"
+                verdict["reasoning"] = [
+                    "✅ Rule-Based validation passed",
+                    "✅ High agreement across engines",
+                    "ℹ️ Vision model was low-confidence; decision based on rules + agreement.",
+                ]
+                return verdict
+
+            verdict["confidence"] = 0.60
+            verdict["recommended_action"] = "human_review"
+            verdict["reasoning"] = [
+                "⚠️ Vision model low-confidence; deferring to rule-based signals.",
+                f"ℹ️ Rule label={rule_label}, score={rule_score:.2f}, critical_count={critical_count}",
+            ]
             return verdict
 
         # Default: suspicious

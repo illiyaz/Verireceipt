@@ -1,15 +1,14 @@
 # app/pipelines/rules.py
 
-from typing import List, Optional
-import logging
+# app/pipelines/rules.py
 
-from app.schemas.receipt import (
-    ReceiptFeatures,
-    ReceiptDecision,
-    ReceiptInput,
-)
-from app.pipelines.ingest import ingest_and_ocr
+import logging
+from dataclasses import dataclass, asdict
+from typing import Any, Dict, List, Optional
+
 from app.pipelines.features import build_features
+from app.pipelines.ingest import ingest_and_ocr
+from app.schemas.receipt import ReceiptDecision, ReceiptFeatures, ReceiptInput
 
 
 logger = logging.getLogger(__name__)
@@ -17,6 +16,47 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 # Helper utilities (keep rule logic self-contained)
 # -----------------------------------------------------------------------------
+
+@dataclass
+class RuleEvent:
+    rule_id: str
+    severity: str               # HARD_FAIL | CRITICAL | WARNING | INFO
+    weight: float               # how much it contributes to score
+    message: str                # short human-readable summary
+    evidence: Dict[str, Any]    # structured payload for audits/debug
+
+def _emit_event(
+    events: List[RuleEvent],
+    reasons: Optional[List[str]],
+    rule_id: str,
+    severity: str,
+    weight: float,
+    message: str,
+    evidence: Optional[Dict[str, Any]] = None,
+    reason_text: Optional[str] = None,
+) -> float:
+    """
+    Emit a structured rule event AND (optionally) a text reason.
+    Returns score delta to add.
+    """
+    sev = (severity or "INFO").upper().strip()
+    ev = RuleEvent(
+        rule_id=rule_id,
+        severity=sev,
+        weight=float(weight or 0.0),
+        message=str(message or ""),
+        evidence=evidence or {},
+    )
+    events.append(ev)
+
+    # Keep backward compatibility for UI: append text reasons with tags when requested
+    if reasons is not None:
+        if reason_text:
+            reasons.append(f"[{sev}] {reason_text}")
+        else:
+            reasons.append(f"[{sev}] {message}")
+
+    return ev.weight
 
 def _join_text(tf: dict, lf: dict) -> str:
     """Best-effort text blob for rules that need raw content.
@@ -729,6 +769,7 @@ def _geo_currency_tax_consistency(
     merchant: Optional[str],
     reasons: List[str],
     minor_notes: List[str],
+    events: List[RuleEvent],
 ) -> float:
     """Apply GeoRuleMatrix consistency checks.
 
@@ -748,13 +789,32 @@ def _geo_currency_tax_consistency(
             + ", ".join(geos)
             + "). No penalty applied; review only if other anomalies exist."
         )
+        _emit_event(
+            events=events,
+            reasons=None,
+            rule_id="GEO_CROSS_BORDER_HINTS",
+            severity="INFO",
+            weight=0.0,
+            message="Multiple region hints detected; treating as cross-border (no geo penalty)",
+            evidence={"geo_candidates": geos, "currency_detected": currency, "tax_detected": tax},
+        )
         return score_delta
 
+    # No geo detected → can't validate; keep as a minor note (no penalty)
     if len(geos) == 0:
         if currency or tax:
             minor_notes.append(
                 f"🌍 Geo consistency could not be validated (no strong region hints). "
                 f"Detected currency={currency or 'None'}, tax={tax or 'None'}."
+            )
+            _emit_event(
+                events=events,
+                reasons=None,
+                rule_id="GEO_NO_REGION_HINT",
+                severity="INFO",
+                weight=0.0,
+                message="Geo consistency not validated (no strong region hints)",
+                evidence={"currency_detected": currency, "tax_detected": tax},
             )
         return score_delta
 
@@ -765,35 +825,47 @@ def _geo_currency_tax_consistency(
     expected_currencies = cfg.get("currencies", set())
     expected_taxes = cfg.get("tax_regimes", set())
 
-    # Currency mismatch
+    # -------------------- Currency mismatch --------------------
     currency_mismatch = bool(currency and expected_currencies and (currency not in expected_currencies))
     if currency_mismatch:
-        score_delta += 0.30
-        _push_reason(
-            reasons,
-            (
-                "💵🌍 Currency–Geography Consistency Issue: The document's currency does not match the implied region.\n"
+        score_delta += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="GEO_CURRENCY_MISMATCH",
+            severity="CRITICAL",
+            weight=0.30,
+            message="Currency does not match implied region",
+            evidence={
+                "region": region,
+                "currency_detected": currency,
+                "expected_currencies": sorted(list(expected_currencies)),
+                "geo_candidates": geos,
+                "tier": tier,
+            },
+            reason_text=(
+                "💵🌍 Currency–Geography Consistency Issue:\n"
                 f"   • Implied region: {region}\n"
                 f"   • Detected currency: {currency}\n"
-                f"   • Expected currencies for {region}: {sorted(list(expected_currencies))}\n"
+                f"   • Expected currencies: {sorted(list(expected_currencies))}\n"
                 "Mismatches like this are common in fabricated or edited receipts."
             ),
-            severity="CRITICAL",
         )
 
-    # Tax mismatch
+    # -------------------- Tax mismatch --------------------
     if tax and expected_taxes and (tax not in expected_taxes):
-        score_delta += 0.18
-        _push_reason(
-            reasons,
-            (
-                "🧾🌍 Tax–Geography Consistency Issue: Detected tax terminology does not match the implied region.\n"
-                f"   • Implied region: {region}\n"
-                f"   • Detected tax regime: {tax}\n"
-                f"   • Expected tax regimes for {region}: {sorted(list(expected_taxes))}\n"
-                "This can happen due to OCR issues, but it is also common in template-generated fakes."
-            ),
+        score_delta += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="GEO_TAX_MISMATCH",
             severity="CRITICAL",
+            weight=0.18,
+            message="Tax regime terminology does not match implied region",
+            evidence={
+                "region": region,
+                "tax_detected": tax,
+                "expected_taxes": sorted(list(expected_taxes)),
+                "tier": tier,
+            },
         )
 
     # STRICT tier softening for travel/hospitality cross-border receipts
@@ -802,30 +874,61 @@ def _geo_currency_tax_consistency(
             "✈️ Travel/hospitality context detected. Currency–geo mismatch may be legitimate (cross-border). "
             "Downgrading severity to REVIEW and reducing penalty."
         )
+        _emit_event(
+            events=events,
+            reasons=None,
+            rule_id="GEO_TRAVEL_SOFTENER",
+            severity="INFO",
+            weight=0.0,
+            message="Travel/hospitality context detected; reduced geo/currency mismatch penalty",
+            evidence={"region": region, "currency_detected": currency, "tier": tier},
+        )
         score_delta = max(0.0, score_delta - 0.15)
 
-    # Merchant–currency plausibility (additional signal)
+    # -------------------- Merchant–currency plausibility --------------------
     mc_flags = _merchant_currency_plausibility_flags(merchant, currency, blob)
+
     if "cad_us_healthcare" in mc_flags:
-        score_delta += 0.22
-        _push_reason(
-            reasons,
-            (
+        score_delta += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="MERCHANT_CURRENCY_IMPLAUSIBLE",
+            severity="CRITICAL",
+            weight=0.22,
+            message="US healthcare-like merchant with CAD currency but no Canada hints",
+            evidence={
+                "merchant": merchant,
+                "currency_detected": currency,
+                "geo_candidates": geos,
+                "flags": mc_flags,
+                "note": "US healthcare provider billing in CAD without CA geography/tax evidence",
+            },
+            reason_text=(
                 "🏥💱 Merchant–Currency Plausibility Issue: The merchant looks like a US healthcare provider "
                 "(hospital/clinic/medical) but the payable currency appears to be CAD, with no Canadian "
                 "geography/tax evidence."
             ),
-            severity="CRITICAL",
         )
+
     if "inr_us_healthcare" in mc_flags:
-        score_delta += 0.18
-        _push_reason(
-            reasons,
-            (
+        score_delta += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="MERCHANT_CURRENCY_IMPLAUSIBLE",
+            severity="CRITICAL",
+            weight=0.18,
+            message="US healthcare-like merchant with INR currency but no India hints",
+            evidence={
+                "merchant": merchant,
+                "currency_detected": currency,
+                "geo_candidates": geos,
+                "flags": mc_flags,
+                "note": "US healthcare provider billing in INR without IN geography/tax evidence",
+            },
+            reason_text=(
                 "🏥💱 Merchant–Currency Plausibility Issue: The merchant looks like a US healthcare provider "
                 "but the currency appears INR and there are no India indicators."
             ),
-            severity="CRITICAL",
         )
 
     return score_delta
@@ -949,13 +1052,13 @@ def _detect_document_type(text: str) -> str:
     # Distinguish invoice vs receipt.
     # If both appear, treat as ambiguous so downstream can ask for review.
     if inv and rec:
-        return "unknown"
+        return "ambiguous"
     if inv:
         return "invoice"
     if rec:
         return "receipt"
 
-    return "unknown"
+    return "ambiguous"
 
 # -----------------------------------------------------------------------------
 # Tax regime and merchant–currency helpers (NEW for Rule Group 2D/2E)
@@ -1055,6 +1158,16 @@ def _merchant_plausibility_issues(merchant: Optional[str]) -> List[str]:
     ]
     if any(t in ml for t in label_terms):
         issues.append("looks_like_label")
+
+    # 1b) Merchant starts with a label prefix (e.g., "INVOICE NO ...", "RECEIPT #..."),
+    # which often indicates OCR/LLM picked a field label instead of the merchant header.
+    starts_with_terms = [
+        "invoice", "invoice no", "inv no", "receipt", "receipt no", "order", "order id", "transaction", "txn",
+        "bill to", "ship to", "amount due", "total", "subtotal", "date"
+    ]
+    ml_norm = ml.lstrip(":#- ")
+    if any(ml_norm.startswith(t) for t in starts_with_terms):
+        issues.append("starts_with_label")
 
     # 2) Contains too many digits or looks like an identifier
     digits = sum(ch.isdigit() for ch in m)
@@ -1231,40 +1344,24 @@ def _is_critical_reason(reason: str) -> bool:
     return (reason or "").lstrip().startswith("[CRITICAL]")
 
 def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) -> ReceiptDecision:
-    """
-    Convert ReceiptFeatures into a fraud score, label, and reasons.
-    v1 is fully rule-based, with transparent reasoning.
-    """
-
-    # ---------------------------------------------------------------------------
-    # The rule engine builds a fraud score in [0.0, 1.0] by adding weighted points
-    # for each triggered anomaly. See README "Rule Engine Specification" for the
-    # full documentation of all rules, weights, and reasoning.
-    # ---------------------------------------------------------------------------
-
     score = 0.0
-    reasons: List[str] = []       # main/critical reasons
-    minor_notes: List[str] = []   # low-severity metadata observations
+    reasons: List[str] = []
+    minor_notes: List[str] = []
+    events: List[RuleEvent] = []
 
     ff = features.file_features
     tf = features.text_features
     lf = features.layout_features
     fr = features.forensic_features
 
-    source_type = ff.get("source_type")  # "pdf" or "image" (set by metadata pipelines)
+    source_type = ff.get("source_type")
 
     blob_text = _join_text(tf, lf)
     doc_type_hint = _detect_document_type(blob_text)
 
     # ---------------------------------------------------------------------------
     # GeoRuleMatrix wiring (geo/currency/tax consistency)
-    #
-    # This is a data-driven consistency check that looks at:
-    # - implied geo (via detectors)
-    # - currency hints (symbols/keywords)
-    # - tax-regime hints (GST/VAT/Sales Tax/etc.)
-    #
-    # It should never throw; it only contributes to score + explanations.
+    # Must never throw; must never return early.
     # ---------------------------------------------------------------------------
     merchant_hint = (
         tf.get("merchant")
@@ -1278,15 +1375,327 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
             merchant=merchant_hint,
             reasons=reasons,
             minor_notes=minor_notes,
+            events=events,
         )
     except Exception:
-        # Geo consistency must never break scoring
-        minor_notes.append("Geo consistency checks skipped due to an internal parsing error.")
+        minor_notes.append("Geo consistency checks skipped due to an internal error.")
 
     # ---------------------------------------------------------------------------
     # RULE GROUP 1: Producer / metadata anomalies
-    #
-    # These checks inspect PDF/image metadata (producer, creator, creation date,
-    # modification date, EXIF data). Individually these are weak–medium signals,
-    # but in combination they strongly indicate manual editing or template usage.
-    # --------------------------------------------------------<truncated__content/>
+    # ---------------------------------------------------------------------------
+    producer = ff.get("producer", "")
+    creator = ff.get("creator", "")
+    suspicious_tools = [
+        "canva", "photoshop", "illustrator", "sketch", "figma",
+        "affinity", "gimp", "inkscape", "coreldraw", "pixlr",
+        "fotor", "befunky", "snappa", "crello", "desygner",
+        "wps", "ilovepdf", "smallpdf", "pdfcandy", "sejda",
+    ]
+    
+    producer_lower = (producer or "").lower()
+    creator_lower = (creator or "").lower()
+    
+    if any(tool in producer_lower or tool in creator_lower for tool in suspicious_tools):
+        tool_found = next((t for t in suspicious_tools if t in producer_lower or t in creator_lower), "editing software")
+        score += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="R1_SUSPICIOUS_SOFTWARE",
+            severity="HARD_FAIL",
+            weight=0.50,
+            message=f"Suspicious software detected: {tool_found}",
+            evidence={"producer": producer, "creator": creator, "tool": tool_found},
+            reason_text=f"🚨 Suspicious Software Detected: '{tool_found}' - This software is commonly used to create fake receipts.",
+        )
+
+    if not ff.get("creation_date"):
+        minor_notes.append("Document is missing a creation date in its metadata.")
+    
+    if not ff.get("mod_date"):
+        minor_notes.append("Document is missing a modification date in its metadata.")
+    
+    if source_type == "image" and not ff.get("exif_present"):
+        minor_notes.append("Image has no EXIF data (could be a screenshot or exported image).")
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 2: Text-based checks (amounts, merchant, dates)
+    # ---------------------------------------------------------------------------
+    has_any_amount = tf.get("has_any_amount", False)
+    total_line_present = tf.get("total_line_present", False)
+    total_mismatch = tf.get("total_mismatch", False)
+    has_date = tf.get("has_date", False)
+    merchant_candidate = tf.get("merchant_candidate") or tf.get("merchant")
+
+    if not has_any_amount:
+        score += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="R5_NO_AMOUNTS",
+            severity="CRITICAL",
+            weight=0.40,
+            message="No currency amounts detected in document",
+            evidence={"has_any_amount": False},
+            reason_text="💰 No Amounts Detected: The document contains no recognizable currency amounts.",
+        )
+
+    if has_any_amount and not total_line_present:
+        score += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="R6_NO_TOTAL_LINE",
+            severity="CRITICAL",
+            weight=0.15,
+            message="Amounts present but no total line found",
+            evidence={"has_any_amount": True, "total_line_present": False},
+            reason_text="🧾 No Total Line: Document has amounts but no clear total/grand total line.",
+        )
+
+    if total_mismatch:
+        score += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="R7_TOTAL_MISMATCH",
+            severity="CRITICAL",
+            weight=0.40,
+            message="Line items do not sum to printed total",
+            evidence={"total_mismatch": True},
+            reason_text="⚠️ Total Mismatch: Sum of line items does not match the printed total.",
+        )
+
+    if not has_date:
+        score += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="R8_NO_DATE",
+            severity="CRITICAL",
+            weight=0.20,
+            message="No date found in document",
+            evidence={"has_date": False},
+            reason_text="📅 No Date Found: Receipt/invoice is missing a transaction date.",
+        )
+
+    if not merchant_candidate:
+        score += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="R9_NO_MERCHANT",
+            severity="CRITICAL",
+            weight=0.15,
+            message="No merchant name could be identified",
+            evidence={"merchant_candidate": None},
+            reason_text="🏪 No Merchant: Could not identify a merchant/vendor name.",
+        )
+
+    # Merchant plausibility checks
+    if merchant_candidate:
+        issues = _merchant_plausibility_issues(merchant_candidate)
+        if issues:
+            reason_msg = _format_merchant_issue_reason(merchant_candidate, issues)
+
+            # One score contribution (avoid double-penalizing for multiple issue flags)
+            weight = 0.12
+            if any(it in issues for it in ("looks_like_label", "looks_like_identifier")):
+                weight = 0.18
+
+            score += _emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="MERCHANT_IMPLAUSIBLE",
+                severity="CRITICAL",
+                weight=weight,
+                message="Merchant name appears implausible",
+                evidence={"merchant": merchant_candidate, "issues": issues},
+                reason_text=reason_msg,
+            )
+
+    # Document type checks
+    # _detect_document_type returns "unknown" when invoice+receipt language is mixed
+    if doc_type_hint == "unknown":
+        score += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="R9B_DOC_TYPE_UNKNOWN_OR_MIXED",
+            severity="CRITICAL",
+            weight=0.15,
+            message="Document type unclear or mixed (invoice/receipt language)",
+            evidence={"doc_type": doc_type_hint},
+            reason_text="📄 Document Type Ambiguity: Contains mixed/unclear invoice/receipt language.",
+        )
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 3: Layout anomalies
+    # ---------------------------------------------------------------------------
+    num_lines = lf.get("num_lines", 0)
+    numeric_line_ratio = lf.get("numeric_line_ratio", 0.0)
+
+    if num_lines < 5:
+        score += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="R10_TOO_FEW_LINES",
+            severity="INFO",
+            weight=0.15,
+            message=f"Very few lines detected ({num_lines})",
+            evidence={"num_lines": num_lines},
+            reason_text=f"📏 Too Few Lines: Only {num_lines} lines detected (typical receipts have more).",
+        )
+
+    if num_lines > 120:
+        score += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="R11_TOO_MANY_LINES",
+            severity="INFO",
+            weight=0.10,
+            message=f"Unusually many lines ({num_lines})",
+            evidence={"num_lines": num_lines},
+            reason_text=f"📏 Too Many Lines: {num_lines} lines (could be noisy OCR or filler text).",
+        )
+
+    if numeric_line_ratio > 0.8 and num_lines > 10:
+        score += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="R12_HIGH_NUMERIC_RATIO",
+            severity="INFO",
+            weight=0.10,
+            message="Very high numeric line ratio",
+            evidence={"numeric_line_ratio": numeric_line_ratio, "num_lines": num_lines},
+            reason_text=f"🔢 High Numeric Ratio: {numeric_line_ratio:.0%} of lines are purely numeric.",
+        )
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 4: Forensic cues
+    # ---------------------------------------------------------------------------
+    uppercase_ratio = fr.get("uppercase_ratio", 0.0)
+    unique_char_count = fr.get("unique_char_count", 0)
+
+    if uppercase_ratio > 0.8 and num_lines > 5:
+        score += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="R13_HIGH_UPPERCASE",
+            severity="INFO",
+            weight=0.10,
+            message="High uppercase character ratio",
+            evidence={"uppercase_ratio": uppercase_ratio},
+            reason_text=f"🔠 High Uppercase: {uppercase_ratio:.0%} uppercase (template-like).",
+        )
+
+    if unique_char_count < 15 and num_lines > 5:
+        score += _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="R14_LOW_CHAR_VARIETY",
+            severity="INFO",
+            weight=0.15,
+            message="Low character variety",
+            evidence={"unique_char_count": unique_char_count},
+            reason_text=f"🔤 Low Character Variety: Only {unique_char_count} unique characters.",
+        )
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 5: Date validation (impossible dates, suspicious gaps)
+    # ---------------------------------------------------------------------------
+    receipt_date_str = tf.get("date_extracted") or tf.get("receipt_date")
+    creation_date_str = ff.get("creation_date")
+
+    if receipt_date_str and creation_date_str:
+        receipt_date = _parse_date_best_effort(receipt_date_str)
+        creation_datetime = _parse_pdf_creation_datetime_best_effort(creation_date_str)
+
+        if receipt_date and creation_datetime:
+            creation_date = creation_datetime.date()
+
+            if receipt_date > creation_date:
+                score += _emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R15_IMPOSSIBLE_DATE_SEQUENCE",
+                    severity="HARD_FAIL",
+                    weight=0.40,
+                    message="Receipt date is AFTER file creation date (impossible)",
+                    evidence={
+                        "receipt_date": receipt_date_str,
+                        "creation_date": creation_date_str,
+                        "receipt_date_parsed": str(receipt_date),
+                        "creation_date_parsed": str(creation_date),
+                    },
+                    reason_text=(
+                        f"📅🚨 Impossible Date Sequence: Receipt dated {receipt_date} "
+                        f"but file created {creation_date}."
+                    ),
+                )
+            else:
+                gap_days = (creation_date - receipt_date).days
+                if gap_days > 2:
+                    score += _emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="R16_SUSPICIOUS_DATE_GAP",
+                        severity="CRITICAL",
+                        weight=0.35,
+                        message=f"File created {gap_days} days after receipt date",
+                        evidence={
+                            "receipt_date": receipt_date_str,
+                            "creation_date": creation_date_str,
+                            "gap_days": gap_days,
+                        },
+                        reason_text=(
+                            f"📅⚠️ Suspicious Date Gap: File created {gap_days} days "
+                            f"after receipt date (backdating pattern)."
+                        ),
+                    )
+        elif receipt_date_str and not receipt_date:
+            score += _emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="R17_UNPARSABLE_DATE",
+                severity="CRITICAL",
+                weight=0.25,
+                message="Receipt date present but unparsable",
+                evidence={"receipt_date_str": receipt_date_str},
+                reason_text=f"📅❓ Unparsable Date: '{receipt_date_str}' cannot be parsed into known format.",
+            )
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 6: Apply learned rules from feedback
+    # ---------------------------------------------------------------------------
+    if apply_learned:
+        try:
+            from app.pipelines.learning import apply_learned_rules
+            learned_adjustment, triggered_rules = apply_learned_rules(features.__dict__)
+            if learned_adjustment != 0.0:
+                score += learned_adjustment
+                score = max(0.0, min(1.0, score))
+                for rule in triggered_rules:
+                    reasons.append(f"[INFO] 🎓 Learned Rule: {rule}")
+        except Exception as e:
+            logger.warning(f"Failed to apply learned rules: {e}")
+
+    # ---------------------------------------------------------------------------
+    # Final label determination (single source of truth)
+    # ---------------------------------------------------------------------------
+    score = max(0.0, min(1.0, float(score)))
+    has_hard_fail = any(e.severity == "HARD_FAIL" for e in events)
+    critical_count = sum(1 for e in events if e.severity == "CRITICAL")
+    
+    if has_hard_fail:
+        label = "fake"
+    elif critical_count >= 2:
+        label = "fake"
+    elif score >= 0.70:
+        label = "fake"
+    elif score >= 0.35:
+        label = "suspicious"
+    else:
+        label = "real"
+    
+    return ReceiptDecision(
+        score=score,
+        label=label,
+        reasons=reasons,
+        minor_notes=minor_notes,
+        events=[asdict(e) for e in events],
+    )
+    

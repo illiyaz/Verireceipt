@@ -16,8 +16,10 @@ This makes it easy to:
 """
 
 import os
+import json
 from abc import ABC, abstractmethod
 from typing import Any, Optional
+from dataclasses import asdict
 
 from app.schemas.receipt import ReceiptDecision
 from app.utils.logger import log_decision  # CSV-based logger (already implemented)
@@ -290,13 +292,22 @@ class DbReceiptStore(ReceiptStore):
 
             # 2. Build Analysis row
             features = decision.features
+            
+            # Serialize audit_events and events to JSON
+            audit_events_json = json.dumps([asdict(e) for e in decision.audit_events]) if decision.audit_events else None
+            events_json = json.dumps(decision.events) if decision.events else None
+            
             analysis = db_models.Analysis(
                 receipt_id=receipt.id,
                 engine_label=decision.label,
                 engine_score=decision.score,
-                engine_version="rules-v1.0",  # TODO: make configurable
+                engine_version=decision.engine_version or "rules-v1.0",
+                rule_version=decision.rule_version,
+                policy_version=decision.policy_version,
                 reasons=decision.reasons,
                 minor_notes=decision.minor_notes,
+                audit_events=audit_events_json,
+                events=events_json,
                 features={
                     # Store all features as one JSON dict for ML.
                     **(features.file_features if features else {}),

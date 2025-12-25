@@ -16,9 +16,11 @@ We log:
 """
 
 import csv
+import json
 import os
 from datetime import datetime
 from typing import Dict, Any
+from dataclasses import asdict
 
 from app.schemas.receipt import ReceiptDecision, ReceiptFeatures
 
@@ -79,6 +81,13 @@ def _decision_to_row(file_path: str, decision: ReceiptDecision) -> Dict[str, Any
         "label": decision.label,
         "score": decision.score,
         "timestamp_utc": timestamp,
+        "rule_version": decision.rule_version,
+        "policy_version": decision.policy_version,
+        "engine_version": decision.engine_version,
+        "audit_events": json.dumps([asdict(e) for e in decision.audit_events]) if decision.audit_events else "[]",
+        "events": json.dumps(decision.events) if decision.events else "[]",
+        "reasons_count": len(decision.reasons),
+        "minor_notes_count": len(decision.minor_notes) if decision.minor_notes else 0,
     }
 
     if decision.features is not None:
