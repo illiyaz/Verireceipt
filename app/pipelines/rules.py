@@ -11,7 +11,169 @@ from app.schemas.receipt import (
 from app.pipelines.ingest import ingest_and_ocr
 from app.pipelines.features import build_features
 
+
 logger = logging.getLogger(__name__)
+
+# -----------------------------------------------------------------------------
+# Helper utilities (keep rule logic self-contained)
+# -----------------------------------------------------------------------------
+
+def _join_text(tf: dict, lf: dict) -> str:
+    """Best-effort text blob for rules that need raw content.
+
+    Prefer OCR/text pipeline output if available, else fall back to layout lines.
+    """
+    raw = tf.get("raw_text") or tf.get("text") or ""
+    if raw and isinstance(raw, str):
+        return raw
+
+    lines = lf.get("lines") or []
+    if isinstance(lines, list) and lines:
+        return "\n".join([str(x) for x in lines])
+    return ""
+
+
+def _has_any_pattern(text: str, patterns: List[str]) -> bool:
+    t = (text or "").lower()
+    return any(p.lower() in t for p in patterns)
+
+
+def _looks_like_gstin(text: str) -> bool:
+    """Indian GSTIN: 15 chars: 2 digits + 10 PAN chars + 1 + Z + 1.
+    Example: 27AAPFU0939F1ZV
+    """
+    import re
+
+    t = (text or "").upper()
+    return bool(re.search(r"\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b", t))
+
+
+def _looks_like_pan(text: str) -> bool:
+    """Indian PAN: 10 chars: 5 letters + 4 digits + 1 letter."""
+    import re
+
+    t = (text or "").upper()
+    return bool(re.search(r"\b[A-Z]{5}\d{4}[A-Z]\b", t))
+
+
+def _looks_like_ein(text: str) -> bool:
+    """US EIN: 2 digits hyphen 7 digits (e.g., 12-3456789)."""
+    import re
+
+    t = (text or "")
+    return bool(re.search(r"\b\d{2}-\d{7}\b", t))
+
+
+def _detect_us_state_hint(text: str) -> bool:
+    """Lightweight US signal: state abbreviations or common state names."""
+    us_hints = [
+        "alabama",
+        "alaska",
+        "arizona",
+        "arkansas",
+        "california",
+        "colorado",
+        "connecticut",
+        "delaware",
+        "florida",
+        "georgia",
+        "hawaii",
+        "idaho",
+        "illinois",
+        "indiana",
+        "iowa",
+        "kansas",
+        "kentucky",
+        "louisiana",
+        "maine",
+        "maryland",
+        "massachusetts",
+        "michigan",
+        "minnesota",
+        "mississippi",
+        "missouri",
+        "montana",
+        "nebraska",
+        "nevada",
+        "new york",
+        "new jersey",
+        "new mexico",
+        "north carolina",
+        "north dakota",
+        "ohio",
+        "oklahoma",
+        "oregon",
+        "pennsylvania",
+        "rhode island",
+        "south carolina",
+        "south dakota",
+        "tennessee",
+        "texas",
+        "utah",
+        "vermont",
+        "virginia",
+        "washington",
+        "west virginia",
+        "wisconsin",
+        "wyoming",
+        # common abbreviations (space-padded matching below)
+        " ca ",
+        " ny ",
+        " nj ",
+        " tx ",
+        " fl ",
+        " il ",
+        " in ",
+        " wa ",
+        " ma ",
+        " pa ",
+    ]
+    t = f" {(text or '').lower()} "
+    return any(h in t for h in us_hints)
+
+
+def _detect_india_hint(text: str) -> bool:
+    """Lightweight India signal: state names, PIN (6 digits), +91, INR."""
+    import re
+
+    t = (text or "").lower()
+    if "+91" in t or "india" in t or " inr" in t or "₹" in t:
+        return True
+    if re.search(r"\b\d{6}\b", t):  # PIN
+        return True
+    states = [
+        "andhra pradesh",
+        "telangana",
+        "karnataka",
+        "tamil nadu",
+        "kerala",
+        "maharashtra",
+        "gujarat",
+        "rajasthan",
+        "uttar pradesh",
+        "madhya pradesh",
+        "bihar",
+        "jharkhand",
+        "west bengal",
+        "odisha",
+        "punjab",
+        "haryana",
+        "delhi",
+        "assam",
+        "goa",
+    ]
+    return any(s in t for s in states)
+
+
+def _currency_hint(text: str) -> Optional[str]:
+    """Return best-effort currency hint (USD/INR/None) based on symbols/keywords."""
+    t = (text or "")
+    tl = t.lower()
+    if "$" in t or " usd" in tl:
+        return "USD"
+    if "₹" in t or " inr" in tl or "rupees" in tl or "rs." in tl or "rs " in tl:
+        return "INR"
+    return None
 
 
 def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) -> ReceiptDecision:
@@ -36,6 +198,8 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
     fr = features.forensic_features
 
     source_type = ff.get("source_type")  # "pdf" or "image" (set by metadata pipelines)
+
+    blob_text = _join_text(tf, lf)
 
     # ---------------------------------------------------------------------------
     # RULE GROUP 1: Producer / metadata anomalies
@@ -637,7 +801,131 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
             f"({len(currency_symbols)} different currencies) indicate the receipt was manually created "
             f"by combining elements from different sources or templates."
         )
-    
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 12: Cross-field consistency rules (strong fraud signals)
+    #
+    # These rules catch synthetic / template invoices that look visually valid
+    # but fail basic real-world consistency checks (geo, tax regime, identifiers).
+    # ---------------------------------------------------------------------------
+
+    # R30: Geography mismatch (US-style address cues + India cues like +91/PIN/GST)
+    addr_text = " ".join(
+        [
+            str(tf.get("merchant_address") or ""),
+            str(tf.get("city") or ""),
+            str(tf.get("state") or ""),
+            str(tf.get("pin_code") or ""),
+            str(tf.get("country") or ""),
+        ]
+    )
+    phone_text = str(tf.get("merchant_phone") or "")
+
+    us_hint = _detect_us_state_hint(addr_text) or _detect_us_state_hint(blob_text)
+    india_hint = _detect_india_hint(addr_text) or _detect_india_hint(blob_text)
+    phone_india = "+91" in phone_text or "+91" in blob_text
+
+    if us_hint and (india_hint or phone_india):
+        score += 0.30
+        reasons.append(
+            "🌍 Geography Mismatch: The document mixes US location cues with India cues "
+            "(e.g., +91 phone/PIN/state references). Legitimate invoices rarely mix jurisdictions "
+            "like this without clear cross-border context."
+        )
+
+    # R31: Currency vs tax-regime mismatch (USD with GST terms; INR with US sales-tax terms)
+    currency_from_features = None
+    if isinstance(tf.get("currency_symbols"), list) and tf.get("currency_symbols"):
+        syms = tf.get("currency_symbols")
+        if "$" in syms:
+            currency_from_features = "USD"
+        if "₹" in syms and currency_from_features is None:
+            currency_from_features = "INR"
+
+    currency_hint = currency_from_features or _currency_hint(blob_text)
+
+    has_gst_terms = (
+        _has_any_pattern(blob_text, ["gst", "cgst", "sgst", "igst"])
+        or bool(tf.get("has_cgst") or tf.get("has_sgst") or tf.get("has_igst"))
+    )
+    has_us_tax_terms = _has_any_pattern(blob_text, ["sales tax", "state tax", "county tax"])
+
+    if currency_hint == "USD" and has_gst_terms:
+        score += 0.30
+        reasons.append(
+            "💱 Tax/Currency Inconsistency: USD formatting combined with GST terms "
+            "(GST/CGST/SGST/IGST) is highly unusual and commonly seen in fabricated invoices."
+        )
+    elif currency_hint == "INR" and has_us_tax_terms and not has_gst_terms:
+        score += 0.15
+        reasons.append(
+            "💱 Tax/Currency Inconsistency: The document looks India/INR-oriented but uses US sales-tax "
+            "terminology without GST breakdown. This mismatch is suspicious for reimbursement receipts."
+        )
+
+    # R32: Missing mandatory identifiers for high-value invoices
+    total_amount = tf.get("total_amount")
+    high_value_threshold = 100000  # conservative INR-like threshold
+
+    if isinstance(total_amount, (int, float)) and total_amount >= high_value_threshold:
+        has_gstin = bool(tf.get("gstin")) or _looks_like_gstin(blob_text)
+        has_pan = bool(tf.get("pan")) or _looks_like_pan(blob_text)
+        has_ein = bool(tf.get("ein")) or _looks_like_ein(blob_text)
+
+        if not (has_gstin or has_pan or has_ein):
+            score += 0.25
+            reasons.append(
+                f"🪪 Missing Business Identifiers: High-value invoice (total={total_amount:.2f}) but no "
+                "GSTIN/PAN/EIN-like identifier was found. Legitimate businesses usually include legal/"
+                "registration identifiers on invoices."
+            )
+
+    # R33: Template / placeholder artifacts
+    if _has_any_pattern(
+        blob_text,
+        [
+            "<payment terms",
+            "<payment term",
+            "<due on receipt",
+            "invoice template",
+        ],
+    ):
+        score += 0.20
+        reasons.append(
+            "📄 Template Artifact Detected: Placeholder-like text (e.g., '<Payment terms...>') suggests "
+            "the invoice was created from a template rather than generated by a POS/accounting system."
+        )
+
+    # R34: Vague, high-value line item descriptions without breakdown
+    if _has_any_pattern(
+        blob_text,
+        [
+            "incidentals",
+            "incidental",
+            "consultation",
+            "professional fee",
+            "service fee",
+        ],
+    ):
+        has_breakdown_terms = _has_any_pattern(
+            blob_text,
+            [
+                "hour",
+                "hrs",
+                "hourly",
+                "rate",
+                "/hr",
+                "per hour",
+                "ref:",
+                "case id",
+            ],
+        )
+        if not has_breakdown_terms and isinstance(total_amount, (int, float)) and total_amount >= high_value_threshold:
+            score += 0.15
+            reasons.append(
+                "🧾 Vague High-Value Charges: Generic fee terms (e.g., 'Incidentals'/'Consultation') but no "
+                "basic breakdown (hours/rates/reference). This pattern is common in fabricated invoices."
+            )
     # --- R25: Address Validation ---------------------------------------------
     merchant_address = tf.get("merchant_address")
     if merchant_address:
