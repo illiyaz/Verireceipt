@@ -30,10 +30,10 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
     reasons: List[str] = []       # main/critical reasons
     minor_notes: List[str] = []   # low-severity metadata observations
 
-    ff = feats.file_features
-    tf = feats.text_features
-    lf = feats.layout_features
-    fr = feats.forensic_features
+    ff = features.file_features
+    tf = features.text_features
+    lf = features.layout_features
+    fr = features.forensic_features
 
     source_type = ff.get("source_type")  # "pdf" or "image" (set by metadata pipelines)
 
@@ -761,7 +761,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
         try:
             from app.pipelines.learning import apply_learned_rules
             
-            learned_adjustment, triggered_rules = apply_learned_rules(feats.__dict__)
+            learned_adjustment, triggered_rules = apply_learned_rules(features.__dict__)
             
             if learned_adjustment != 0.0:
                 score += learned_adjustment
@@ -787,7 +787,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
         label=label,
         score=score,
         reasons=reasons,
-        features=feats,
+        features=features,
         minor_notes=minor_notes or None,
     )
 
