@@ -50,5 +50,12 @@ class ReceiptDecision:
     label: str                      # "real", "fake", "suspicious"
     score: float                    # 0.0 - 1.0
     reasons: List[str]              # human-readable explanations
+
+    # --- Audit / explainability metadata ------------------------------------
+    rule_version: str = "0.0.0"     # Ruleset version used for this verdict
+    engine_version: str = "0.0.0"   # App/build version (optional but useful)
+
+    # --- Optional debugging payloads ----------------------------------------
     features: Optional[ReceiptFeatures] = None  # optional, for debugging/analytics
     minor_notes: Optional[List[str]] = None
+    debug: Optional[Dict[str, Any]] = None      # structured metadata (model scores, geo/currency, etc.)
