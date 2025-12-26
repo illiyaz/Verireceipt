@@ -624,6 +624,272 @@ def _guess_merchant_line(lines: List[str]) -> Optional[str]:
     return None
 
 
+# --- Helper: Document profile / type inference -----------------------------
+
+def _detect_document_profile(full_text: str, lines: List[str]) -> Dict[str, Any]:
+    """Infer a coarse document family/subtype from text.
+
+    This is intentionally heuristic (no LLM) and should be stable/offline.
+
+    Supported taxonomy (doc_family_guess / doc_subtype_guess):
+      - TRANSACTIONAL:
+          POS_RESTAURANT, POS_RETAIL, ECOMMERCE, HOTEL_FOLIO, FUEL, PARKING, TRANSPORT, MISC,
+          TAX_INVOICE, VAT_INVOICE, COMMERCIAL_INVOICE, SERVICE_INVOICE, SHIPPING_INVOICE,
+          PROFORMA, CREDIT_NOTE, DEBIT_NOTE,
+          UTILITY, TELECOM, SUBSCRIPTION, RENT, INSURANCE
+      - LOGISTICS:
+          SHIPPING_BILL, BILL_OF_LADING, AIR_WAYBILL, DELIVERY_NOTE
+      - PAYMENT:
+          PAYMENT_RECEIPT, BANK_SLIP, CARD_CHARGE_SLIP, REFUND_RECEIPT
+
+    Returns:
+      {
+        "doc_family_guess": "TRANSACTIONAL"|"LOGISTICS"|"PAYMENT"|"UNKNOWN",
+        "doc_subtype_guess": str,
+        "doc_profile_confidence": float (0..1),
+        "doc_profile_evidence": [str, ...]
+      }
+    """
+
+    text = (full_text or "").lower()
+    top = "\n".join((lines or [])[:30]).lower()
+
+    # Keyword buckets. Keep interpretable and stable.
+    # We score *subtypes* first, then derive the family from the winning subtype.
+    subtype_keywords: Dict[str, List[str]] = {
+        # --- TRANSACTIONAL / RECEIPT --------------------------------------
+        "POS_RESTAURANT": [
+            "table", "server", "gratuity", "tip", "covers", "dine in", "dine-in",
+            "restaurant", "cafe", "bar", "food", "beverage", "gst on food",
+        ],
+        "POS_RETAIL": [
+            "pos", "terminal", "till", "cashier", "thank you", "change due",
+            "qty", "sku", "barcode", "item", "discount", "store", "receipt",
+        ],
+        "ECOMMERCE": [
+            "order id", "order #", "order number", "shipment", "delivered", "tracking",
+            "invoice for your order", "sold by", "fulfilled", "marketplace", "platform fee",
+        ],
+        "HOTEL_FOLIO": [
+            "folio", "room", "room no", "check-in", "check out", "check-out",
+            "nightly rate", "stay", "guest", "front desk", "hotel", "resort",
+        ],
+        "FUEL": [
+            "fuel", "petrol", "diesel", "litre", "liter", "pump", "nozzle",
+            "price/l", "price per litre", "total litres", "odometer",
+        ],
+        "PARKING": [
+            "parking", "park", "slot", "entry time", "exit time", "duration",
+            "vehicle", "license plate", "parking fee",
+        ],
+        "TRANSPORT": [
+            "taxi", "uber", "ola", "ride", "trip", "km", "fare", "driver",
+            "boarding", "ticket", "bus", "train", "metro",
+        ],
+        "MISC": [
+            "receipt", "cash memo", "cashmemo", "invoice cum receipt", "bill",
+        ],
+
+        # --- TRANSACTIONAL / INVOICE --------------------------------------
+        "TAX_INVOICE": [
+            "tax invoice", "gstin", "gst", "hsn", "sac", "place of supply",
+            "cgst", "sgst", "igst",
+        ],
+        "VAT_INVOICE": [
+            "vat invoice", "vat no", "vat number", "vat registration", "vat%", "vat amount",
+        ],
+        "COMMERCIAL_INVOICE": [
+            "commercial invoice", "incoterms", "hs code", "country of origin",
+            "consignee", "shipper", "export", "import",
+        ],
+        "SERVICE_INVOICE": [
+            "service invoice", "service period", "hours", "rate", "professional fee",
+            "consulting", "maintenance", "support fee",
+        ],
+        "SHIPPING_INVOICE": [
+            "shipping invoice", "freight", "freight charges", "carrier", "awb",
+            "tracking", "shipment", "port", "vessel",
+        ],
+        "PROFORMA": [
+            "proforma", "pro forma", "proforma invoice", "quotation", "quote",
+        ],
+        "CREDIT_NOTE": [
+            "credit note", "credit memo", "cn no", "credit amount", "credited",
+        ],
+        "DEBIT_NOTE": [
+            "debit note", "debit memo", "dn no", "debit amount", "debited",
+        ],
+
+        # --- TRANSACTIONAL / BILL -----------------------------------------
+        "UTILITY": [
+            "electricity", "power bill", "water bill", "gas bill", "meter", "kwh",
+            "units consumed", "billing period",
+        ],
+        "TELECOM": [
+            "telecom", "mobile bill", "postpaid", "prepaid", "data usage", "minutes used",
+            "roaming", "imei",
+        ],
+        "SUBSCRIPTION": [
+            "subscription", "plan", "renewal", "monthly", "annual", "billing cycle",
+            "auto-renew", "recurring",
+        ],
+        "RENT": [
+            "rent", "lease", "tenant", "landlord", "rental period", "security deposit",
+        ],
+        "INSURANCE": [
+            "insurance", "policy", "premium", "coverage", "insured", "claim",
+            "policy number",
+        ],
+
+        # --- LOGISTICS ------------------------------------------------------
+        "SHIPPING_BILL": [
+            "shipping bill", "sb no", "let export order", "leo", "customs",
+            "exporter", "ad code",
+        ],
+        "BILL_OF_LADING": [
+            "bill of lading", "b/l", "bl no", "vessel", "port of loading",
+            "port of discharge", "container", "seal",
+        ],
+        "AIR_WAYBILL": [
+            "airway bill", "air waybill", "awb", "air cargo", "iata",
+            "consignee", "shipper",
+        ],
+        "DELIVERY_NOTE": [
+            "delivery note", "delivery challan", "challan", "pod", "proof of delivery",
+            "delivered to", "received by",
+        ],
+
+        # --- PAYMENT --------------------------------------------------------
+        "PAYMENT_RECEIPT": [
+            "payment receipt", "paid", "payment successful", "payment reference",
+            "transaction id", "txn id", "utr", "rrn", "auth code",
+        ],
+        "BANK_SLIP": [
+            "deposit slip", "bank slip", "pay-in slip", "cheque", "cheque no",
+            "account no", "branch", "ifsc", "swift",
+        ],
+        "CARD_CHARGE_SLIP": [
+            "charge slip", "card slip", "merchant copy", "customer copy",
+            "terminal id", "tid", "mid", "approval code", "card number",
+        ],
+        "REFUND_RECEIPT": [
+            "refund", "refunded", "refund receipt", "refund id", "refunded to",
+            "return", "reversal",
+        ],
+    }
+
+    # Base weights: strong, document-specific phrases should dominate.
+    subtype_weight: Dict[str, float] = {
+        # Transactional receipts
+        "POS_RESTAURANT": 1.0,
+        "POS_RETAIL": 0.9,
+        "ECOMMERCE": 0.95,
+        "HOTEL_FOLIO": 1.0,
+        "FUEL": 1.0,
+        "PARKING": 0.9,
+        "TRANSPORT": 0.85,
+        "MISC": 0.6,
+        # Transactional invoices
+        "TAX_INVOICE": 1.0,
+        "VAT_INVOICE": 1.0,
+        "COMMERCIAL_INVOICE": 1.0,
+        "SERVICE_INVOICE": 0.9,
+        "SHIPPING_INVOICE": 0.95,
+        "PROFORMA": 0.9,
+        "CREDIT_NOTE": 1.0,
+        "DEBIT_NOTE": 1.0,
+        # Transactional bills
+        "UTILITY": 0.95,
+        "TELECOM": 0.9,
+        "SUBSCRIPTION": 0.85,
+        "RENT": 0.85,
+        "INSURANCE": 0.9,
+        # Logistics
+        "SHIPPING_BILL": 1.0,
+        "BILL_OF_LADING": 1.0,
+        "AIR_WAYBILL": 1.0,
+        "DELIVERY_NOTE": 0.9,
+        # Payment
+        "PAYMENT_RECEIPT": 0.95,
+        "BANK_SLIP": 0.95,
+        "CARD_CHARGE_SLIP": 0.95,
+        "REFUND_RECEIPT": 0.95,
+    }
+
+    def _hit(hay: str, kw: str) -> bool:
+        return kw in hay
+
+    subtype_scores: Dict[str, float] = {k: 0.0 for k in subtype_keywords}
+    subtype_evidence: Dict[str, List[str]] = {k: [] for k in subtype_keywords}
+
+    # Score using both whole text + top region
+    for subtype, kws in subtype_keywords.items():
+        w = float(subtype_weight.get(subtype, 1.0))
+        for kw in kws:
+            if _hit(text, kw) or _hit(top, kw):
+                subtype_scores[subtype] += w
+                if kw not in subtype_evidence[subtype]:
+                    subtype_evidence[subtype].append(kw)
+
+    # Pick best subtype
+    best_subtype = max(subtype_scores, key=lambda k: subtype_scores[k]) if subtype_scores else "UNKNOWN"
+    best_score = subtype_scores.get(best_subtype, 0.0)
+
+    if best_score <= 0.0:
+        return {
+            "doc_family_guess": "UNKNOWN",
+            "doc_subtype_guess": "UNKNOWN",
+            "doc_profile_confidence": 0.0,
+            "doc_profile_evidence": [],
+        }
+
+    # Derive family from subtype
+    transactional_receipts = {
+        "POS_RESTAURANT", "POS_RETAIL", "ECOMMERCE", "HOTEL_FOLIO", "FUEL", "PARKING", "TRANSPORT", "MISC"
+    }
+    transactional_invoices = {
+        "TAX_INVOICE", "VAT_INVOICE", "COMMERCIAL_INVOICE", "SERVICE_INVOICE", "SHIPPING_INVOICE",
+        "PROFORMA", "CREDIT_NOTE", "DEBIT_NOTE"
+    }
+    transactional_bills = {"UTILITY", "TELECOM", "SUBSCRIPTION", "RENT", "INSURANCE"}
+    logistics = {"SHIPPING_BILL", "BILL_OF_LADING", "AIR_WAYBILL", "DELIVERY_NOTE"}
+    payment = {"PAYMENT_RECEIPT", "BANK_SLIP", "CARD_CHARGE_SLIP", "REFUND_RECEIPT"}
+
+    if best_subtype in logistics:
+        family = "LOGISTICS"
+    elif best_subtype in payment:
+        family = "PAYMENT"
+    else:
+        family = "TRANSACTIONAL"
+
+    # Confidence: simple + bounded.
+    #  - higher when more unique keywords matched for the winner
+    #  - penalize ambiguity when runner-up is close
+    uniq_hits = len(subtype_evidence.get(best_subtype, []))
+    second_best = 0.0
+    for st, sc in subtype_scores.items():
+        if st != best_subtype:
+            second_best = max(second_best, sc)
+
+    raw_conf = min(1.0, 0.25 + 0.16 * uniq_hits)
+    if second_best > 0.0:
+        # Stronger penalty for ambiguity - when multiple document types detected
+        ambiguity_ratio = second_best / max(0.01, best_score)
+        penalty = min(0.65, 0.55 * ambiguity_ratio)
+        raw_conf = max(0.0, raw_conf - penalty)
+
+    # If we only matched very generic tokens (e.g., just "receipt"), cap confidence.
+    if best_subtype == "MISC" and uniq_hits <= 2:
+        raw_conf = min(raw_conf, 0.45)
+
+    return {
+        "doc_family_guess": family,
+        "doc_subtype_guess": best_subtype,
+        "doc_profile_confidence": round(float(raw_conf), 3),
+        "doc_profile_evidence": sorted(subtype_evidence.get(best_subtype, [])),
+    }
+
+
 # --- Helper: basic layout + forensic stats ----------------------------------
 
 def _compute_text_stats(lines: List[str], raw_text: str = None) -> Dict[str, Any]:
@@ -677,6 +943,7 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
 
     full_text, page_texts = _get_all_text_pages(raw)
     lines = full_text.split("\n") if full_text else []
+    doc_profile = _detect_document_profile(full_text, lines)
 
     # --- File & metadata features -------------------------------------------
     meta = raw.pdf_metadata or {}
@@ -773,6 +1040,11 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         "merchant_phone": merchant_phone,
         "city": city,
         "pin_code": pin_code,
+        # NEW: Document profile (heuristic)
+        "doc_family_guess": doc_profile.get("doc_family_guess"),
+        "doc_subtype_guess": doc_profile.get("doc_subtype_guess"),
+        "doc_profile_confidence": doc_profile.get("doc_profile_confidence"),
+        "doc_profile_evidence": doc_profile.get("doc_profile_evidence"),
     }
     # Add tax breakdown info
     text_features.update(tax_breakdown)
