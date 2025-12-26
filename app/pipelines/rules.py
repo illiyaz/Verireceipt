@@ -189,6 +189,78 @@ def _has_total_value(tf: dict) -> bool:
             if _normalize_amount_str(tf.get(k)) is not None:
                 return True
     return False
+# -----------------------------------------------------------------------------
+# Doc-profile aware expectations (used to avoid false-positives)
+# -----------------------------------------------------------------------------
+
+# Subtypes where a printed TOTAL line is often absent or irrelevant
+_DOC_SUBTYPES_TOTAL_OPTIONAL = {
+    # Logistics docs commonly focus on shipment fields, not totals
+    "AIR_WAYBILL",
+    "BILL_OF_LADING",
+    "DELIVERY_NOTE",
+}
+
+# Subtypes where *amounts themselves* are optional/rare
+_DOC_SUBTYPES_AMOUNTS_OPTIONAL = {
+    "DELIVERY_NOTE",
+    "BILL_OF_LADING",
+}
+
+# Subtypes where a transaction date may be missing/less prominent
+_DOC_SUBTYPES_DATE_OPTIONAL = {
+    "DELIVERY_NOTE",
+    "BILL_OF_LADING",
+}
+
+
+def _get_doc_profile(tf: Dict[str, Any], doc_type_hint: Optional[str] = None) -> Dict[str, Any]:
+    """Return doc profile guess from features (preferred) with a safe fallback."""
+    family = tf.get("doc_family_guess") or "UNKNOWN"
+    subtype = tf.get("doc_subtype_guess") or "UNKNOWN"
+    conf = tf.get("doc_profile_confidence")
+
+    try:
+        conf_f = float(conf) if conf is not None else 0.0
+    except Exception:
+        conf_f = 0.0
+
+    # Backward-compatible fallback from older doc_type_hint
+    if subtype == "UNKNOWN" and doc_type_hint:
+        dth = str(doc_type_hint).lower().strip()
+        if dth in ("receipt", "tax_invoice", "invoice"):
+            family = "TRANSACTIONAL"
+            subtype = "TAX_INVOICE" if dth == "tax_invoice" else ("RECEIPT" if dth == "receipt" else "INVOICE")
+            conf_f = max(conf_f, 0.55)
+
+    return {
+        "family": str(family),
+        "subtype": str(subtype),
+        "confidence": max(0.0, min(1.0, conf_f)),
+        "evidence": tf.get("doc_profile_evidence") or [],
+    }
+
+
+def _expects_total_line(doc_profile: Dict[str, Any]) -> bool:
+    subtype = (doc_profile.get("subtype") or "UNKNOWN").upper()
+    # If we are not confident about the subtype, do not be strict
+    if float(doc_profile.get("confidence") or 0.0) < 0.55:
+        return False
+    return subtype not in _DOC_SUBTYPES_TOTAL_OPTIONAL
+
+
+def _expects_amounts(doc_profile: Dict[str, Any]) -> bool:
+    subtype = (doc_profile.get("subtype") or "UNKNOWN").upper()
+    if float(doc_profile.get("confidence") or 0.0) < 0.55:
+        return False
+    return subtype not in _DOC_SUBTYPES_AMOUNTS_OPTIONAL
+
+
+def _expects_date(doc_profile: Dict[str, Any]) -> bool:
+    subtype = (doc_profile.get("subtype") or "UNKNOWN").upper()
+    if float(doc_profile.get("confidence") or 0.0) < 0.55:
+        return False
+    return subtype not in _DOC_SUBTYPES_DATE_OPTIONAL
 
 def _has_any_pattern(text: str, patterns: List[str]) -> bool:
     t = (text or "").lower()
@@ -1559,6 +1631,12 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
     has_date = tf.get("has_date", False)
     merchant_candidate = tf.get("merchant_candidate") or tf.get("merchant")
 
+    # Doc-aware expectations (prevents false-positives on logistics docs etc.)
+    doc_profile = _get_doc_profile(tf, doc_type_hint=doc_type_hint)
+    expects_amounts = _expects_amounts(doc_profile)
+    expects_total_line = _expects_total_line(doc_profile)
+    expects_date = _expects_date(doc_profile)
+
     # If upstream extractors (LayoutLM / DONUT / ensemble) already provided a total,
     # do NOT flag "No Total Line" purely based on missing TOTAL keyword/line.
     extracted_total_raw = (
@@ -1589,37 +1667,83 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
     has_extracted_total = extracted_total_val is not None and extracted_total_val > 0
 
     if not has_any_amount:
-        score += emit_event(
-            events=events,
-            reasons=reasons,
-            rule_id="R5_NO_AMOUNTS",
-            severity="CRITICAL",
-            weight=0.40,
-            message="No currency amounts detected in document",
-            evidence={"has_any_amount": False},
-            reason_text="💰 No Amounts Detected: The document contains no recognizable currency amounts.",
-        )
+        if expects_amounts:
+            score += emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="R5_NO_AMOUNTS",
+                severity="CRITICAL",
+                weight=0.40,
+                message="No currency amounts detected in document",
+                evidence={
+                    "has_any_amount": False,
+                    "doc_family": doc_profile.get("family"),
+                    "doc_subtype": doc_profile.get("subtype"),
+                    "doc_profile_confidence": doc_profile.get("confidence"),
+                },
+                reason_text="💰 No Amounts Detected: The document contains no recognizable currency amounts.",
+            )
+        else:
+            minor_notes.append(
+                "Amounts were not detected, but this document type often does not contain totals/amounts."
+            )
+            emit_event(
+                events=events,
+                reasons=None,
+                rule_id="R5_NO_AMOUNTS_OPTIONAL_FOR_DOC",
+                severity="INFO",
+                weight=0.0,
+                message="No amounts detected but amounts are optional for this doc subtype",
+                evidence={
+                    "has_any_amount": False,
+                    "doc_family": doc_profile.get("family"),
+                    "doc_subtype": doc_profile.get("subtype"),
+                    "doc_profile_confidence": doc_profile.get("confidence"),
+                },
+            )
 
-    if has_any_amount and (not total_line_present) and (not has_total_value):
-        score += emit_event(
-            events=events,
-            reasons=reasons,
-            rule_id="R6_NO_TOTAL_LINE",
-            severity="CRITICAL",
-            weight=0.15,
-            message="Amounts present but no total line found",
-            evidence={
-                "has_any_amount": True,
-                "total_line_present": False,
-                "has_total_value": False,
-            },
-        reason_text="🧾 No Total Line: Document has amounts but no clear total/grand total line.",
-    )
-    elif has_any_amount and (not total_line_present) and has_total_value:
-        minor_notes.append(
-            "🧾 Total value was extracted, but a 'TOTAL/GRAND TOTAL' line was not detected. "
-            "This can happen with noisy OCR; no penalty applied."
-        )
+    if has_any_amount and not total_line_present:
+        # If we can still extract a usable total value, do not penalize as "No Total Line".
+        has_usable_total_value = bool(_has_total_value(tf) or has_extracted_total)
+
+        if expects_total_line and not has_usable_total_value:
+            score += emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="R6_NO_TOTAL_LINE",
+                severity="CRITICAL",
+                weight=0.15,
+                message="Amounts present but no total line found",
+                evidence={
+                    "has_any_amount": True,
+                    "total_line_present": False,
+                    "has_usable_total_value": has_usable_total_value,
+                    "doc_family": doc_profile.get("family"),
+                    "doc_subtype": doc_profile.get("subtype"),
+                    "doc_profile_confidence": doc_profile.get("confidence"),
+                },
+                reason_text="🧾 No Total Line: Document has amounts but no clear total/grand total line.",
+            )
+        else:
+            minor_notes.append(
+                "Total line keyword was not detected, but this document type may not use a TOTAL label (or a total value was extracted)."
+            )
+            emit_event(
+                events=events,
+                reasons=None,
+                rule_id="R6_NO_TOTAL_LINE_OPTIONAL_FOR_DOC",
+                severity="INFO",
+                weight=0.0,
+                message="No TOTAL line keyword, but optional for doc subtype or total value exists",
+                evidence={
+                    "has_any_amount": True,
+                    "total_line_present": False,
+                    "has_usable_total_value": has_usable_total_value,
+                    "doc_family": doc_profile.get("family"),
+                    "doc_subtype": doc_profile.get("subtype"),
+                    "doc_profile_confidence": doc_profile.get("confidence"),
+                },
+            )
 
     if total_mismatch:
         score += emit_event(
@@ -1634,16 +1758,40 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
         )
 
     if not has_date:
-        score += emit_event(
-            events=events,
-            reasons=reasons,
-            rule_id="R8_NO_DATE",
-            severity="CRITICAL",
-            weight=0.20,
-            message="No date found in document",
-            evidence={"has_date": False},
-            reason_text="📅 No Date Found: Receipt/invoice is missing a transaction date.",
-        )
+        if expects_date:
+            score += emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="R8_NO_DATE",
+                severity="CRITICAL",
+                weight=0.20,
+                message="No date found in document",
+                evidence={
+                    "has_date": False,
+                    "doc_family": doc_profile.get("family"),
+                    "doc_subtype": doc_profile.get("subtype"),
+                    "doc_profile_confidence": doc_profile.get("confidence"),
+                },
+                reason_text="📅 No Date Found: Receipt/invoice is missing a transaction date.",
+            )
+        else:
+            minor_notes.append(
+                "Date was not detected, but this document subtype often omits dates (or date is not central)."
+            )
+            emit_event(
+                events=events,
+                reasons=None,
+                rule_id="R8_NO_DATE_OPTIONAL_FOR_DOC",
+                severity="INFO",
+                weight=0.0,
+                message="No date detected but optional for this doc subtype",
+                evidence={
+                    "has_date": False,
+                    "doc_family": doc_profile.get("family"),
+                    "doc_subtype": doc_profile.get("subtype"),
+                    "doc_profile_confidence": doc_profile.get("confidence"),
+                },
+            )
 
     if not merchant_candidate:
         score += emit_event(
@@ -1681,7 +1829,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
 
     # Document type checks
     # _detect_document_type returns "unknown" when invoice+receipt language is mixed
-    if doc_type_hint == "unknown":
+    if doc_type_hint in ("ambiguous", "unknown"):
         score += emit_event(
             events=events,
             reasons=reasons,
@@ -1831,11 +1979,22 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
 
     # ---------------------------------------------------------------------------
     # RULE GROUP 6: Apply learned rules from feedback
-    # ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------     
+
     if apply_learned:
         try:
             from app.pipelines.learning import apply_learned_rules
             learned_adjustment, triggered_rules = apply_learned_rules(features.__dict__)
+            # If doc profile confidence is low, learned rules are less reliable for missing-field claims.
+            # Soft-gate the adjustment instead of fully skipping.
+            
+            if float(doc_profile.get("confidence") or 0.0) < 0.55:
+                learned_adjustment *= 0.65
+
+            # If this doc subtype often omits amounts/totals/dates, reduce learned penalties further.
+            st = (doc_profile.get("subtype") or "").upper()
+            if st in _DOC_SUBTYPES_TOTAL_OPTIONAL or st in _DOC_SUBTYPES_AMOUNTS_OPTIONAL or st in _DOC_SUBTYPES_DATE_OPTIONAL:
+                learned_adjustment *= 0.60
             if learned_adjustment != 0.0:
                 score += learned_adjustment
                 score = max(0.0, min(1.0, score))

@@ -221,7 +221,7 @@ class EnsembleIntelligence:
 
         # Back-compat: also expose under confidence dict
         converged.setdefault("confidence", {})
-        converged["confidence"]["overall"] = overall
+        converged["confidence"]["level"] = converged.get("confidence_level")
 
         return converged
     
@@ -257,6 +257,38 @@ class EnsembleIntelligence:
             return float(amount)
         except Exception:
             return None
+    def _normalize_confidence(self, v: Any, default: float = 0.0) -> float:
+        """Normalize confidence into [0,1]. Accepts 0-1, 0-100, '70%', and string levels."""
+        if v is None:
+            return max(0.0, min(1.0, float(default)))
+
+        if isinstance(v, str):
+            s = v.strip().lower()
+            if not s:
+                return max(0.0, min(1.0, float(default)))
+            if s in ("high", "very high"):
+                return 0.90
+            if s in ("medium", "med"):
+                return 0.70
+            if s in ("low", "very low"):
+                return 0.40
+            try:
+                if s.endswith("%"):
+                    return max(0.0, min(1.0, float(s[:-1].strip()) / 100.0))
+                fv = float(s)
+                if fv > 1.0:
+                    fv = fv / 100.0
+                return max(0.0, min(1.0, fv))
+            except Exception:
+                return max(0.0, min(1.0, float(default)))
+
+        try:
+            fv = float(v)
+            if fv > 1.0:
+                fv = fv / 100.0
+            return max(0.0, min(1.0, fv))
+        except Exception:
+            return max(0.0, min(1.0, float(default)))
     
     def _normalize_rule_score(self, score: Any) -> float:
         """Normalize rule score into [0,1]. Accepts 0-1 floats, 0-100 percents, or strings like '70%'."""
@@ -284,6 +316,21 @@ class EnsembleIntelligence:
         except Exception:
             return 0.5
 
+    def _new_reconciliation_event(
+        self,
+        code: str,
+        message: str,
+        evidence: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Structured reconciliation/audit event that callers can persist."""
+        return {
+            "source": "ensemble",
+            "type": "reconciliation",
+            "code": code,
+            "message": message,
+            "evidence": evidence or {},
+        }
+    
     def _confidence_level(self, score: Any) -> str:
         """Convert a numeric confidence score into a stable string level."""
         try:
@@ -358,7 +405,8 @@ class EnsembleIntelligence:
             "recommended_action": "review",
             "reasoning": [],
             "agreement_score": 0.0,
-            "converged_data": converged_data
+            "converged_data": converged_data,
+            "reconciliation_events": [],
         }
         
         # Ensure downstream always sees consistent extraction confidence
@@ -372,10 +420,8 @@ class EnsembleIntelligence:
         # Step 1: Vision LLM as primary filter
         vision_verdict = results.get("vision_llm", {}).get("verdict", "unknown")
         raw_vision_confidence = results.get("vision_llm", {}).get("confidence", 0.0)
-        try:
-            vision_confidence = float(raw_vision_confidence)
-        except Exception:
-            vision_confidence = 0.0
+        vision_confidence = self._normalize_confidence(raw_vision_confidence, default=0.0)
+
         vision_reasoning = results.get("vision_llm", {}).get("reasoning", "")
         if not isinstance(vision_reasoning, str):
             vision_reasoning = str(vision_reasoning) if vision_reasoning else ""
@@ -437,7 +483,7 @@ class EnsembleIntelligence:
         # 4A) HARD_FAIL always wins
         if has_hard_fail:
             verdict["final_label"] = "fake"
-            verdict["confidence"] = 0.93
+            verdict["confidence"] = self._normalize_confidence(0.93, default=0.93)
             verdict["recommended_action"] = "reject"
             lines = ["🚨 HARD FAIL: Structural inconsistencies detected"]
             for reason in hard_fail_reasons[:5]:
@@ -449,6 +495,21 @@ class EnsembleIntelligence:
                 if l not in seen_lines:
                     verdict["reasoning"].append(l)
                     seen_lines.add(l)
+            verdict["reconciliation_events"].append(
+                self._new_reconciliation_event(
+                    code="ENS_HARD_FAIL_WINS",
+                    message="Rule engine HARD_FAIL overrides visual assessment.",
+                    evidence={
+                        "rule_label": rule_label,
+                        "rule_score": rule_score,
+                        "hard_fail_count": len(hard_fail_reasons),
+                        "hard_fail_reasons_top": hard_fail_reasons[:5],
+                        "vision_verdict": vision_verdict,
+                        "vision_confidence": vision_confidence,
+                        "agreement_score": agreement_score,
+                    },
+                )
+            )
             return verdict
 
         # Thresholds (tunable)
@@ -481,7 +542,7 @@ class EnsembleIntelligence:
         # 4B) Strong rule evidence -> reject (even if it looks real)
         if rule_fake_strong:
             verdict["final_label"] = "fake"
-            verdict["confidence"] = 0.85
+            verdict["confidence"] = self._normalize_confidence(0.85, default=0.85)
             verdict["recommended_action"] = "reject"
             lines = ["❌ Rule Engine detected high-risk fraud indicators"]
             bullet_reasons = critical_reasons[:5] if critical_reasons else rule_reasons[:5]
@@ -495,13 +556,26 @@ class EnsembleIntelligence:
                 if l not in seen_lines:
                     verdict["reasoning"].append(l)
                     seen_lines.add(l)
+            verdict["reconciliation_events"].append(
+                self._new_reconciliation_event(
+                    code="ENS_RULES_STRONG_REJECT",
+                    message="Rule engine strong fraud indicators trigger rejection.",
+                    evidence={
+                        "rule_score": rule_score,
+                        "critical_count": critical_count,
+                        "critical_reasons_top": bullet_reasons[:5],
+                        "vision_verdict": vision_verdict,
+                        "vision_confidence": vision_confidence,
+                    },
+                )
+            )
             return verdict
 
 
         # 4C) Vision says fake with decent confidence -> reject (unless rules are clearly clean)
         if vision_is_fake and not rule_realish:
             verdict["final_label"] = "fake"
-            verdict["confidence"] = 0.80
+            verdict["confidence"] = self._normalize_confidence(0.80, default=0.80)
             verdict["recommended_action"] = "reject"
             lines = [f"❌ Vision LLM: fake (conf={float(vision_confidence or 0.0):.2f})"]
             if rule_label == "fake":
@@ -517,7 +591,7 @@ class EnsembleIntelligence:
         # 4D) Vision/Rules conflict: Vision very confident REAL, rules only moderate -> human review
         if vision_is_real_strong and rule_fake_moderate:
             verdict["final_label"] = "suspicious"
-            verdict["confidence"] = 0.70
+            verdict["confidence"] = self._normalize_confidence(0.70, default=0.70)
             verdict["recommended_action"] = "human_review"
             lines = [
                 "⚠️ Vision/Rules conflict: Vision is highly confident REAL, but rules flagged anomalies.",
@@ -525,6 +599,7 @@ class EnsembleIntelligence:
                 f"❌ Rule Engine: fake (score={rule_score:.2f}, critical_count={critical_count})",
             ]
             bullets = (critical_reasons or rule_reasons)[:5]
+            bullet_reasons = bullets
             for r in bullets:
                 lines.append(f"   • {r}")
             lines.append(f"ℹ️ agreement_score={agreement_score:.2f} (higher = more consistent extraction)")
@@ -534,12 +609,31 @@ class EnsembleIntelligence:
                 if l not in seen_lines:
                     verdict["reasoning"].append(l)
                     seen_lines.add(l)
+            verdict["reconciliation_events"].append(
+                self._new_reconciliation_event(
+                    code="ENS_VISION_RULE_CONFLICT_REVIEW",
+                    message="Vision is highly confident REAL but rules flagged anomalies; routed to human review.",
+                    evidence={
+                        "vision_verdict": vision_verdict,
+                        "vision_confidence": vision_confidence,
+                        "rule_label": rule_label,
+                        "rule_score": rule_score,
+                        "critical_count": critical_count,
+                        "critical_reasons_top": bullet_reasons[:5],
+                        "agreement_score": agreement_score,
+                        "converged_confidence_score": (converged_data or {}).get("confidence_score"),
+                        "converged_confidence_level": (converged_data or {}).get("confidence_level"),
+                    },
+                )
+            )
             return verdict
 
         # 4E) Both engines align on REAL (or rules are clean) -> approve
         if vision_is_real and rule_realish and not has_critical_indicator and critical_count == 0:
             verdict["final_label"] = "real"
-            verdict["confidence"] = min(0.95, 0.75 + (agreement_score * 0.20))
+            # Confidence when both engines align: blend Vision confidence and agreement
+            blended = 0.70 + (0.15 * float(vision_confidence or 0.0)) + (0.20 * float(agreement_score or 0.0))
+            verdict["confidence"] = self._normalize_confidence(min(0.95, blended), default=0.85)
             verdict["recommended_action"] = "approve"
             lines = ["✅ Vision LLM confirms authenticity", "✅ Rule Engine validation passed"]
             if agreement_score >= 0.7:
@@ -550,33 +644,84 @@ class EnsembleIntelligence:
                 if l not in seen_lines:
                     verdict["reasoning"].append(l)
                     seen_lines.add(l)
+            verdict["reconciliation_events"].append(
+                self._new_reconciliation_event(
+                    code="ENS_ALIGN_APPROVE",
+                    message="Vision and rules align; approved.",
+                    evidence={
+                        "vision_verdict": vision_verdict,
+                        "vision_confidence": vision_confidence,
+                        "rule_label": rule_label,
+                        "rule_score": rule_score,
+                        "critical_count": critical_count,
+                        "agreement_score": agreement_score,
+                        "converged_confidence_score": (converged_data or {}).get("confidence_score"),
+                        "converged_confidence_level": (converged_data or {}).get("confidence_level"),
+                    },
+                )
+            )
             return verdict
 
         # 4F) Low-confidence vision: defer to rules + agreement
         if vision_is_low:
             if rule_realish and not has_critical_indicator and critical_count == 0 and agreement_score >= 0.70:
                 verdict["final_label"] = "real"
-                verdict["confidence"] = 0.70
+                blended = 0.55 + (0.25 * float(agreement_score or 0.0)) + (0.20 * (1.0 - float(rule_score or 0.0)))
+                verdict["confidence"] = self._normalize_confidence(min(0.85, blended), default=0.70)
                 verdict["recommended_action"] = "approve"
                 verdict["reasoning"] = [
                     "✅ Rule Engine validation passed",
                     "✅ High agreement across extraction engines",
                     "ℹ️ Vision model was low-confidence; decision based on rules + agreement.",
                 ]
+                verdict["reconciliation_events"].append(
+                    self._new_reconciliation_event(
+                        code="ENS_VISION_LOW_RULES_AGREE_APPROVE",
+                        message="Vision was low-confidence; approved based on rules + high agreement.",
+                        evidence={
+                            "vision_verdict": vision_verdict,
+                            "vision_confidence": vision_confidence,
+                            "rule_label": rule_label,
+                            "rule_score": rule_score,
+                            "critical_count": critical_count,
+                            "agreement_score": agreement_score,
+                            "converged_confidence_score": (converged_data or {}).get("confidence_score"),
+                            "converged_confidence_level": (converged_data or {}).get("confidence_level"),
+                        },
+                    )
+                )
                 return verdict
 
             verdict["final_label"] = rule_label if rule_label in ("real", "fake", "suspicious") else "suspicious"
-            verdict["confidence"] = 0.60
+            review_conf = 0.45 + (0.20 * float(agreement_score or 0.0)) + (0.20 * (1.0 - float(rule_score or 0.0)))
+            verdict["confidence"] = self._normalize_confidence(min(0.75, review_conf), default=0.60)
             verdict["recommended_action"] = "human_review"
             verdict["reasoning"] = [
                 "⚠️ Vision model low-confidence; deferring to rule-based signals.",
                 f"ℹ️ Rule label={rule_label}, score={rule_score:.2f}, critical_count={critical_count}",
             ]
+            verdict["reconciliation_events"].append(
+                self._new_reconciliation_event(
+                    code="ENS_VISION_LOW_DEFER_REVIEW",
+                    message="Vision was low-confidence; deferred to human review using rule signals.",
+                    evidence={
+                        "vision_verdict": vision_verdict,
+                        "vision_confidence": vision_confidence,
+                        "rule_label": rule_label,
+                        "rule_score": rule_score,
+                        "critical_count": critical_count,
+                        "agreement_score": agreement_score,
+                        "has_critical_indicator": has_critical_indicator,
+                        "agreement_threshold": 0.70,
+                        "approve_gate_passed": False,
+                    },
+                )
+            )
             return verdict
 
         # 4G) Remaining conflicts: default to human review
         verdict["final_label"] = "suspicious"
-        verdict["confidence"] = 0.65
+        verdict["confidence"] = self._normalize_confidence(0.65, default=0.65)
         verdict["recommended_action"] = "human_review"
         lines = [
             "⚠️ Conflicting or insufficient evidence for automatic decision",
@@ -589,6 +734,20 @@ class EnsembleIntelligence:
             if l not in seen_lines:
                 verdict["reasoning"].append(l)
                 seen_lines.add(l)
+        verdict["reconciliation_events"].append(
+            self._new_reconciliation_event(
+                code="ENS_DEFAULT_REVIEW",
+                message="Defaulted to human review due to conflict/insufficient evidence.",
+                evidence={
+                    "vision_verdict": vision_verdict,
+                    "vision_confidence": vision_confidence,
+                    "rule_label": rule_label,
+                    "rule_score": rule_score,
+                    "critical_count": critical_count,
+                    "agreement_score": agreement_score,
+                },
+            )
+        )
         return verdict
 
     

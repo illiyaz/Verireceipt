@@ -216,6 +216,8 @@ def run_live_tests():
         "Gas_bill.jpeg",
         "Medplus_sample.jpg",
         "Pizza.jpg",
+        "33984-AASA-FY23.pdf",
+        "81780-24-GLGA.pdf"
     ]
     
     # Test 1: Rule-based analysis
