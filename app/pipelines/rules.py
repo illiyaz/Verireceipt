@@ -13,6 +13,11 @@ from app.schemas.receipt import ReceiptDecision, ReceiptFeatures, ReceiptInput
 
 logger = logging.getLogger(__name__)
 
+# Version tracking for audit trail
+RULE_VERSION = "0.0.1"
+POLICY_VERSION = "0.0.1"
+ENGINE_VERSION = "rules-v0.0.1"
+
 # -----------------------------------------------------------------------------
 # Helper utilities (keep rule logic self-contained)
 # -----------------------------------------------------------------------------
@@ -1863,6 +1868,9 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
         reasons=reasons,
         minor_notes=minor_notes,
         events=[asdict(e) for e in events],
+        rule_version=RULE_VERSION,
+        policy_version=POLICY_VERSION,
+        engine_version=ENGINE_VERSION,
     )
 
 

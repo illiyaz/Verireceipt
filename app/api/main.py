@@ -961,6 +961,25 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         results["hybrid_verdict"] = hybrid
         print(f"   ✅ Final verdict: {ensemble_verdict['final_label']} ({ensemble_verdict['confidence']*100:.0f}%)")
         
+        # Save ensemble verdict to CSV for audit trail
+        try:
+            from app.schemas.receipt import ReceiptDecision
+            ensemble_decision = ReceiptDecision(
+                label=ensemble_verdict["final_label"],
+                score=ensemble_verdict["confidence"],
+                reasons=ensemble_verdict.get("reasoning", []),
+                minor_notes=[],
+                rule_version="0.0.1",
+                policy_version="0.0.1",
+                engine_version="ensemble-v0.0.1",
+                policy_name="ensemble",
+            )
+            ensemble_decision.finalize_defaults()
+            store.save_analysis(str(temp_path), ensemble_decision)
+            print(f"   💾 Ensemble verdict saved to CSV")
+        except Exception as save_err:
+            print(f"   ⚠️ Failed to save ensemble verdict: {save_err}")
+        
     except Exception as e:
         import traceback
         print(f"   ⚠️ Ensemble error: {e}")
