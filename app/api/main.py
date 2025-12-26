@@ -963,7 +963,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         
         # Save ensemble verdict to CSV for audit trail
         try:
-            from app.schemas.receipt import ReceiptDecision
+            from app.schemas.receipt import ReceiptDecision, AuditEvent
             ensemble_decision = ReceiptDecision(
                 label=ensemble_verdict["final_label"],
                 score=ensemble_verdict["confidence"],
@@ -974,9 +974,24 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 engine_version="ensemble-v0.0.1",
                 policy_name="ensemble",
             )
+            
+            # Transfer reconciliation_events from ensemble verdict to audit_events
+            reconciliation_events = ensemble_verdict.get("reconciliation_events", [])
+            for rec_event in reconciliation_events:
+                if isinstance(rec_event, dict):
+                    audit_event = AuditEvent(
+                        source="ensemble",
+                        type=rec_event.get("type", "reconciliation"),
+                        severity=rec_event.get("severity", "INFO"),
+                        code=rec_event.get("code", ""),
+                        message=rec_event.get("message", ""),
+                        evidence=rec_event.get("evidence", {}),
+                    )
+                    ensemble_decision.add_audit_event(audit_event)
+            
             ensemble_decision.finalize_defaults()
             store.save_analysis(str(temp_path), ensemble_decision)
-            print(f"   💾 Ensemble verdict saved to CSV")
+            print(f"   💾 Ensemble verdict saved to CSV with {len(reconciliation_events)} audit events")
         except Exception as save_err:
             print(f"   ⚠️ Failed to save ensemble verdict: {save_err}")
         

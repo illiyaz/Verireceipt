@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from app.pipelines.features import build_features
 from app.pipelines.ingest import ingest_and_ocr
-from app.schemas.receipt import ReceiptDecision, ReceiptFeatures, ReceiptInput
+from app.schemas.receipt import ReceiptDecision, ReceiptFeatures, ReceiptInput ,LearnedRuleAudit
 
 
 logger = logging.getLogger(__name__)
@@ -1979,29 +1979,96 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
 
     # ---------------------------------------------------------------------------
     # RULE GROUP 6: Apply learned rules from feedback
-    # ---------------------------------------------------------------------------     
+    # ---------------------------------------------------------------------------
 
     if apply_learned:
         try:
             from app.pipelines.learning import apply_learned_rules
+
             learned_adjustment, triggered_rules = apply_learned_rules(features.__dict__)
-            # If doc profile confidence is low, learned rules are less reliable for missing-field claims.
-            # Soft-gate the adjustment instead of fully skipping.
-            
-            if float(doc_profile.get("confidence") or 0.0) < 0.55:
+
+            # Soft-gate learned adjustments when doc-type inference is weak.
+            dp_conf = 0.0
+            try:
+                dp_conf = float(doc_profile.get("confidence") or 0.0)
+            except Exception:
+                dp_conf = 0.0
+
+            if dp_conf < 0.55:
                 learned_adjustment *= 0.65
 
             # If this doc subtype often omits amounts/totals/dates, reduce learned penalties further.
-            st = (doc_profile.get("subtype") or "").upper()
-            if st in _DOC_SUBTYPES_TOTAL_OPTIONAL or st in _DOC_SUBTYPES_AMOUNTS_OPTIONAL or st in _DOC_SUBTYPES_DATE_OPTIONAL:
+            st = (doc_profile.get("subtype") or "").upper() if isinstance(doc_profile, dict) else ""
+            optional_subtype = (
+                st in _DOC_SUBTYPES_TOTAL_OPTIONAL
+                or st in _DOC_SUBTYPES_AMOUNTS_OPTIONAL
+                or st in _DOC_SUBTYPES_DATE_OPTIONAL
+            )
+            if optional_subtype:
                 learned_adjustment *= 0.60
+
+            # Apply the total learned adjustment once.
             if learned_adjustment != 0.0:
-                score += learned_adjustment
+                score += float(learned_adjustment)
                 score = max(0.0, min(1.0, score))
-                for rule in triggered_rules:
-                    reasons.append(f"[INFO] 🎓 Learned Rule: {rule}")
+
+            # Emit one audit/event per learned rule trigger (structured, no scoring weight).
+            for rule in (triggered_rules or []):
+                # Keep the existing user-facing reason
+                reasons.append(f"[INFO] 🎓 Learned Rule: {rule}")
+
+                raw = str(rule)
+                pattern = "unknown"
+                times_seen = None
+                conf_adj = 0.0
+
+                m = re.search(r"pattern detected:\s*([a-zA-Z0-9_\-]+)", raw, flags=re.IGNORECASE)
+                if m:
+                    pattern = m.group(1).strip()
+
+                m2 = re.search(r"identified by users\s+(\d+)\s+time", raw, flags=re.IGNORECASE)
+                if m2:
+                    try:
+                        times_seen = int(m2.group(1))
+                    except Exception:
+                        times_seen = None
+
+                m3 = re.search(r"Confidence adjustment:\s*([+\-]?[0-9]*\.?[0-9]+)", raw, flags=re.IGNORECASE)
+                if m3:
+                    try:
+                        conf_adj = float(m3.group(1))
+                    except Exception:
+                        conf_adj = 0.0
+
+                gating = {
+                    "doc_family": doc_profile.get("family") if isinstance(doc_profile, dict) else None,
+                    "doc_subtype": doc_profile.get("subtype") if isinstance(doc_profile, dict) else None,
+                    "doc_profile_confidence": dp_conf,
+                    "optional_subtype": optional_subtype,
+                }
+
+                # Use the standard emitter so downstream logic (e.severity checks) stays consistent.
+                emit_event(
+                    events=events,
+                    reasons=None,
+                    rule_id="LR_LEARNED_PATTERN",
+                    severity="INFO",
+                    weight=0.0,
+                    message="Learned rule triggered",
+                    evidence={
+                        "pattern": pattern,
+                        "times_seen": times_seen,
+                        "raw": raw,
+                        "confidence_adjustment": conf_adj,
+                        "applied_learned_adjustment": float(learned_adjustment),
+                        "gating": gating,
+                    },
+                )
+
         except Exception as e:
             logger.warning(f"Failed to apply learned rules: {e}")
+
+    
 
     # ---------------------------------------------------------------------------
     # Final label determination (single source of truth)

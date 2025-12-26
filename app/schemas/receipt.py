@@ -85,6 +85,23 @@ class AuditEvent:
         self.finalize_defaults()
         return asdict(self)
 
+@dataclass
+class LearnedRuleAudit:
+    """
+    Structured audit record for feedback-derived (learned) rules.
+
+    Persist this as JSON so we can explain *which learned pattern fired* and
+    *what adjustment was applied* in a machine-queryable way.
+    """
+    pattern: str                         # e.g., "missing_elements", "spacing_anomaly"
+    message: str                         # human-readable explanation
+    confidence_adjustment: float = 0.0   # signed delta applied by learned rules
+    times_seen: Optional[int] = None     # number of times users flagged this pattern
+    severity: str = "INFO"              # INFO/WARNING/CRITICAL (kept simple for now)
+    evidence: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
 
 @dataclass
 class ReceiptDecision:
@@ -131,6 +148,9 @@ class ReceiptDecision:
     # Primary "why we decided" trail (persist this as JSON)
     audit_events: List[AuditEvent] = field(default_factory=list)
 
+    # Learned-rules (feedback) audit trail (persist this as JSON)
+    learned_rule_audits: List[LearnedRuleAudit] = field(default_factory=list)
+
     # Legacy structured rule events (RuleEvent dicts) - kept for backward compatibility
     events: Optional[List[Dict[str, Any]]] = None
 
@@ -146,17 +166,32 @@ class ReceiptDecision:
             for e in self.audit_events:
                 if hasattr(e, "finalize_defaults"):
                     e.finalize_defaults()
+        # Learned rule audits are plain dataclasses; nothing to finalize, but keep for symmetry
+        if self.learned_rule_audits is None:
+            self.learned_rule_audits = []
 
     def add_audit_event(self, event: AuditEvent) -> None:
         """Append an AuditEvent to the decision (auto-filling ids/timestamps)."""
         if hasattr(event, "finalize_defaults"):
             event.finalize_defaults()
         self.audit_events.append(event)
+        
+    def add_learned_rule_audit(self, audit: LearnedRuleAudit) -> None:
+        """Append a LearnedRuleAudit to the decision."""
+        self.learned_rule_audits.append(audit)
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-serializable dict for persistence."""
         self.finalize_defaults()
         d = asdict(self)
+
         # Ensure nested dataclasses remain JSON-friendly
-        d["audit_events"] = [e.to_dict() if hasattr(e, "to_dict") else e for e in self.audit_events]
+        d["audit_events"] = [
+            e.to_dict() if hasattr(e, "to_dict") else e
+            for e in (self.audit_events or [])
+        ]
+        d["learned_rule_audits"] = [
+            a.to_dict() if hasattr(a, "to_dict") else a
+            for a in (self.learned_rule_audits or [])
+        ]
         return d
