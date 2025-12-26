@@ -1,6 +1,6 @@
 # app/api/main.py
 
-from typing import List, Optional, Union, Literal
+from typing import List, Optional, Union, Literal, Dict, Any
 import os
 import shutil
 import uuid
@@ -91,6 +91,18 @@ class AnalyzeResponse(BaseModel):
     # Backend references (DB backend may return proper IDs; CSV backend may return filename)
     receipt_ref: Optional[Union[int, str]] = None
     analysis_ref: Optional[Union[int, str]] = None
+    # New fields for enhanced audit trail
+    rule_version: Optional[str] = None
+    policy_version: Optional[str] = None
+    policy_name: Optional[str] = None
+    engine_version: Optional[str] = None
+    decision_id: Optional[str] = None
+    created_at: Optional[str] = None
+    extraction_confidence_score: Optional[float] = None
+    extraction_confidence_level: Optional[str] = None
+    normalized_total: Optional[float] = None
+    currency: Optional[str] = None
+    audit_events: Optional[List[Dict[str, Any]]] = None
 
 
 class BatchAnalyzeResponse(BaseModel):
@@ -277,14 +289,31 @@ async def analyze_endpoint(file: UploadFile = File(..., description="Receipt fil
         # For DB backend, we may have a numeric analysis_id; for CSV, maybe filename.
         # For now, we don't expose receipt_id separately unless DB backend needs it.
 
+        # Finalize decision to populate IDs and timestamps
+        decision.finalize_defaults()
+        
+        # Serialize audit events to dicts
+        audit_events_dicts = [e.to_dict() if hasattr(e, 'to_dict') else e for e in decision.audit_events]
+        
         return AnalyzeResponse(
             label=decision.label,
             score=decision.score,
             reasons=decision.reasons,
             minor_notes=decision.minor_notes or [],
             processing_time_ms=round(processing_time_ms, 2),
-            receipt_ref=None,          # can be filled once we expose receipt_id from store
+            receipt_ref=None,
             analysis_ref=analysis_ref,
+            rule_version=decision.rule_version,
+            policy_version=decision.policy_version,
+            policy_name=decision.policy_name,
+            engine_version=decision.engine_version,
+            decision_id=decision.decision_id,
+            created_at=decision.created_at,
+            extraction_confidence_score=decision.extraction_confidence_score,
+            extraction_confidence_level=decision.extraction_confidence_level,
+            normalized_total=decision.normalized_total,
+            currency=decision.currency,
+            audit_events=audit_events_dicts,
         )
     except Exception as e:
         raise HTTPException(
