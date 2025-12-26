@@ -327,6 +327,76 @@ def _learn_from_false_indicators(feedback: ReceiptFeedback, store) -> Tuple[int,
     return rules_updated, new_patterns
 
 
+def _get_pattern_details(pattern_type: str, features: dict) -> str:
+    """
+    Get detailed context about what triggered a learned pattern.
+    
+    This provides audit-friendly explanations for learned rules.
+    """
+    if pattern_type == "missing_elements":
+        # Check what's actually missing
+        missing_items = []
+        text_features = features.get("text_features", {})
+        
+        if not text_features.get("has_total"):
+            missing_items.append("total amount")
+        if not text_features.get("has_date"):
+            missing_items.append("transaction date")
+        if not text_features.get("has_merchant"):
+            missing_items.append("merchant name")
+        if not text_features.get("has_phone"):
+            missing_items.append("contact phone")
+        if not text_features.get("has_address"):
+            missing_items.append("business address")
+        
+        if missing_items:
+            return f"Missing critical elements: {', '.join(missing_items)}. Real receipts typically include all these fields."
+        else:
+            return "Document structure appears incomplete based on learned patterns."
+    
+    elif pattern_type == "spacing_anomaly":
+        forensic = features.get("forensic_features", {})
+        max_spaces = forensic.get("max_consecutive_spaces", 0)
+        has_excessive = forensic.get("has_excessive_spacing", False)
+        
+        if has_excessive:
+            return f"Unusual spacing detected (up to {max_spaces} consecutive spaces). This is often used to manipulate OCR or hide text alignment issues in fake receipts."
+        else:
+            return "Spacing patterns match previously flagged suspicious receipts."
+    
+    elif pattern_type == "invalid_address":
+        text_features = features.get("text_features", {})
+        has_address = text_features.get("has_address", False)
+        
+        if not has_address:
+            return "No valid business address found. Legitimate receipts typically include a physical address for the business."
+        else:
+            return "Address format matches patterns previously identified as suspicious by users."
+    
+    elif pattern_type == "invalid_phone":
+        text_features = features.get("text_features", {})
+        has_phone = text_features.get("has_phone", False)
+        
+        if not has_phone:
+            return "No valid phone number found. Real businesses typically include contact information on receipts."
+        else:
+            return "Phone number format matches patterns previously flagged as suspicious."
+    
+    else:
+        # Generic fallback
+        return f"Pattern '{pattern_type}' matches characteristics of receipts previously flagged by users."
+
+
+def _build_detailed_rule_message(rule: LearningRule, features: dict) -> str:
+    """
+    Build a detailed audit message for a triggered rule.
+    
+    Fallback for cases where _rule_matches_features returns True instead of a string.
+    """
+    pattern_details = _get_pattern_details(rule.pattern, features)
+    return f"Learned pattern detected: {rule.rule_type} - {rule.pattern}. {pattern_details} Confidence adjustment: +{rule.confidence_adjustment:.2f}. Learned from {rule.learned_from_feedback_count} user feedback(s)."
+
+
 def _extract_pattern_from_indicator(indicator: str) -> str:
     """
     Extract a pattern from an indicator description.
@@ -382,34 +452,55 @@ def apply_learned_rules(features: dict) -> Tuple[float, List[str]]:
     
     for rule in rules:
         # Check if rule applies to these features
-        if _rule_matches_features(rule, features):
+        match_result = _rule_matches_features(rule, features)
+        if match_result:
             score_adjustment += rule.confidence_adjustment
-            triggered_rules.append(f"{rule.rule_type}: {rule.pattern}")
+            
+            # Create detailed message for audit trail
+            if isinstance(match_result, str):
+                # Detailed message returned from matcher
+                message = match_result
+            else:
+                # Build detailed message based on rule type
+                message = _build_detailed_rule_message(rule, features)
+            
+            triggered_rules.append(message)
     
     return score_adjustment, triggered_rules
 
 
-def _rule_matches_features(rule: LearningRule, features: dict) -> bool:
+def _rule_matches_features(rule: LearningRule, features: dict):
     """
     Check if a learned rule matches the given features.
     
-    This is a simple pattern matching - can be enhanced with ML later.
+    Returns:
+        - False if no match
+        - True for basic match
+        - String with detailed message for audit trail
     """
     if rule.rule_type == "suspicious_software":
         producer = features.get("file_features", {}).get("producer", "")
-        return rule.pattern.lower() in producer.lower()
+        if rule.pattern.lower() in producer.lower():
+            return f"Learned pattern detected: Suspicious software '{rule.pattern}' found in document metadata (Producer: {producer}). Confidence adjustment: +{rule.confidence_adjustment:.2f}. Learned from {rule.learned_from_feedback_count} user feedback(s)."
+        return False
     
     elif rule.rule_type == "spacing_threshold":
         spacing_issues = features.get("forensic_features", {}).get("has_excessive_spacing", False)
-        return spacing_issues
+        if spacing_issues:
+            consecutive_spaces = features.get("forensic_features", {}).get("max_consecutive_spaces", 0)
+            return f"Learned pattern detected: Excessive spacing anomaly (max {consecutive_spaces} consecutive spaces). This pattern was flagged by users {rule.learned_from_feedback_count} time(s) as suspicious. Confidence adjustment: +{rule.confidence_adjustment:.2f}."
+        return False
     
     elif rule.rule_type == "date_manipulation":
-        # Check for date issues
-        return features.get("file_features", {}).get("has_date_issue", False)
+        has_date_issue = features.get("file_features", {}).get("has_date_issue", False)
+        if has_date_issue:
+            return f"Learned pattern detected: Date manipulation indicators found. Receipt date appears after file creation date. This pattern was confirmed by users {rule.learned_from_feedback_count} time(s). Confidence adjustment: +{rule.confidence_adjustment:.2f}."
+        return False
     
     elif rule.rule_type == "user_identified_pattern":
-        # Generic pattern matching
-        # This would need to be more sophisticated in production
-        return True  # For now, always apply user-identified patterns
+        # Generic pattern matching - provide context about what was learned
+        pattern_type = rule.pattern
+        detail_msg = _get_pattern_details(pattern_type, features)
+        return f"Learned pattern detected: {pattern_type}. {detail_msg} This pattern was identified by users {rule.learned_from_feedback_count} time(s). Confidence adjustment: +{rule.confidence_adjustment:.2f}."
     
     return False
