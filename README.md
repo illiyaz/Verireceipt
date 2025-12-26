@@ -159,8 +159,20 @@ VeriReceipt/
 - ✅ Rule-based fraud engine (18+ rules including cross-field validation)
 - ✅ Vision LLM integration (fraud detection + authenticity)
 - ✅ LayoutLM integration (data extraction)
-- ✅ Ensemble verdict system
-- ✅ **Comprehensive Feedback System** 🆕
+- ✅ Ensemble verdict system with reconciliation events
+- ✅ **Document Profile Detection** 🆕
+  - 31 document subtypes across 3 families (TRANSACTIONAL, LOGISTICS, PAYMENT)
+  - Confidence-based classification with ambiguity detection
+  - Evidence tracking for audit trail
+- ✅ **Document-Aware Rule Validation** 🆕
+  - Context-aware expectations (logistics docs don't need totals)
+  - Reduced false positives on specialized document types
+  - Soft-gating for learned rules based on doc profile confidence
+- ✅ **Ensemble Reconciliation Events** 🆕
+  - Structured decision path tracking
+  - 7 decision scenarios with full evidence
+  - Confidence normalization across all engines
+- ✅ **Comprehensive Feedback System**
   - Detailed feedback form UI
   - Indicator-level reviews (✅ Correct / ❌ False Alarm)
   - Missed indicator tracking
@@ -336,25 +348,28 @@ This section documents the rules currently implemented in the VeriReceipt v1 eng
 - **Why:** Genuine receipts photographed by a phone usually carry some EXIF info; exports/screenshots often strip it.  
 - **Weight:** +0.05 (low).
 
-**R5 – No detected amounts**  
+**R5 – No detected amounts** 🔄  
 - **What:** OCR text contains no recognizable currency/amount pattern.  
 - **Why:** A receipt without any numeric amount is almost never valid. Often indicates OCR failure or synthetic text.  
-- **Weight:** +0.40 (high).
+- **Weight:** +0.40 (high) - **Document-aware:** Skipped for logistics documents (Air Waybills, Bills of Lading, Delivery Notes) where amounts are optional.  
+- **Evidence:** Includes doc_family, doc_subtype, doc_profile_confidence for audit trail.
 
-**R6 – Amounts but no total line**  
+**R6 – Amounts but no total line** 🔄  
 - **What:** Amounts exist but no line with "Total/Grand Total/Amount Payable/etc." found.  
 - **Why:** Most receipts clearly mark the total; absence suggests an incomplete or template-style artifact.  
-- **Weight:** +0.15 (medium).
+- **Weight:** +0.15 (medium) - **Document-aware:** Skipped if total value extracted by LayoutLM/DONUT OR if document type doesn't require TOTAL keyword (logistics docs).  
+- **Evidence:** Includes has_usable_total_value, doc_family, doc_subtype for audit trail.
 
 **R7 – Line-item vs total mismatch**  
 - **What:** Sum of detected line-item amounts does not match the printed total (above a small tolerance).  
 - **Why:** Strong signal of manual tampering with the total or error in fabrication.  
 - **Weight:** +0.40 (high).
 
-**R8 – No date found**  
+**R8 – No date found** 🔄  
 - **What:** No date-like pattern detected in OCR text.  
 - **Why:** Valid receipts almost always include a date; missing date is a compliance red flag.  
-- **Weight:** +0.20 (medium–high).
+- **Weight:** +0.20 (medium–high) - **Document-aware:** Skipped for logistics documents (Bills of Lading, Delivery Notes) where dates may be less prominent.  
+- **Evidence:** Includes doc_family, doc_subtype, doc_profile_confidence for audit trail.
 
 **R9 – No merchant candidate**  
 - **What:** We cannot confidently infer a merchant name from the header lines.  
@@ -449,6 +464,48 @@ This section documents the rules currently implemented in the VeriReceipt v1 eng
 
 ---
 
+### 📋 Document Profile Detection System
+
+VeriReceipt now includes intelligent document classification to reduce false positives and provide context-aware validation.
+
+**Supported Document Families:**
+
+**1. TRANSACTIONAL (21 subtypes)**
+- **Receipts (8):** POS_RESTAURANT, POS_RETAIL, ECOMMERCE, HOTEL_FOLIO, FUEL, PARKING, TRANSPORT, MISC
+- **Invoices (8):** TAX_INVOICE, VAT_INVOICE, COMMERCIAL_INVOICE, SERVICE_INVOICE, SHIPPING_INVOICE, PROFORMA, CREDIT_NOTE, DEBIT_NOTE
+- **Bills (5):** UTILITY, TELECOM, SUBSCRIPTION, RENT, INSURANCE
+
+**2. LOGISTICS (4 subtypes)**
+- SHIPPING_BILL, BILL_OF_LADING, AIR_WAYBILL, DELIVERY_NOTE
+
+**3. PAYMENT (4 subtypes)**
+- PAYMENT_RECEIPT, BANK_SLIP, CARD_CHARGE_SLIP, REFUND_RECEIPT
+
+**Document-Aware Validation:**
+
+The system adjusts expectations based on document type:
+
+- **Logistics documents** (Air Waybills, Bills of Lading, Delivery Notes):
+  - ✅ Totals/amounts are **optional** (no penalty for missing)
+  - ✅ Dates may be **less prominent** (no penalty for missing)
+  - ✅ Focus on shipment fields instead of financial fields
+
+- **Payment documents** (Payment Receipts, Bank Slips):
+  - ✅ Different validation rules for transaction confirmations
+  - ✅ Transaction ID/UTR validation instead of merchant validation
+
+- **Confidence-based gating:**
+  - If doc_profile_confidence < 0.55: reduce learned rule adjustments by 35%
+  - If doc subtype has optional fields: reduce learned rule adjustments by 40%
+
+**Benefits:**
+- ✅ **Reduced false positives** on specialized document types
+- ✅ **Context-aware validation** based on document family
+- ✅ **Evidence tracking** for audit compliance
+- ✅ **200+ keywords** mapped to specific subtypes
+
+---
+
 ### 🌍 Global Geo-Currency-Tax System (GeoRuleMatrix)
 
 The GeoRuleMatrix is a comprehensive validation system supporting **24 regions/countries** with intelligent cross-border detection and context awareness.
@@ -529,11 +586,72 @@ All fraud reasons are now tagged with severity levels for intelligent ensemble d
 
 ---
 
+### 🤖 Ensemble Reconciliation Events
+
+The ensemble verdict system now generates **structured reconciliation events** that track the complete decision path with full evidence for audit compliance.
+
+**Decision Path Events:**
+
+1. **ENS_HARD_FAIL_WINS**
+   - Rule engine HARD_FAIL overrides visual assessment
+   - Confidence: 0.93
+   - Evidence: rule_label, rule_score, hard_fail_count, hard_fail_reasons, vision_verdict, agreement_score
+
+2. **ENS_RULES_STRONG_REJECT**
+   - Rule engine strong fraud indicators trigger rejection
+   - Confidence: 0.85
+   - Evidence: rule_score, critical_count, critical_reasons, vision_verdict
+
+3. **ENS_VISION_RULE_CONFLICT_REVIEW**
+   - Vision highly confident REAL but rules flagged anomalies
+   - Routed to human review
+   - Confidence: 0.70
+   - Evidence: vision/rule verdicts, critical_reasons, agreement_score, converged_confidence
+
+4. **ENS_ALIGN_APPROVE**
+   - Vision and rules align; approved
+   - Confidence: Blended = 0.70 + (0.15 × vision_conf) + (0.20 × agreement)
+   - Evidence: vision/rule verdicts, agreement_score, converged_confidence_level
+
+5. **ENS_VISION_LOW_RULES_AGREE_APPROVE**
+   - Vision low-confidence; approved based on rules + high agreement
+   - Confidence: Blended = 0.55 + (0.25 × agreement) + (0.20 × (1-rule_score))
+   - Evidence: agreement_score, converged_confidence_level
+
+6. **ENS_VISION_LOW_DEFER_REVIEW**
+   - Vision low-confidence; deferred to human review using rule signals
+   - Confidence: Blended = 0.45 + (0.20 × agreement) + (0.20 × (1-rule_score))
+   - Evidence: has_critical_indicator, agreement_threshold, approve_gate_passed
+
+7. **ENS_DEFAULT_REVIEW**
+   - Defaulted to human review due to conflict/insufficient evidence
+   - Confidence: 0.65
+   - Evidence: all engine verdicts and scores
+
+**Confidence Normalization:**
+
+The `_normalize_confidence()` method handles:
+- 0-1 floats (direct use)
+- 0-100 percentages (divided by 100)
+- String percentages ('70%' → 0.70)
+- String levels ('high' → 0.90, 'medium' → 0.70, 'low' → 0.40)
+- Defaults and bounds enforcement (always 0.0-1.0)
+
+**Benefits:**
+- ✅ **Full audit trail** for every ensemble decision
+- ✅ **Transparent decision logic** with structured evidence
+- ✅ **Consistent confidence values** across all engines
+- ✅ **Compliance-ready** for regulatory review
+
+---
+
 **Developer Notes:**  
 - All weights and thresholds live in `app/pipelines/rules.py`.  
 - They are intentionally simple constants to make experimentation easy.  
 - When adjusting weights, keep the **relative severity** in mind rather than absolute values.  
 - In the future, these rules can be moved to a config file (YAML/JSON) to make the engine data-driven.
+- Document profile detection uses keyword-based heuristics in `app/pipelines/features.py`.
+- Ensemble reconciliation events are generated in `app/pipelines/ensemble.py`.
 
 ---
 
