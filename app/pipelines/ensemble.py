@@ -19,6 +19,8 @@ Key Principles:
 
 from typing import Dict, Any, List, Tuple, Optional
 import logging
+import re  
+from app.pipelines.rules import _parse_date_best_effort 
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,55 @@ class EnsembleIntelligence:
             "layoutlm": 0.10,       # Confidence signal
             "donut": 0.10,          # Data quality signal
         }
+        # Common non-merchant labels that OCR/extractors frequently confuse as merchant names
+        self._MERCHANT_LABEL_BLACKLIST = {
+            "invoice", "receipt", "tax invoice", "bill", "statement", "order", "total",
+            "subtotal", "amount", "amount due", "balance due", "due", "paid",
+            "date", "customer", "vendor", "merchant", "payment",
+        }
+
+    def _looks_like_label_merchant(self, merchant: Any) -> bool:
+        """Return True if the extracted 'merchant' looks like a field label, not a business name."""
+        if merchant is None:
+            return True
+        s = str(merchant).strip()
+        if not s:
+            return True
+
+        s_norm = re.sub(r"\s+", " ", s).strip().lower()
+
+        # Exact blacklist matches
+        if s_norm in self._MERCHANT_LABEL_BLACKLIST:
+            return True
+
+        # Very short generic tokens
+        if len(s_norm) <= 3 and s_norm.isalpha():
+            return True
+
+        # Starts with common label patterns
+        if re.match(r"^(invoice|receipt|tax invoice|bill|statement)\b", s_norm):
+            return True
+
+        # Looks like a key-value label rather than a name
+        if re.match(r"^(merchant|vendor|customer|date|total|subtotal|amount)\s*[:\-]", s_norm):
+            return True
+
+        return False
+
+    def _select_best_merchant_candidate(
+        self,
+        merchant_candidates: List[Tuple[str, Any, float]]
+    ) -> Optional[Tuple[str, Any, float]]:
+        """Choose the best merchant candidate, preferring non-label-like values."""
+        if not merchant_candidates:
+            return None
+
+        good = [c for c in merchant_candidates if not self._looks_like_label_merchant(c[1])]
+        if good:
+            return max(good, key=lambda x: x[2])
+
+        # If everything looks label-like, fall back to highest-weight candidate
+        return max(merchant_candidates, key=lambda x: x[2])
     
     def converge_extraction(self, results: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -56,8 +107,11 @@ class EnsembleIntelligence:
             "total": None,
             "date": None,
             "items": [],
-            "confidence": {},
-            "sources": {}
+            "confidence": {},       # per-field confidences (0..1)
+            "sources": {},          # per-field best source
+            # Normalized overall extraction confidence (always present)
+            "confidence_score": 0.70,   # float in [0,1]
+            "confidence_level": "medium" # "low"|"medium"|"high"
         }
         
         # Safety check
@@ -78,13 +132,19 @@ class EnsembleIntelligence:
             if donut_receipt_merchant.get("name"):
                 merchant_candidates.append(("donut_receipt", donut_receipt_merchant["name"], 0.25))
         
-        if merchant_candidates:
-            # Use highest weighted source
-            source, value, weight = max(merchant_candidates, key=lambda x: x[2])
-            converged["merchant"] = value
-            converged["sources"]["merchant"] = source
-            converged["confidence"]["merchant"] = weight
         
+        if merchant_candidates:
+            best = self._select_best_merchant_candidate(merchant_candidates)
+            if best:
+                source, value, weight = best
+                converged["merchant"] = value
+                converged["sources"]["merchant"] = source
+                converged["confidence"]["merchant"] = weight
+
+                # If we had to fall back to a label-like merchant, reduce confidence a bit
+                if self._looks_like_label_merchant(value):
+                    converged["confidence"]["merchant"] = max(0.10, weight - 0.15)
+                    logger.info(f"⚠️ Merchant candidate looks like a label: {value!r}. Reduced confidence.")
         # Extract total (prefer LayoutLM > DONUT > Donut-Receipt)
         total_candidates = []
         if results.get("layoutlm", {}).get("total"):
@@ -107,7 +167,9 @@ class EnsembleIntelligence:
             
             # Cross-validate: if multiple engines agree, boost confidence
             total_values = [self._normalize_amount(t[1]) for t in total_candidates]
-            if len(set(total_values)) == 1:  # All agree
+            total_values = [v for v in total_values if v is not None]
+
+            if len(total_values) >= 2 and len(set(total_values)) == 1:
                 converged["confidence"]["total"] = min(0.95, weight + 0.20)
                 logger.info(f"✅ Total cross-validated: {converged['total']} (all engines agree)")
         
@@ -126,24 +188,74 @@ class EnsembleIntelligence:
             converged["sources"]["date"] = source
             converged["confidence"]["date"] = weight
         
+        # ------------------------------------------------------------------
+        # Overall extraction confidence (single consistent representation)
+        # Intended to feed tf["confidence"] downstream.
+        # Always provide BOTH:
+        # - confidence_score: float in [0,1]
+        # - confidence_level: "low"|"medium"|"high"
+        # ------------------------------------------------------------------
+        weights = {"merchant": 0.40, "total": 0.40, "date": 0.20}
+        num = 0.0
+        den = 0.0
+
+        for k, w in weights.items():
+            if converged.get(k) is None:
+                continue
+            c = converged.get("confidence", {}).get(k)
+            if c is None:
+                continue
+            try:
+                cv = float(c)
+            except Exception:
+                continue
+            cv = max(0.0, min(1.0, cv))
+            num += (w * cv)
+            den += w
+
+        overall = (num / den) if den > 0.0 else 0.70
+        overall = max(0.0, min(1.0, overall))
+
+        converged["confidence_score"] = overall
+        converged["confidence_level"] = self._confidence_level(overall)
+
+        # Back-compat: also expose under confidence dict
+        converged.setdefault("confidence", {})
+        converged["confidence"]["overall"] = overall
+
         return converged
     
     def _normalize_amount(self, amount: Any) -> Optional[float]:
         """Normalize amount to float for comparison"""
         if amount is None:
             return None
-        
-        # Remove currency symbols and convert to float
+
+        # Strings: strip currency symbols, commas, and handle parentheses for negatives
         if isinstance(amount, str):
-            amount = amount.replace('$', '').replace(',', '').strip()
-            try:
-                return float(amount)
-            except:
+            s = amount.strip()
+            if not s:
                 return None
-        
+
+            neg = False
+            if s.startswith("(") and s.endswith(")"):
+                neg = True
+                s = s[1:-1].strip()
+
+            # Remove common currency symbols and separators
+            s = s.replace(",", "")
+            s = re.sub(r"[₹$€£¥]", "", s)
+            s = s.replace("INR", "").replace("USD", "").replace("EUR", "").replace("GBP", "").replace("JPY", "")
+            s = s.strip()
+
+            try:
+                v = float(s)
+                return -v if neg else v
+            except Exception:
+                return None
+
         try:
             return float(amount)
-        except:
+        except Exception:
             return None
     
     def _normalize_rule_score(self, score: Any) -> float:
@@ -171,6 +283,19 @@ class EnsembleIntelligence:
             return max(0.0, min(1.0, v))
         except Exception:
             return 0.5
+
+    def _confidence_level(self, score: Any) -> str:
+        """Convert a numeric confidence score into a stable string level."""
+        try:
+            v = float(score)
+        except Exception:
+            v = 0.70
+        v = max(0.0, min(1.0, v))
+        if v >= 0.85:
+            return "high"
+        if v >= 0.65:
+            return "medium"
+        return "low"
 
     def _extract_severity_reasons(self, rule_reasons: List[str]) -> Dict[str, List[str]]:
         """Extract tagged severities from rules.py output (preferred)."""
@@ -226,9 +351,7 @@ class EnsembleIntelligence:
         results: Dict[str, Any],
         converged_data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """
-        Build ensemble verdict by converging all signals.
-        """
+        """ Build ensemble verdict by converging all signals."""
         verdict = {
             "final_label": "unknown",
             "confidence": 0.0,
@@ -237,10 +360,22 @@ class EnsembleIntelligence:
             "agreement_score": 0.0,
             "converged_data": converged_data
         }
+        
+        # Ensure downstream always sees consistent extraction confidence
+        if isinstance(verdict.get("converged_data"), dict):
+            cd = verdict["converged_data"]
+            if "confidence_score" not in cd:
+                cd["confidence_score"] = cd.get("confidence", {}).get("overall", 0.70)
+            if "confidence_level" not in cd:
+                cd["confidence_level"] = self._confidence_level(cd.get("confidence_score", 0.70))
 
         # Step 1: Vision LLM as primary filter
         vision_verdict = results.get("vision_llm", {}).get("verdict", "unknown")
-        vision_confidence = results.get("vision_llm", {}).get("confidence", 0.0)
+        raw_vision_confidence = results.get("vision_llm", {}).get("confidence", 0.0)
+        try:
+            vision_confidence = float(raw_vision_confidence)
+        except Exception:
+            vision_confidence = 0.0
         vision_reasoning = results.get("vision_llm", {}).get("reasoning", "")
         if not isinstance(vision_reasoning, str):
             vision_reasoning = str(vision_reasoning) if vision_reasoning else ""
@@ -278,6 +413,7 @@ class EnsembleIntelligence:
                 rid = ev.get("rule_id", "RULE")
                 msg = ev.get("message") or ev.get("reason") or ""
                 critical_reasons.append(f"[CRITICAL] {rid}: {msg}".strip())
+            critical_count = len(critical_reasons)
         else:
             # Tag-based fallback (no regex)
             sev = self._extract_severity_reasons(rule_reasons)
@@ -286,9 +422,19 @@ class EnsembleIntelligence:
             has_hard_fail = len(hard_fail_reasons) > 0
             has_critical_indicator = len(critical_reasons) > 0
 
-        critical_count = len(critical_reasons)
+            critical_count = len(critical_reasons)
 
-        # Step 4: Decision precedence
+        # Step 4: Decision precedence + reconciliation
+        #
+        # Policy:
+        # - HARD_FAIL from rules ALWAYS rejects.
+        # - Otherwise, strong rule evidence rejects.
+        # - If Vision is very confident "real" but rules are only moderately strong,
+        #   do NOT auto-reject — mark suspicious for human review.
+        # - If Vision is low-confidence, defer to rules + agreement.
+
+
+        # 4A) HARD_FAIL always wins
         if has_hard_fail:
             verdict["final_label"] = "fake"
             verdict["confidence"] = 0.93
@@ -297,7 +443,6 @@ class EnsembleIntelligence:
             for reason in hard_fail_reasons[:5]:
                 lines.append(f"   • {reason}")
             lines.append("ℹ️ Note: Visual realism cannot override structural inconsistencies.")
-            # Deduplicate, preserve order
             verdict["reasoning"] = []
             seen_lines = set()
             for l in lines:
@@ -306,20 +451,44 @@ class EnsembleIntelligence:
                     seen_lines.add(l)
             return verdict
 
-        # Rule-based fake with high score or critical
-        if rule_label == "fake" and (rule_score >= 0.7 or critical_count >= 2 or has_critical_indicator):
+        # Thresholds (tunable)
+        STRONG_RULE_REJECT_SCORE = 0.85
+        MODERATE_RULE_SCORE = 0.70
+
+        # Helpful flags
+        vision_is_real_strong = (vision_verdict == "real" and float(vision_confidence or 0.0) >= 0.90)
+        vision_is_real = (vision_verdict == "real" and float(vision_confidence or 0.0) >= 0.80)
+        vision_is_fake = (vision_verdict == "fake" and float(vision_confidence or 0.0) >= 0.70)
+        vision_is_low = float(vision_confidence or 0.0) < 0.50
+
+        rule_fake_strong = (
+            rule_label == "fake"
+            and (
+                rule_score >= STRONG_RULE_REJECT_SCORE
+                or critical_count >= 2
+                or has_critical_indicator
+            )
+        )
+
+        rule_fake_moderate = (
+            rule_label == "fake"
+            and (MODERATE_RULE_SCORE <= rule_score < STRONG_RULE_REJECT_SCORE)
+            and (critical_count <= 1)
+        )
+
+        rule_realish = (rule_label == "real" or rule_score < 0.30)
+
+        # 4B) Strong rule evidence -> reject (even if it looks real)
+        if rule_fake_strong:
             verdict["final_label"] = "fake"
             verdict["confidence"] = 0.85
             verdict["recommended_action"] = "reject"
-            lines = ["❌ Rule-Based detected high-risk fraud indicators"]
-            # Prefer critical reasons, else fallback to rule reasons
+            lines = ["❌ Rule Engine detected high-risk fraud indicators"]
             bullet_reasons = critical_reasons[:5] if critical_reasons else rule_reasons[:5]
             for reason in bullet_reasons:
                 lines.append(f"   • {reason}")
-            # If vision says real with high confidence, add note
-            if vision_verdict == "real" and vision_confidence > 0.7:
+            if vision_is_real:
                 lines.append("ℹ️ Note: Receipt may look visually authentic, but internal inconsistencies indicate fabrication.")
-            # Deduplicate lines
             verdict["reasoning"] = []
             seen_lines = set()
             for l in lines:
@@ -328,81 +497,15 @@ class EnsembleIntelligence:
                     seen_lines.add(l)
             return verdict
 
-        # Both vision and rule agree on real, or rule score is low
-        if vision_verdict == "real" and vision_confidence > 0.8 and (rule_label == "real" or rule_score < 0.3):
-            verdict["final_label"] = "real"
-            verdict["confidence"] = min(0.95, 0.75 + (agreement_score * 0.20))
-            verdict["recommended_action"] = "approve"
-            lines = [
-                "✅ Vision LLM confirms authenticity",
-                "✅ Rule-Based validation passed"
-            ]
-            if agreement_score >= 0.7:
-                lines.append("✅ High agreement across engines")
-            # Deduplicate lines
-            verdict["reasoning"] = []
-            seen_lines = set()
-            for l in lines:
-                if l not in seen_lines:
-                    verdict["reasoning"].append(l)
-                    seen_lines.add(l)
-            return verdict
 
-        
-        # Conflicting: vision real (high), rule says fake but not strong
-        # We do NOT auto-reject here (hard-fail / strong-rule fake already handled above).
-        if (
-            vision_verdict == "real"
-            and vision_confidence > 0.8
-            and rule_label == "fake"
-            and rule_score < 0.7
-            and (critical_count <= 1)
-            and not has_hard_fail
-        ):
-            verdict["final_label"] = "suspicious"
-            verdict["confidence"] = 0.65
-            verdict["recommended_action"] = "human_review"
-
-            lines = [
-                "⚠️ Conflicting signals detected",
-                "✅ Vision LLM: real",
-                "❌ Rule-Based: fake",
-                f"ℹ️ Rule score: {rule_score:.2f} (below auto-reject threshold)",
-            ]
-
-            # Add up to 3 rule reasons to help reviewers debug the conflict.
-            added = 0
-            seen_reason_text = set()
-            for reason in rule_reasons:
-                s = str(reason).strip()
-                if not s:
-                    continue
-                # Deduplicate reasons (by text)
-                if s in seen_reason_text:
-                    continue
-                seen_reason_text.add(s)
-                lines.append(f"   • {s}")
-                added += 1
-                if added >= 3:
-                    break
-
-            # Deduplicate, preserve order
-            verdict["reasoning"] = []
-            seen_lines = set()
-            for l in lines:
-                if l not in seen_lines:
-                    verdict["reasoning"].append(l)
-                    seen_lines.add(l)
-            return verdict
-
-        # Vision is fake or vision_confidence < 0.5
-        if vision_verdict == "fake":
+        # 4C) Vision says fake with decent confidence -> reject (unless rules are clearly clean)
+        if vision_is_fake and not rule_realish:
             verdict["final_label"] = "fake"
             verdict["confidence"] = 0.80
             verdict["recommended_action"] = "reject"
-            lines = [f"❌ Vision LLM: {vision_verdict}"]
+            lines = [f"❌ Vision LLM: fake (conf={float(vision_confidence or 0.0):.2f})"]
             if rule_label == "fake":
-                lines.append("❌ Rule-Based confirms fraud indicators")
+                lines.append("❌ Rule Engine also flags anomalies")
             verdict["reasoning"] = []
             seen_lines = set()
             for l in lines:
@@ -410,22 +513,59 @@ class EnsembleIntelligence:
                     verdict["reasoning"].append(l)
                     seen_lines.add(l)
             return verdict
-        
-        # Low-confidence vision: do NOT auto-reject. Defer to rules + agreement.
-        if vision_confidence < 0.5:
-            verdict["final_label"] = rule_label if rule_label in ("real", "fake", "suspicious") else "suspicious"
 
-            if (rule_label == "real" or rule_score < 0.3) and not has_hard_fail and critical_count == 0 and agreement_score >= 0.7:
+        # 4D) Vision/Rules conflict: Vision very confident REAL, rules only moderate -> human review
+        if vision_is_real_strong and rule_fake_moderate:
+            verdict["final_label"] = "suspicious"
+            verdict["confidence"] = 0.70
+            verdict["recommended_action"] = "human_review"
+            lines = [
+                "⚠️ Vision/Rules conflict: Vision is highly confident REAL, but rules flagged anomalies.",
+                f"✅ Vision LLM: real (conf={float(vision_confidence or 0.0):.2f})",
+                f"❌ Rule Engine: fake (score={rule_score:.2f}, critical_count={critical_count})",
+            ]
+            bullets = (critical_reasons or rule_reasons)[:5]
+            for r in bullets:
+                lines.append(f"   • {r}")
+            lines.append(f"ℹ️ agreement_score={agreement_score:.2f} (higher = more consistent extraction)")
+            verdict["reasoning"] = []
+            seen_lines = set()
+            for l in lines:
+                if l not in seen_lines:
+                    verdict["reasoning"].append(l)
+                    seen_lines.add(l)
+            return verdict
+
+        # 4E) Both engines align on REAL (or rules are clean) -> approve
+        if vision_is_real and rule_realish and not has_critical_indicator and critical_count == 0:
+            verdict["final_label"] = "real"
+            verdict["confidence"] = min(0.95, 0.75 + (agreement_score * 0.20))
+            verdict["recommended_action"] = "approve"
+            lines = ["✅ Vision LLM confirms authenticity", "✅ Rule Engine validation passed"]
+            if agreement_score >= 0.7:
+                lines.append("✅ High agreement across extraction engines")
+            verdict["reasoning"] = []
+            seen_lines = set()
+            for l in lines:
+                if l not in seen_lines:
+                    verdict["reasoning"].append(l)
+                    seen_lines.add(l)
+            return verdict
+
+        # 4F) Low-confidence vision: defer to rules + agreement
+        if vision_is_low:
+            if rule_realish and not has_critical_indicator and critical_count == 0 and agreement_score >= 0.70:
                 verdict["final_label"] = "real"
                 verdict["confidence"] = 0.70
                 verdict["recommended_action"] = "approve"
                 verdict["reasoning"] = [
-                    "✅ Rule-Based validation passed",
-                    "✅ High agreement across engines",
+                    "✅ Rule Engine validation passed",
+                    "✅ High agreement across extraction engines",
                     "ℹ️ Vision model was low-confidence; decision based on rules + agreement.",
                 ]
                 return verdict
 
+            verdict["final_label"] = rule_label if rule_label in ("real", "fake", "suspicious") else "suspicious"
             verdict["confidence"] = 0.60
             verdict["recommended_action"] = "human_review"
             verdict["reasoning"] = [
@@ -434,11 +574,15 @@ class EnsembleIntelligence:
             ]
             return verdict
 
-        # Default: suspicious
+        # 4G) Remaining conflicts: default to human review
         verdict["final_label"] = "suspicious"
-        verdict["confidence"] = 0.60
+        verdict["confidence"] = 0.65
         verdict["recommended_action"] = "human_review"
-        lines = ["⚠️ Insufficient confidence for automatic decision"]
+        lines = [
+            "⚠️ Conflicting or insufficient evidence for automatic decision",
+            f"ℹ️ Vision={vision_verdict} (conf={float(vision_confidence or 0.0):.2f}), Rule={rule_label} (score={rule_score:.2f}), critical_count={critical_count}",
+            f"ℹ️ agreement_score={agreement_score:.2f}",
+        ]
         verdict["reasoning"] = []
         seen_lines = set()
         for l in lines:
@@ -446,6 +590,7 @@ class EnsembleIntelligence:
                 verdict["reasoning"].append(l)
                 seen_lines.add(l)
         return verdict
+
     
     def _calculate_agreement(
         self,
@@ -455,69 +600,116 @@ class EnsembleIntelligence:
         """
         Calculate agreement score across engines.
         Higher score = more engines agree on extracted data.
+        Agreement is based on value-level matching, not just presence.
         """
         agreement_points = 0.0
         max_points = 0.0
-        
-        # Check merchant agreement
-        if converged_data.get("merchant"):
+
+        # -------------------------------
+        # Helper normalizers
+        # -------------------------------
+        def _norm_text(v: Any) -> Optional[str]:
+            if not v or not isinstance(v, str):
+                return None
+            return re.sub(r"\s+", " ", v.strip().lower())
+
+        def _values_agree(values: List[Any], tol: float = 0.01) -> float:
+            """
+            Returns agreement score:
+            1.0 = strong agreement
+            0.8 = close agreement
+            0.3 = weak disagreement
+            """
+            vals = [v for v in values if v is not None]
+            if len(vals) < 2:
+                return 0.5
+            max_v = max(vals)
+            min_v = min(vals)
+            if max_v == min_v:
+                return 1.0
+            if abs(max_v - min_v) <= max(0.5, tol * max_v):
+                return 0.8
+            return 0.3
+
+        # -------------------------------
+        # Merchant agreement
+        # -------------------------------
+        merchant_values = []
+
+        if results.get("layoutlm", {}).get("merchant"):
+            merchant_values.append(_norm_text(results["layoutlm"]["merchant"]))
+
+        if results.get("donut", {}).get("merchant"):
+            merchant_values.append(_norm_text(results["donut"]["merchant"]))
+
+        dr_merchant = results.get("donut_receipt", {}).get("merchant")
+        if isinstance(dr_merchant, dict):
+            merchant_values.append(_norm_text(dr_merchant.get("name")))
+        elif isinstance(dr_merchant, str):
+            merchant_values.append(_norm_text(dr_merchant))
+
+        merchant_values = [v for v in merchant_values if v]
+        if merchant_values:
             max_points += 1.0
-            merchant_sources = 0
-            if results.get("layoutlm", {}).get("merchant"):
-                merchant_sources += 1
-            if results.get("donut", {}).get("merchant"):
-                merchant_sources += 1
-            if results.get("donut_receipt", {}).get("merchant", {}).get("name"):
-                merchant_sources += 1
-            
-            if merchant_sources >= 2:
+            if any(merchant_values.count(v) >= 2 for v in merchant_values):
                 agreement_points += 1.0
-            elif merchant_sources == 1:
+            elif len(merchant_values) == 1:
                 agreement_points += 0.5
-        
-        # Check total agreement
-        if converged_data.get("total"):
+
+        # -------------------------------
+        # Total agreement
+        # -------------------------------
+        total_values = []
+
+        if results.get("layoutlm", {}).get("total"):
+            total_values.append(self._normalize_amount(results["layoutlm"]["total"]))
+
+        if results.get("donut", {}).get("total"):
+            donut_total = results["donut"]["total"]
+            if isinstance(donut_total, dict):
+                donut_total = donut_total.get("total_price")
+            total_values.append(self._normalize_amount(donut_total))
+
+        if results.get("donut_receipt", {}).get("total"):
+            total_values.append(self._normalize_amount(results["donut_receipt"]["total"]))
+
+        total_values = [v for v in total_values if v is not None]
+        if total_values:
             max_points += 1.0
-            total_values = []
-            if results.get("layoutlm", {}).get("total"):
-                total_values.append(self._normalize_amount(results["layoutlm"]["total"]))
-            if results.get("donut", {}).get("total"):
-                donut_total = results["donut"]["total"]
-                if isinstance(donut_total, dict):
-                    donut_total = donut_total.get("total_price")
-                total_values.append(self._normalize_amount(donut_total))
-            
-            # Remove None values
-            total_values = [v for v in total_values if v is not None]
-            
-            if len(total_values) >= 2:
-                # Check if values are close (within 1%)
-                if len(set(total_values)) == 1:
-                    agreement_points += 1.0
-                elif max(total_values) - min(total_values) < max(total_values) * 0.01:
-                    agreement_points += 0.8
-                else:
-                    agreement_points += 0.3
-            elif len(total_values) == 1:
-                agreement_points += 0.5
-        
-        # Check date agreement
-        if converged_data.get("date"):
+            agreement_points += _values_agree(total_values)
+
+        # -------------------------------
+        # Date agreement
+        # -------------------------------
+        date_values = []
+
+        if results.get("layoutlm", {}).get("date"):
+            date_values.append(results["layoutlm"]["date"])
+
+        if results.get("donut_receipt", {}).get("date"):
+            date_values.append(results["donut_receipt"]["date"])
+
+        parsed_dates = []
+        for d in date_values:
+            try:
+                parsed = _parse_date_best_effort(d)
+                if parsed:
+                    parsed_dates.append(parsed.date())
+            except Exception:
+                continue
+
+        if parsed_dates:
             max_points += 1.0
-            date_sources = 0
-            if results.get("layoutlm", {}).get("date"):
-                date_sources += 1
-            if results.get("donut_receipt", {}).get("date"):
-                date_sources += 1
-            
-            if date_sources >= 2:
+            if len(parsed_dates) >= 2 and len(set(parsed_dates)) == 1:
                 agreement_points += 1.0
-            elif date_sources == 1:
+            elif len(parsed_dates) == 1:
                 agreement_points += 0.5
-        
+            else:
+                agreement_points += 0.3
+
         if max_points == 0:
             return 0.0
-        
+
         return agreement_points / max_points
 
 

@@ -21,9 +21,10 @@ logger = logging.getLogger(__name__)
 class RuleEvent:
     rule_id: str
     severity: str               # HARD_FAIL | CRITICAL | WARNING | INFO
-    weight: float               # how much it contributes to score
-    message: str                # short human-readable summary
-    evidence: Dict[str, Any]    # structured payload for audits/debug
+    weight: float               # applied weight (after confidence scaling)
+    raw_weight: float           # original rule weight before scaling
+    message: str
+    evidence: Dict[str, Any]
 
 def _emit_event(
     events: List[RuleEvent],
@@ -34,19 +35,37 @@ def _emit_event(
     message: str,
     evidence: Optional[Dict[str, Any]] = None,
     reason_text: Optional[str] = None,
+    confidence_factor: float = 1.0
 ) -> float:
     """
     Emit a structured rule event AND (optionally) a text reason.
     Returns score delta to add.
     """
     sev = (severity or "INFO").upper().strip()
+    raw_w = float(weight or 0.0)
+    cf = float(confidence_factor or 1.0)
+
+    if sev == "HARD_FAIL":
+        applied_w = raw_w
+        cf_used = 1.0
+    else:
+        cf_used = max(0.60, min(1.00, cf))
+        applied_w = raw_w * cf_used
+
     ev = RuleEvent(
         rule_id=rule_id,
         severity=sev,
-        weight=float(weight or 0.0),
+        weight=applied_w,
+        raw_weight=raw_w,
         message=str(message or ""),
         evidence=evidence or {},
     )
+
+    # copy evidence and attach audit fields
+    ev.evidence = dict(ev.evidence or {})
+    ev.evidence.setdefault("confidence_factor", cf_used)
+    ev.evidence.setdefault("raw_weight", raw_w)
+    ev.evidence.setdefault("applied_weight", applied_w)
     events.append(ev)
 
     # Keep backward compatibility for UI: append text reasons with tags when requested
@@ -72,6 +91,99 @@ def _join_text(tf: dict, lf: dict) -> str:
         return "\n".join([str(x) for x in lines])
     return ""
 
+def _confidence_factor_from_features(
+    ff: Dict[str, Any],
+    tf: Dict[str, Any],
+    lf: Dict[str, Any],
+    fr: Dict[str, Any],
+) -> float:
+    """
+    Returns a multiplicative factor in [0.6, 1.0] to scale *soft* rule weights.
+    We DO NOT down-weight HARD_FAIL rules.
+    """
+    c = tf.get("confidence")
+
+    conf: Optional[float] = None
+    if isinstance(c, (int, float)):
+        try:
+            conf = float(c)
+        except Exception:
+            conf = None
+    elif isinstance(c, str):
+        cl = c.strip().lower()
+        if cl in ("high", "h"):
+            conf = 0.90
+        elif cl in ("medium", "med", "m"):
+            conf = 0.70
+        elif cl in ("low", "l"):
+            conf = 0.45
+
+    if conf is None:
+        conf = 0.70
+
+    if conf >= 0.85:
+        factor = 1.0
+    elif conf >= 0.65:
+        factor = 0.85
+    else:
+        factor = 0.70
+
+    # Optional extra softening when OCR reliability is likely worse
+    source_type = (ff.get("source_type") or "").lower()
+    if source_type == "image" and not ff.get("exif_present"):
+        factor = min(factor, 0.80)
+
+    return max(0.60, min(1.00, float(factor)))
+
+def _normalize_amount_str(val: Any) -> Optional[float]:
+    """Normalize a currency/amount string into a float. Returns None if not parseable."""
+    if val is None:
+        return None
+
+    if isinstance(val, (int, float)):
+        try:
+            return float(val)
+        except Exception:
+            return None
+
+    s = str(val).strip()
+    if not s:
+        return None
+
+    neg = False
+    if s.startswith("(") and s.endswith(")"):
+        neg = True
+        s = s[1:-1].strip()
+
+    kept = []
+    for ch in s:
+        if ch.isdigit() or ch in {".", ",", "-", " ", "\u00A0"}:
+            kept.append(ch)
+    s = "".join(kept).replace("\u00A0", " ").strip()
+
+    if "," in s and "." in s:
+        s = s.replace(",", "")
+    elif "," in s:
+        s = s.replace(",", "")
+
+    s = s.replace(" ", "")
+    if s in {"", "-", "."}:
+        return None
+
+    try:
+        out = float(s)
+        return -out if neg else out
+    except Exception:
+        return None
+
+
+def _has_total_value(tf: dict) -> bool:
+    """True if we have a usable total value even if TOTAL line keyword wasn't detected."""
+    for k in ("total", "total_amount", "grand_total", "amount_total", "total_extracted"):
+        if k in tf and tf.get(k) not in (None, ""):
+            if _normalize_amount_str(tf.get(k)) is not None:
+                return True
+    return False
 
 def _has_any_pattern(text: str, patterns: List[str]) -> bool:
     t = (text or "").lower()
@@ -1354,6 +1466,21 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
     lf = features.layout_features
     fr = features.forensic_features
 
+    conf_factor = _confidence_factor_from_features(ff, tf, lf, fr)
+
+    def emit_event(*, events, reasons, rule_id, severity, weight, message, evidence=None, reason_text=None):
+        return _emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id=rule_id,
+            severity=severity,
+            weight=weight,
+            message=message,
+            evidence=evidence,
+            reason_text=reason_text,
+            confidence_factor=conf_factor,
+        )
+
     source_type = ff.get("source_type")
 
     blob_text = _join_text(tf, lf)
@@ -1397,7 +1524,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
     
     if any(tool in producer_lower or tool in creator_lower for tool in suspicious_tools):
         tool_found = next((t for t in suspicious_tools if t in producer_lower or t in creator_lower), "editing software")
-        score += _emit_event(
+        score += emit_event(
             events=events,
             reasons=reasons,
             rule_id="R1_SUSPICIOUS_SOFTWARE",
@@ -1422,12 +1549,42 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
     # ---------------------------------------------------------------------------
     has_any_amount = tf.get("has_any_amount", False)
     total_line_present = tf.get("total_line_present", False)
+    has_total_value = _has_total_value(tf)
     total_mismatch = tf.get("total_mismatch", False)
     has_date = tf.get("has_date", False)
     merchant_candidate = tf.get("merchant_candidate") or tf.get("merchant")
 
+    # If upstream extractors (LayoutLM / DONUT / ensemble) already provided a total,
+    # do NOT flag "No Total Line" purely based on missing TOTAL keyword/line.
+    extracted_total_raw = (
+        tf.get("total_amount")
+        or tf.get("normalized_total")
+        or tf.get("total")
+        or tf.get("grand_total")
+    )
+
+    def _to_float_amount(v):
+        if v is None:
+            return None
+        if isinstance(v, (int, float)):
+            try:
+                return float(v)
+            except Exception:
+                return None
+        s = str(v)
+        s = s.replace(",", "").replace("$", "").replace("₹", "").strip()
+        # remove common currency codes if present inline
+        s = re.sub(r"\b(usd|inr|cad|aud|eur|gbp)\b", "", s, flags=re.IGNORECASE).strip()
+        try:
+            return float(s)
+        except Exception:
+            return None
+
+    extracted_total_val = _to_float_amount(extracted_total_raw)
+    has_extracted_total = extracted_total_val is not None and extracted_total_val > 0
+
     if not has_any_amount:
-        score += _emit_event(
+        score += emit_event(
             events=events,
             reasons=reasons,
             rule_id="R5_NO_AMOUNTS",
@@ -1438,20 +1595,29 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
             reason_text="💰 No Amounts Detected: The document contains no recognizable currency amounts.",
         )
 
-    if has_any_amount and not total_line_present:
-        score += _emit_event(
+    if has_any_amount and (not total_line_present) and (not has_total_value):
+        score += emit_event(
             events=events,
             reasons=reasons,
             rule_id="R6_NO_TOTAL_LINE",
             severity="CRITICAL",
             weight=0.15,
             message="Amounts present but no total line found",
-            evidence={"has_any_amount": True, "total_line_present": False},
-            reason_text="🧾 No Total Line: Document has amounts but no clear total/grand total line.",
+            evidence={
+                "has_any_amount": True,
+                "total_line_present": False,
+                "has_total_value": False,
+            },
+        reason_text="🧾 No Total Line: Document has amounts but no clear total/grand total line.",
+    )
+    elif has_any_amount and (not total_line_present) and has_total_value:
+        minor_notes.append(
+            "🧾 Total value was extracted, but a 'TOTAL/GRAND TOTAL' line was not detected. "
+            "This can happen with noisy OCR; no penalty applied."
         )
 
     if total_mismatch:
-        score += _emit_event(
+        score += emit_event(
             events=events,
             reasons=reasons,
             rule_id="R7_TOTAL_MISMATCH",
@@ -1463,7 +1629,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
         )
 
     if not has_date:
-        score += _emit_event(
+        score += emit_event(
             events=events,
             reasons=reasons,
             rule_id="R8_NO_DATE",
@@ -1475,7 +1641,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
         )
 
     if not merchant_candidate:
-        score += _emit_event(
+        score += emit_event(
             events=events,
             reasons=reasons,
             rule_id="R9_NO_MERCHANT",
@@ -1497,7 +1663,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
             if any(it in issues for it in ("looks_like_label", "looks_like_identifier")):
                 weight = 0.18
 
-            score += _emit_event(
+            score += emit_event(
                 events=events,
                 reasons=reasons,
                 rule_id="MERCHANT_IMPLAUSIBLE",
@@ -1511,7 +1677,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
     # Document type checks
     # _detect_document_type returns "unknown" when invoice+receipt language is mixed
     if doc_type_hint == "unknown":
-        score += _emit_event(
+        score += emit_event(
             events=events,
             reasons=reasons,
             rule_id="R9B_DOC_TYPE_UNKNOWN_OR_MIXED",
@@ -1529,7 +1695,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
     numeric_line_ratio = lf.get("numeric_line_ratio", 0.0)
 
     if num_lines < 5:
-        score += _emit_event(
+        score += emit_event(
             events=events,
             reasons=reasons,
             rule_id="R10_TOO_FEW_LINES",
@@ -1541,7 +1707,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
         )
 
     if num_lines > 120:
-        score += _emit_event(
+        score += emit_event(
             events=events,
             reasons=reasons,
             rule_id="R11_TOO_MANY_LINES",
@@ -1553,7 +1719,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
         )
 
     if numeric_line_ratio > 0.8 and num_lines > 10:
-        score += _emit_event(
+        score += emit_event(
             events=events,
             reasons=reasons,
             rule_id="R12_HIGH_NUMERIC_RATIO",
@@ -1571,7 +1737,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
     unique_char_count = fr.get("unique_char_count", 0)
 
     if uppercase_ratio > 0.8 and num_lines > 5:
-        score += _emit_event(
+        score += emit_event(
             events=events,
             reasons=reasons,
             rule_id="R13_HIGH_UPPERCASE",
@@ -1583,7 +1749,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
         )
 
     if unique_char_count < 15 and num_lines > 5:
-        score += _emit_event(
+        score += emit_event(
             events=events,
             reasons=reasons,
             rule_id="R14_LOW_CHAR_VARIETY",
@@ -1608,7 +1774,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
             creation_date = creation_datetime.date()
 
             if receipt_date > creation_date:
-                score += _emit_event(
+                score += emit_event(
                     events=events,
                     reasons=reasons,
                     rule_id="R15_IMPOSSIBLE_DATE_SEQUENCE",
@@ -1629,7 +1795,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
             else:
                 gap_days = (creation_date - receipt_date).days
                 if gap_days > 2:
-                    score += _emit_event(
+                    score += emit_event(
                         events=events,
                         reasons=reasons,
                         rule_id="R16_SUSPICIOUS_DATE_GAP",
@@ -1647,7 +1813,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
                         ),
                     )
         elif receipt_date_str and not receipt_date:
-            score += _emit_event(
+            score += emit_event(
                 events=events,
                 reasons=reasons,
                 rule_id="R17_UNPARSABLE_DATE",
@@ -1698,4 +1864,50 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
         minor_notes=minor_notes,
         events=[asdict(e) for e in events],
     )
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def analyze_receipt(
+    file_path: str,
+    extracted_total: str = None,
+    extracted_merchant: str = None,
+    extracted_date: str = None,
+    apply_learned: bool = True
+) -> ReceiptDecision:
+    """
+    Main entry point for receipt analysis.
+    
+    Args:
+        file_path: Path to receipt file (PDF or image)
+        extracted_total: Optional pre-extracted total from other engines
+        extracted_merchant: Optional pre-extracted merchant from other engines
+        extracted_date: Optional pre-extracted date from other engines
+        apply_learned: Whether to apply learned rules from feedback
+        
+    Returns:
+        ReceiptDecision with label, score, reasons, and audit events
+    """
+    # 1. Create ReceiptInput from file path
+    from app.schemas.receipt import ReceiptInput
+    receipt_input = ReceiptInput(file_path=file_path)
+    
+    # 2. Ingest the receipt file and run OCR
+    raw = ingest_and_ocr(receipt_input)
+    
+    # 3. Build features from the raw receipt data
+    features = build_features(raw)
+    
+    # 3. If we have extracted data from other engines, enhance the features
+    if extracted_total:
+        features.text_features["total_amount"] = extracted_total
+    if extracted_merchant:
+        features.text_features["merchant_candidate"] = extracted_merchant
+    if extracted_date:
+        features.text_features["date_extracted"] = extracted_date
+    
+    # 4. Run rule-based analysis
+    return _score_and_explain(features, apply_learned=apply_learned)
     

@@ -1,8 +1,11 @@
 # app/schemas/receipt.py
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Any, Optional
 from PIL import Image
+
+import uuid
+from datetime import datetime, timezone
 
 
 @dataclass
@@ -48,13 +51,39 @@ class AuditEvent:
     """
     Append-only, structured explanation for *why* a decision was made.
     Persist this as JSON for audit/debug/analytics.
+
+    Notes:
+    - `event_id` makes events referencable and dedupable.
+    - `ts` provides ordering and auditability.
+    - `source/type/code/severity/evidence` are stable, machine-friendly fields.
     """
-    source: str                    # rule_engine / ensemble / vision_llm / layoutlm / donut ...
-    type: str                      # rule_triggered / model_vote / override / normalization ...
-    severity: Optional[str] = None # HARD_FAIL / CRITICAL / WARNING / INFO
-    code: Optional[str] = None     # stable id (e.g., R16_SUSPICIOUS_DATE_GAP)
+
+    # Stable identity / ordering
+    event_id: str = ""                 # UUID
+    ts: str = ""                       # ISO-8601 UTC timestamp
+
+    # Classification
+    source: str = ""                   # rule_engine / ensemble / vision_llm / layoutlm / donut ...
+    type: str = ""                     # rule_triggered / model_vote / override / normalization ...
+    severity: Optional[str] = None      # HARD_FAIL / CRITICAL / WARNING / INFO
+    code: Optional[str] = None          # stable id (e.g., R16_SUSPICIOUS_DATE_GAP)
+
+    # Human-facing summary + machine evidence
     message: str = ""
     evidence: Dict[str, Any] = field(default_factory=dict)
+
+    def finalize_defaults(self) -> None:
+        """Fill event_id/ts if not already set."""
+        if not self.event_id:
+            self.event_id = str(uuid.uuid4())
+        if not self.ts:
+            self.ts = datetime.now(timezone.utc).isoformat()
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-serializable dict for storage/logging."""
+        # Ensure defaults are filled even if caller forgot.
+        self.finalize_defaults()
+        return asdict(self)
 
 
 @dataclass
@@ -78,6 +107,8 @@ class ReceiptDecision:
     # --- Decision identity / provenance -------------------------------------
     decision_id: str = ""             # UUID or stable id set by API layer
     created_at: str = ""              # ISO-8601 timestamp set by API layer
+    policy_name: str = "default"     # human-friendly policy name (e.g., default/strict)
+    policy_notes: Optional[str] = None
     input_fingerprint: Optional[Dict[str, Any]] = None  # sha256/file_size/filename/mime/etc.
 
     # --- Optional debugging / audit payloads --------------------------------
@@ -85,8 +116,47 @@ class ReceiptDecision:
     minor_notes: Optional[List[str]] = None
     debug: Optional[Dict[str, Any]] = None
 
-    # Primary "why we decided" trail (persist this)
+    # --- Extraction confidence (normalized) ---------------------------------
+    # Always prefer these two fields over any ad-hoc text_features["confidence"] usage.
+    extraction_confidence_score: Optional[float] = None   # float in [0,1]
+    extraction_confidence_level: Optional[str] = None     # "low"|"medium"|"high"
+
+    # --- Monetary extraction / normalization (optional) ---------------------
+    parsed_totals: Optional[List[Dict[str, Any]]] = None  # e.g., [{"label":"total","raw":"$88.89","value":88.89,"confidence":0.95}]
+    normalized_total: Optional[float] = None              # single best total chosen after normalization
+    currency: Optional[str] = None                        # ISO currency if detected (e.g., USD, KES)
+
+    finalized: bool = True            # indicates decision is final vs draft/partial
+
+    # Primary "why we decided" trail (persist this as JSON)
     audit_events: List[AuditEvent] = field(default_factory=list)
 
     # Legacy structured rule events (RuleEvent dicts) - kept for backward compatibility
     events: Optional[List[Dict[str, Any]]] = None
+
+    def finalize_defaults(self) -> None:
+        """Fill decision_id/created_at (and audit event ids/timestamps) if missing."""
+        if not self.decision_id:
+            self.decision_id = str(uuid.uuid4())
+        if not self.created_at:
+            self.created_at = datetime.now(timezone.utc).isoformat()
+
+        # Finalize nested audit events for persistence
+        if self.audit_events:
+            for e in self.audit_events:
+                if hasattr(e, "finalize_defaults"):
+                    e.finalize_defaults()
+
+    def add_audit_event(self, event: AuditEvent) -> None:
+        """Append an AuditEvent to the decision (auto-filling ids/timestamps)."""
+        if hasattr(event, "finalize_defaults"):
+            event.finalize_defaults()
+        self.audit_events.append(event)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-serializable dict for persistence."""
+        self.finalize_defaults()
+        d = asdict(self)
+        # Ensure nested dataclasses remain JSON-friendly
+        d["audit_events"] = [e.to_dict() if hasattr(e, "to_dict") else e for e in self.audit_events]
+        return d
