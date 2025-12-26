@@ -645,6 +645,95 @@ The `_normalize_confidence()` method handles:
 
 ---
 
+---
+
+## 📊 Comprehensive Audit Trail System
+
+VeriReceipt provides a **complete, structured audit trail** for every decision, ensuring regulatory compliance and full transparency.
+
+### **Audit Components**
+
+**1. AuditEvent (Structured Events)**
+- `event_id`: UUID for unique identification
+- `ts`: ISO-8601 timestamp
+- `source`: Origin (ensemble, rule_engine, vision_llm, etc.)
+- `type`: Event type (reconciliation, rule_triggered, normalization, etc.)
+- `severity`: HARD_FAIL / CRITICAL / WARNING / INFO
+- `code`: Stable identifier (e.g., R5_NO_AMOUNTS, ENS_HARD_FAIL_WINS)
+- `message`: Human-readable explanation
+- `evidence`: Machine-queryable metadata (dict)
+
+**2. LearnedRuleAudit (Feedback-Derived Rules)**
+- `pattern`: Pattern identifier (e.g., "missing_elements", "spacing_anomaly")
+- `message`: Human-readable explanation
+- `confidence_adjustment`: Signed delta applied by learned rules
+- `times_seen`: Number of times users flagged this pattern
+- `severity`: INFO / WARNING / CRITICAL
+- `evidence`: Additional context (doc_family, gating, etc.)
+
+**3. Reconciliation Events (Ensemble Decision Path)**
+
+All ensemble decisions include structured reconciliation events:
+
+- **ENS_DOC_PROFILE_TAGS** - Document classification metadata
+- **ENS_VISION_CONF_NORMALIZED** - Vision LLM confidence normalization trace
+- **ENS_LEARNED_RULES_APPLIED** - Learned rule summary (patterns, adjustments)
+- **ENS_HARD_FAIL_WINS** / **ENS_RULES_STRONG_REJECT** / etc. - Decision path events
+- **ENS_FINAL_DECISION** - Complete decision summary with all evidence
+
+Each event includes:
+- Vision verdict and confidence
+- Rule label and score
+- Critical count and agreement score
+- Learned rule count and patterns
+- Document profile (family, subtype, confidence)
+- Converged extraction confidence
+
+### **Viewing Audit Records**
+
+**Quick View (Latest Analysis):**
+```bash
+python view_audit_records.py
+```
+
+**View Last N Analyses:**
+```bash
+python view_audit_records.py --last 5
+```
+
+**View Specific Decision:**
+```bash
+python view_audit_records.py --decision-id <uuid>
+```
+
+**Test Audit Trail:**
+```bash
+python test_audit_trail.py  # Analyze a PDF and view audit events
+```
+
+### **Audit Trail Storage**
+
+**CSV Log:** `data/logs/decisions.csv`
+- `audit_events` column contains JSON array of AuditEvent objects
+- `learned_rule_audits` column contains JSON array of LearnedRuleAudit objects
+- `events` column contains legacy rule events (backward compatible)
+
+**API Response:**
+- Ensemble verdict includes `reconciliation_events` array
+- Rule-based results include `events` array with structured evidence
+
+### **Benefits**
+
+✅ **Regulatory Compliance** - Complete audit trail for every decision  
+✅ **Machine-Queryable** - Structured JSON evidence for analytics  
+✅ **Learned Rule Transparency** - Track pattern, frequency, and adjustments  
+✅ **Document-Aware Gating** - Visibility into conditional rule application  
+✅ **Ensemble Decision Path** - 7 scenarios with full evidence  
+✅ **Confidence Traceability** - Normalization and blending logic exposed  
+✅ **Easy Viewing** - Utility scripts for human-readable audit reports  
+
+---
+
 **Developer Notes:**  
 - All weights and thresholds live in `app/pipelines/rules.py`.  
 - They are intentionally simple constants to make experimentation easy.  
@@ -652,6 +741,8 @@ The `_normalize_confidence()` method handles:
 - In the future, these rules can be moved to a config file (YAML/JSON) to make the engine data-driven.
 - Document profile detection uses keyword-based heuristics in `app/pipelines/features.py`.
 - Ensemble reconciliation events are generated in `app/pipelines/ensemble.py`.
+- Audit events are created in `app/schemas/receipt.py` and populated in `app/api/main.py`.
+- Learned rule events are emitted in `app/pipelines/rules.py` with `LR_LEARNED_PATTERN` rule_id.
 
 ---
 
@@ -671,7 +762,25 @@ The `_normalize_confidence()` method handles:
 - [x] Vision LLM integration (fraud detection + authenticity)
 - [x] LayoutLM integration (data extraction)
 - [x] Ensemble verdict system with critical overrides
-- [x] **Comprehensive Feedback System** 🆕
+- [x] **Document Profile Detection System** 🆕
+  - [x] 31 document subtypes across 3 families (TRANSACTIONAL, LOGISTICS, PAYMENT)
+  - [x] Keyword-based classification with confidence scoring
+  - [x] Document-aware rule validation (conditional R5, R6, R8)
+  - [x] Evidence tracking for audit compliance
+- [x] **Ensemble Reconciliation Events** 🆕
+  - [x] 7 structured decision path events
+  - [x] Confidence normalization (handles floats, percentages, string levels)
+  - [x] Complete audit trail for regulatory compliance
+  - [x] Learned rule integration in ensemble decisions
+- [x] **Comprehensive Audit Trail System** 🆕
+  - [x] Structured AuditEvent dataclass with UUID and timestamps
+  - [x] LearnedRuleAudit tracking (pattern, adjustment, frequency)
+  - [x] Reconciliation events from ensemble (ENS_* codes)
+  - [x] Document profile tags in audit evidence
+  - [x] Machine-queryable decision evidence
+  - [x] CSV persistence with full JSON audit columns
+  - [x] Utility scripts (view_audit_records.py, test_audit_trail.py)
+- [x] **Comprehensive Feedback System**
   - [x] Detailed feedback form UI
   - [x] Indicator-level reviews (confirm/false alarm/uncertain)
   - [x] Missed indicator tracking (10 structured patterns)
