@@ -52,11 +52,14 @@ class AuditFormatter:
     
     @staticmethod
     def _format_header(decision: Dict[str, Any]) -> str:
-        """Format decision header with metadata."""
+        """Format the report header with basic decision info."""
         decision_id = decision.get("decision_id", "N/A")
         created_at = decision.get("created_at", "N/A")
-        label = decision.get("label", "UNKNOWN")
+        label = decision.get("label") or "UNKNOWN"
         score = decision.get("score", 0.0)
+        policy_name = decision.get("policy_name") or "default"
+        policy_version = decision.get("policy_version") or "0.0.0"
+        rule_version = decision.get("rule_version") or "0.0.0"
         
         return f"""
 ╔═══════════════════════════════════════════════════════════════════════════╗
@@ -111,12 +114,12 @@ Fraud Risk Score: {score:.2f} / 1.00
     @staticmethod
     def _format_geo_context(decision: Dict[str, Any]) -> str:
         """Format geo-aware classification context."""
-        lang = decision.get("lang_guess", "unknown")
+        lang = decision.get("lang_guess") or "UNKNOWN"
         lang_conf = decision.get("lang_confidence", 0.0)
-        geo = decision.get("geo_country_guess", "UNKNOWN")
+        geo = decision.get("geo_country_guess") or "UNKNOWN"
         geo_conf = decision.get("geo_confidence", 0.0)
-        doc_family = decision.get("doc_family", "UNKNOWN")
-        doc_subtype = decision.get("doc_subtype", "UNKNOWN")
+        doc_family = decision.get("doc_family") or "UNKNOWN"
+        doc_subtype = decision.get("doc_subtype") or "UNKNOWN"
         doc_conf = decision.get("doc_profile_confidence", 0.0)
         
         # Get geo evidence from debug or audit events
