@@ -238,8 +238,8 @@
 
                 try {
                     addLog('📤 Uploading receipt...', 'info');
-                    addLog('🚀 Starting 5-engine analysis (this may take 30-60 seconds)...', 'info');
-                    addLog(`📡 Connecting to: ${API_BASE_URL}/analyze/hybrid`, 'info');
+                    addLog('🚀 Starting rule-based analysis (fast mode)...', 'info');
+                    addLog(`📡 Connecting to: ${API_BASE_URL}/analyze`, 'info');
                     
                     // Using regular endpoint with extended timeout
                     const controller = new AbortController();
@@ -247,11 +247,11 @@
                     
                     let response;
                     try {
-                        response = await fetch(`${API_BASE_URL}/analyze/hybrid`, {
+                        response = await fetch(`${API_BASE_URL}/analyze`, {
                             method: 'POST',
                             body: formData,
                             signal: controller.signal,
-                            mode: 'cors',
+                            credentials: 'omit',
                             cache: 'no-cache'
                         });
                         clearTimeout(timeoutId);
@@ -277,7 +277,40 @@
                     // Get JSON response (not streaming)
                     const data = await response.json();
                     
-                    // Simulate progress updates for better UX
+                    // Check if this is a simple /analyze response or /analyze/hybrid response
+                    const isSimpleAnalyze = data.label !== undefined && !data.hybrid_verdict;
+                    
+                    if (isSimpleAnalyze) {
+                        // Simple /analyze endpoint - single rule-based result
+                        addLog('⏳ Analyzing with rule-based engine...', 'info');
+                        setProgress(50);
+                        
+                        // Convert simple response to hybrid format for compatibility
+                        const hybridData = {
+                            final_label: data.label,
+                            confidence: data.score,
+                            recommended_action: data.label === 'LEGITIMATE' ? 'approve' : data.label === 'SUSPICIOUS' ? 'review' : 'reject',
+                            reasoning: data.reasons || [],
+                            receipt_id: data.analysis_ref || 'unknown',
+                            rule_based: data,
+                            engines_completed: 1,
+                            total_engines: 1,
+                            engines_status: { critical_complete: true, optional_complete: 0 },
+                            uploaded_image: null,
+                            extracted: {}
+                        };
+                        
+                        setEngineStatus({ 'rule-based': 'completed' });
+                        setEngineResults({ 'rule-based': data });
+                        addLog(`✅ Rule-Based completed in ${data.processing_time_ms / 1000}s`, 'success');
+                        setProgress(100);
+                        setHybridVerdict(hybridData);
+                        addLog('✅ Analysis complete!', 'success');
+                        setAnalyzing(false);
+                        return;
+                    }
+                    
+                    // Hybrid response - multiple engines
                     addLog('⏳ Analyzing with all 5 engines...', 'info');
                     setProgress(25);
                     
