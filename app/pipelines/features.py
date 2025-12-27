@@ -5,6 +5,7 @@ from dataclasses import asdict
 from typing import Dict, Any, List, Tuple, Optional
 
 from app.schemas.receipt import ReceiptRaw, ReceiptFeatures
+from app.pipelines.geo_detection import detect_geo_and_profile
 
 
 # --- Helper: Suspicious PDF producers / tools -------------------------------
@@ -943,7 +944,17 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
 
     full_text, page_texts = _get_all_text_pages(raw)
     lines = full_text.split("\n") if full_text else []
-    doc_profile = _detect_document_profile(full_text, lines)
+    
+    # NEW: Geo-aware document classification (Steps 1-4)
+    geo_profile = detect_geo_and_profile(full_text, lines)
+    
+    # Legacy doc_profile for backward compatibility (will be replaced by geo_profile)
+    doc_profile = {
+        "doc_family_guess": geo_profile.get("doc_family_guess"),
+        "doc_subtype_guess": geo_profile.get("doc_subtype_guess"),
+        "doc_profile_confidence": geo_profile.get("doc_profile_confidence"),
+        "doc_profile_evidence": geo_profile.get("doc_profile_evidence"),
+    }
 
     # --- File & metadata features -------------------------------------------
     meta = raw.pdf_metadata or {}
@@ -1045,10 +1056,18 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         "doc_subtype_guess": doc_profile.get("doc_subtype_guess"),
         "doc_profile_confidence": doc_profile.get("doc_profile_confidence"),
         "doc_profile_evidence": doc_profile.get("doc_profile_evidence"),
+        # NEW: Geo-aware classification results
+        "lang_guess": geo_profile.get("lang_guess"),
+        "lang_confidence": geo_profile.get("lang_confidence"),
+        "geo_country_guess": geo_profile.get("geo_country_guess"),
+        "geo_confidence": geo_profile.get("geo_confidence"),
+        "geo_evidence": geo_profile.get("geo_evidence"),
     }
     # Add tax breakdown info
     text_features.update(tax_breakdown)
     text_features.update(text_stats)
+    # Add geo-specific features (MX RFC, US ZIP, IN GSTIN, etc.)
+    text_features.update(geo_profile.get("geo_specific_features", {}))
 
     # --- Layout features (basic for now) ------------------------------------
     layout_features: Dict[str, Any] = {

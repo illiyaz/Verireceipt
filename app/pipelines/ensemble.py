@@ -345,7 +345,7 @@ class EnsembleIntelligence:
         return "low"
     def _extract_doc_profile(self, results: Dict[str, Any], converged_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Best-effort doc profile extraction for audit tags.
+        Best-effort doc profile extraction for audit tags (now includes geo info).
         Must never throw.
         """
         try:
@@ -354,11 +354,19 @@ class EnsembleIntelligence:
             # Preferred: rules.py can attach doc profile
             doc_profile = rb.get("doc_profile") or (rb.get("debug") or {}).get("doc_profile")
             if isinstance(doc_profile, dict):
-                return {
+                profile = {
                     "doc_family": doc_profile.get("family"),
                     "doc_subtype": doc_profile.get("subtype"),
                     "doc_profile_confidence": doc_profile.get("confidence"),
                 }
+                # Add geo info if available
+                if "lang_guess" in doc_profile:
+                    profile["lang_guess"] = doc_profile.get("lang_guess")
+                    profile["lang_confidence"] = doc_profile.get("lang_confidence")
+                if "geo_country_guess" in doc_profile:
+                    profile["geo_country_guess"] = doc_profile.get("geo_country_guess")
+                    profile["geo_confidence"] = doc_profile.get("geo_confidence")
+                return profile
 
             # Fallback: converged data
             if isinstance(converged_data, dict):

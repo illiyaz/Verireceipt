@@ -2088,6 +2088,20 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
     else:
         label = "real"
     
+    # Extract full geo profile for ensemble audit trail
+    geo_profile_debug = {
+        "family": doc_profile.get("family"),
+        "subtype": doc_profile.get("subtype"),
+        "confidence": doc_profile.get("confidence"),
+        "evidence": doc_profile.get("evidence"),
+        # Add geo-aware fields if available
+        "lang_guess": tf.get("lang_guess"),
+        "lang_confidence": tf.get("lang_confidence"),
+        "geo_country_guess": tf.get("geo_country_guess"),
+        "geo_confidence": tf.get("geo_confidence"),
+        "geo_evidence": tf.get("geo_evidence"),
+    }
+    
     return ReceiptDecision(
         score=score,
         label=label,
@@ -2098,7 +2112,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
         policy_version=POLICY_VERSION,
         engine_version=ENGINE_VERSION,
         debug={
-            "doc_profile": doc_profile,
+            "doc_profile": geo_profile_debug,
         },
     )
 
