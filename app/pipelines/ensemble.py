@@ -614,6 +614,47 @@ class EnsembleIntelligence:
 
             critical_count = len(critical_reasons)
 
+        # Helper to emit final decision event (called before every return)
+        def _emit_final_decision_event() -> None:
+            verdict["reconciliation_events"].append(
+                self._new_reconciliation_event(
+                    code="ENS_FINAL_DECISION",
+                    message="Final ensemble decision produced.",
+                    evidence={
+                        "final_label": verdict.get("final_label"),
+                        "final_confidence": verdict.get("confidence"),
+                        "recommended_action": verdict.get("recommended_action"),
+                        "vision_verdict": vision_verdict,
+                        "vision_confidence": vision_confidence,
+                        "rule_label": rule_label,
+                        "rule_score": rule_score,
+                        "critical_count": critical_count,
+                        "agreement_score": agreement_score,
+
+                        # learned rules summary
+                        "learned_rule_count": (learned_summary or {}).get("learned_rule_count"),
+                        "learned_patterns_top": (learned_summary or {}).get("patterns_top"),
+                        "learned_total_confidence_adjustment": (learned_summary or {}).get("total_confidence_adjustment"),
+                        "learned_rules_top_raw": (learned_summary or {}).get("learned_rules_top_raw"),
+
+                        # extraction confidence
+                        "converged_confidence_score": (converged_data or {}).get("confidence_score"),
+                        "converged_confidence_level": (converged_data or {}).get("confidence_level"),
+
+                        # doc profile tags
+                        "doc_family": doc_profile.get("doc_family"),
+                        "doc_subtype": doc_profile.get("doc_subtype"),
+                        "doc_profile_confidence": doc_profile.get("doc_profile_confidence"),
+
+                        # optional pass-through geo/lang (safe even if missing)
+                        "lang_guess": doc_profile.get("lang_guess"),
+                        "lang_confidence": doc_profile.get("lang_confidence"),
+                        "geo_country_guess": doc_profile.get("geo_country_guess"),
+                        "geo_confidence": doc_profile.get("geo_confidence"),
+                    },
+                )
+            )
+
         # Step 4: Decision precedence + reconciliation
         #
         # Policy:
@@ -654,33 +695,7 @@ class EnsembleIntelligence:
                     },
                 )
             )
-            # Final decision audit event
-            verdict["reconciliation_events"].append(
-                self._new_reconciliation_event(
-                    code="ENS_FINAL_DECISION",
-                    message="Final ensemble decision produced.",
-                    evidence={
-                        "final_label": verdict.get("final_label"),
-                        "final_confidence": verdict.get("confidence"),
-                        "recommended_action": verdict.get("recommended_action"),
-                        "vision_verdict": vision_verdict,
-                        "vision_confidence": vision_confidence,
-                        "rule_label": rule_label,
-                        "rule_score": rule_score,
-                        "critical_count": critical_count,
-                        "agreement_score": agreement_score,
-                        "learned_rule_count": (learned_summary or {}).get("learned_rule_count"),
-                        "learned_patterns_top": (learned_summary or {}).get("patterns_top"),
-                        "learned_total_confidence_adjustment": (learned_summary or {}).get("total_confidence_adjustment"),
-                        "learned_rules_top_raw": (learned_summary or {}).get("learned_rules_top_raw"),
-                        "converged_confidence_score": (converged_data or {}).get("confidence_score"),
-                        "converged_confidence_level": (converged_data or {}).get("confidence_level"),
-                        "doc_family": doc_profile.get("doc_family"),
-                        "doc_subtype": doc_profile.get("doc_subtype"),
-                        "doc_profile_confidence": doc_profile.get("doc_profile_confidence"),      
-                    },
-                )
-            )
+            _emit_final_decision_event()
             return verdict
 
         # Thresholds (tunable)
@@ -740,33 +755,7 @@ class EnsembleIntelligence:
                     },
                 )
             )
-            # Final decision audit event
-            verdict["reconciliation_events"].append(
-                self._new_reconciliation_event(
-                    code="ENS_FINAL_DECISION",
-                    message="Final ensemble decision produced.",
-                    evidence={
-                        "final_label": verdict.get("final_label"),
-                        "final_confidence": verdict.get("confidence"),
-                        "recommended_action": verdict.get("recommended_action"),
-                        "vision_verdict": vision_verdict,
-                        "vision_confidence": vision_confidence,
-                        "rule_label": rule_label,
-                        "rule_score": rule_score,
-                        "critical_count": critical_count,
-                        "agreement_score": agreement_score,
-                        "learned_rule_count": (learned_summary or {}).get("learned_rule_count"),
-                        "learned_patterns_top": (learned_summary or {}).get("patterns_top"),
-                        "learned_total_confidence_adjustment": (learned_summary or {}).get("total_confidence_adjustment"),
-                        "learned_rules_top_raw": (learned_summary or {}).get("learned_rules_top_raw"),
-                        "converged_confidence_score": (converged_data or {}).get("confidence_score"),
-                        "converged_confidence_level": (converged_data or {}).get("confidence_level"),
-                        "doc_family": doc_profile.get("doc_family"),
-                        "doc_subtype": doc_profile.get("doc_subtype"),
-                        "doc_profile_confidence": doc_profile.get("doc_profile_confidence"),
-                    },
-                )
-            )
+            _emit_final_decision_event()
             return verdict
 
 
@@ -818,33 +807,7 @@ class EnsembleIntelligence:
                     },
                 )
             )
-            # Final decision audit event
-            verdict["reconciliation_events"].append(
-                self._new_reconciliation_event(
-                    code="ENS_FINAL_DECISION",
-                    message="Final ensemble decision produced.",
-                    evidence={
-                        "final_label": verdict.get("final_label"),
-                        "final_confidence": verdict.get("confidence"),
-                        "recommended_action": verdict.get("recommended_action"),
-                        "vision_verdict": vision_verdict,
-                        "vision_confidence": vision_confidence,
-                        "rule_label": rule_label,
-                        "rule_score": rule_score,
-                        "critical_count": critical_count,
-                        "agreement_score": agreement_score,
-                        "learned_rule_count": (learned_summary or {}).get("learned_rule_count"),
-                        "learned_patterns_top": (learned_summary or {}).get("patterns_top"),
-                        "learned_total_confidence_adjustment": (learned_summary or {}).get("total_confidence_adjustment"),
-                        "learned_rules_top_raw": (learned_summary or {}).get("learned_rules_top_raw"),
-                        "converged_confidence_score": (converged_data or {}).get("confidence_score"),
-                        "converged_confidence_level": (converged_data or {}).get("confidence_level"),
-                        "doc_family": doc_profile.get("doc_family"),
-                        "doc_subtype": doc_profile.get("doc_subtype"),
-                        "doc_profile_confidence": doc_profile.get("doc_profile_confidence"),
-                    },
-                )
-            )
+            _emit_final_decision_event()
             return verdict
 
         # 4D) Vision/Rules conflict: Vision very confident REAL, rules only moderate -> human review
@@ -885,33 +848,7 @@ class EnsembleIntelligence:
                     },
                 )
             )
-            # Final decision audit event
-            verdict["reconciliation_events"].append(
-                self._new_reconciliation_event(
-                    code="ENS_FINAL_DECISION",
-                    message="Final ensemble decision produced.",
-                    evidence={
-                        "final_label": verdict.get("final_label"),
-                        "final_confidence": verdict.get("confidence"),
-                        "recommended_action": verdict.get("recommended_action"),
-                        "vision_verdict": vision_verdict,
-                        "vision_confidence": vision_confidence,
-                        "rule_label": rule_label,
-                        "rule_score": rule_score,
-                        "critical_count": critical_count,
-                        "agreement_score": agreement_score,
-                        "learned_rule_count": (learned_summary or {}).get("learned_rule_count"),
-                        "learned_patterns_top": (learned_summary or {}).get("patterns_top"),
-                        "learned_total_confidence_adjustment": (learned_summary or {}).get("total_confidence_adjustment"),
-                        "learned_rules_top_raw": (learned_summary or {}).get("learned_rules_top_raw"),
-                        "converged_confidence_score": (converged_data or {}).get("confidence_score"),
-                        "converged_confidence_level": (converged_data or {}).get("confidence_level"),
-                        "doc_family": doc_profile.get("doc_family"),
-                        "doc_subtype": doc_profile.get("doc_subtype"),
-                        "doc_profile_confidence": doc_profile.get("doc_profile_confidence"),
-                    },
-                )
-            )
+            _emit_final_decision_event()
             return verdict
 
         # 4E) Both engines align on REAL (or rules are clean) -> approve
@@ -946,33 +883,7 @@ class EnsembleIntelligence:
                     },
                 )
             )
-            # Final decision audit event
-            verdict["reconciliation_events"].append(
-                self._new_reconciliation_event(
-                    code="ENS_FINAL_DECISION",
-                    message="Final ensemble decision produced.",
-                    evidence={
-                        "final_label": verdict.get("final_label"),
-                        "final_confidence": verdict.get("confidence"),
-                        "recommended_action": verdict.get("recommended_action"),
-                        "vision_verdict": vision_verdict,
-                        "vision_confidence": vision_confidence,
-                        "rule_label": rule_label,
-                        "rule_score": rule_score,
-                        "critical_count": critical_count,
-                        "agreement_score": agreement_score,
-                        "learned_rule_count": (learned_summary or {}).get("learned_rule_count"),
-                        "learned_patterns_top": (learned_summary or {}).get("patterns_top"),
-                        "learned_total_confidence_adjustment": (learned_summary or {}).get("total_confidence_adjustment"),
-                        "learned_rules_top_raw": (learned_summary or {}).get("learned_rules_top_raw"),
-                        "converged_confidence_score": (converged_data or {}).get("confidence_score"),
-                        "converged_confidence_level": (converged_data or {}).get("confidence_level"),
-                        "doc_family": doc_profile.get("doc_family"),
-                        "doc_subtype": doc_profile.get("doc_subtype"),
-                        "doc_profile_confidence": doc_profile.get("doc_profile_confidence"),
-                    },
-                )
-            )
+            _emit_final_decision_event()
             return verdict
 
         # 4F) Low-confidence vision: defer to rules + agreement
@@ -1003,33 +914,7 @@ class EnsembleIntelligence:
                         },
                     )
                 )
-                # Final decision audit event (approve path)
-                verdict["reconciliation_events"].append(
-                    self._new_reconciliation_event(
-                        code="ENS_FINAL_DECISION",
-                        message="Final ensemble decision produced.",
-                        evidence={
-                            "final_label": verdict.get("final_label"),
-                            "final_confidence": verdict.get("confidence"),
-                            "recommended_action": verdict.get("recommended_action"),
-                            "vision_verdict": vision_verdict,
-                            "vision_confidence": vision_confidence,
-                            "rule_label": rule_label,
-                            "rule_score": rule_score,
-                            "critical_count": critical_count,
-                            "agreement_score": agreement_score,
-                            "learned_rule_count": (learned_summary or {}).get("learned_rule_count"),
-                            "learned_patterns_top": (learned_summary or {}).get("patterns_top"),
-                            "learned_total_confidence_adjustment": (learned_summary or {}).get("total_confidence_adjustment"),
-                            "learned_rules_top_raw": (learned_summary or {}).get("learned_rules_top_raw"),
-                            "converged_confidence_score": (converged_data or {}).get("confidence_score"),
-                            "converged_confidence_level": (converged_data or {}).get("confidence_level"),
-                            "doc_family": doc_profile.get("doc_family"),
-                            "doc_subtype": doc_profile.get("doc_subtype"),
-                            "doc_profile_confidence": doc_profile.get("doc_profile_confidence"),
-                        },
-                    )
-                )
+                _emit_final_decision_event()
                 return verdict
 
             verdict["final_label"] = rule_label if rule_label in ("real", "fake", "suspicious") else "suspicious"
@@ -1057,33 +942,7 @@ class EnsembleIntelligence:
                     },
                 )
             )
-            # Final decision audit event (review path)
-            verdict["reconciliation_events"].append(
-                self._new_reconciliation_event(
-                    code="ENS_FINAL_DECISION",
-                    message="Final ensemble decision produced.",
-                    evidence={
-                        "final_label": verdict.get("final_label"),
-                        "final_confidence": verdict.get("confidence"),
-                        "recommended_action": verdict.get("recommended_action"),
-                        "vision_verdict": vision_verdict,
-                        "vision_confidence": vision_confidence,
-                        "rule_label": rule_label,
-                        "rule_score": rule_score,
-                        "critical_count": critical_count,
-                        "agreement_score": agreement_score,
-                        "learned_rule_count": (learned_summary or {}).get("learned_rule_count"),
-                        "learned_patterns_top": (learned_summary or {}).get("patterns_top"),
-                        "learned_total_confidence_adjustment": (learned_summary or {}).get("total_confidence_adjustment"),
-                        "learned_rules_top_raw": (learned_summary or {}).get("learned_rules_top_raw"),
-                        "converged_confidence_score": (converged_data or {}).get("confidence_score"),
-                        "converged_confidence_level": (converged_data or {}).get("confidence_level"),
-                        "doc_family": doc_profile.get("doc_family"),
-                        "doc_subtype": doc_profile.get("doc_subtype"),
-                        "doc_profile_confidence": doc_profile.get("doc_profile_confidence"),
-                    },
-                )
-            )
+            _emit_final_decision_event()
             return verdict
 
         # 4G) Remaining conflicts: default to human review
@@ -1142,6 +1001,7 @@ class EnsembleIntelligence:
                 },
             )
         )
+        _emit_final_decision_event()
         return verdict
 
     
