@@ -330,6 +330,31 @@ def _missing_field_gate_evidence(tf: Dict[str, Any], doc_profile: Optional[Dict[
     }
 
 
+def _emit_missing_field_gate_event(
+    events: List[RuleEvent],
+    reasons: Optional[List[str]],
+    tf: Dict[str, Any],
+    doc_profile: Optional[Dict[str, Any]] = None,
+    message: Optional[str] = None,
+) -> None:
+    """
+    Emit an INFO RuleEvent indicating missing-field penalties are gated off.
+
+    This is NOT a fraud signal; it prevents false-positives for UNKNOWN geo or low-confidence MISC docs.
+    """
+    _emit_event(
+        events=events,
+        reasons=reasons,
+        rule_id="GATE_MISSING_FIELDS",
+        severity="INFO",
+        weight=0.0,
+        message=message or "Missing-field penalties disabled due to UNKNOWN geo or low-confidence fallback doc subtype.",
+        evidence=_missing_field_gate_evidence(tf, doc_profile=doc_profile),
+        reason_text=None,  # keep user-facing reasons clean
+        confidence_factor=1.0,
+    )
+
+
 def _expects_total_line(doc_profile: Dict[str, Any]) -> bool:
     subtype = (doc_profile.get("subtype") or "UNKNOWN").upper()
     # If we are not confident about the subtype, do not be strict
@@ -1726,8 +1751,16 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
     expects_total_line = _expects_total_line(doc_profile)
     expects_date = _expects_date(doc_profile)
     
-    # Gate flag: emit once if missing-field penalties are disabled
-    missing_gate_emitted = False
+    # Compute missing-field gate once (early)
+    missing_fields_enabled = _missing_field_penalties_enabled(tf, doc_profile=doc_profile)
+    if not missing_fields_enabled:
+        _emit_missing_field_gate_event(
+            events=events,
+            reasons=reasons,
+            tf=tf,
+            doc_profile=doc_profile,
+            message="Missing-field penalties disabled: geo/doc profile confidence too low (UNKNOWN geo or MISC/UNKNOWN subtype).",
+        )
 
     # If upstream extractors (LayoutLM / DONUT / ensemble) already provided a total,
     # do NOT flag "No Total Line" purely based on missing TOTAL keyword/line.
@@ -1760,20 +1793,8 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
 
     if not has_any_amount:
         if expects_amounts:
-            # Geo/doc-aware safeguard: UNKNOWN geo or low-confidence MISC must not imply fraud
-            if not _missing_field_penalties_enabled(tf, doc_profile):
-                if not missing_gate_emitted:
-                    emit_event(
-                        events=events,
-                        reasons=reasons,
-                        rule_id="GATE_MISSING_FIELDS",
-                        severity="INFO",
-                        weight=0.0,
-                        message="Missing-field penalties gated due to UNKNOWN geo or low-confidence MISC subtype",
-                        evidence=_missing_field_gate_evidence(tf, doc_profile),
-                    )
-                    missing_gate_emitted = True
-            else:
+            # Only penalize if missing-field gate is enabled
+            if missing_fields_enabled:
                 score += emit_event(
                     events=events,
                     reasons=reasons,
@@ -1813,20 +1834,8 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
         has_usable_total_value = bool(_has_total_value(tf) or has_extracted_total)
 
         if expects_total_line and not has_usable_total_value:
-            # Geo/doc-aware safeguard: UNKNOWN geo or low-confidence MISC must not imply fraud
-            if not _missing_field_penalties_enabled(tf, doc_profile):
-                if not missing_gate_emitted:
-                    emit_event(
-                        events=events,
-                        reasons=reasons,
-                        rule_id="GATE_MISSING_FIELDS",
-                        severity="INFO",
-                        weight=0.0,
-                        message="Missing-field penalties gated due to UNKNOWN geo or low-confidence MISC subtype",
-                        evidence=_missing_field_gate_evidence(tf, doc_profile),
-                    )
-                    missing_gate_emitted = True
-            else:
+            # Only penalize if missing-field gate is enabled
+            if missing_fields_enabled:
                 score += emit_event(
                     events=events,
                     reasons=reasons,
@@ -1879,20 +1888,8 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
 
     if not has_date:
         if expects_date:
-            # Geo/doc-aware safeguard: UNKNOWN geo or low-confidence MISC must not imply fraud
-            if not _missing_field_penalties_enabled(tf, doc_profile):
-                if not missing_gate_emitted:
-                    emit_event(
-                        events=events,
-                        reasons=reasons,
-                        rule_id="GATE_MISSING_FIELDS",
-                        severity="INFO",
-                        weight=0.0,
-                        message="Missing-field penalties gated due to UNKNOWN geo or low-confidence MISC subtype",
-                        evidence=_missing_field_gate_evidence(tf, doc_profile),
-                    )
-                    missing_gate_emitted = True
-            else:
+            # Only penalize if missing-field gate is enabled
+            if missing_fields_enabled:
                 score += emit_event(
                     events=events,
                     reasons=reasons,
@@ -1928,20 +1925,8 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
             )
 
     if not merchant_candidate:
-        # Geo/doc-aware safeguard: UNKNOWN geo or low-confidence MISC must not imply fraud
-        if not _missing_field_penalties_enabled(tf, doc_profile):
-            if not missing_gate_emitted:
-                emit_event(
-                    events=events,
-                    reasons=reasons,
-                    rule_id="GATE_MISSING_FIELDS",
-                    severity="INFO",
-                    weight=0.0,
-                    message="Missing-field penalties gated due to UNKNOWN geo or low-confidence MISC subtype",
-                    evidence=_missing_field_gate_evidence(tf, doc_profile),
-                )
-                missing_gate_emitted = True
-        else:
+        # Only penalize if missing-field gate is enabled
+        if missing_fields_enabled:
             score += emit_event(
                 events=events,
                 reasons=reasons,
@@ -2134,6 +2119,10 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
             from app.pipelines.learning import apply_learned_rules
 
             learned_adjustment, triggered_rules = apply_learned_rules(features.__dict__)
+
+            # If missing-field penalties are gated off, do NOT apply learned "missing elements" adjustments.
+            if not missing_fields_enabled:
+                learned_adjustment = 0.0
 
             # Soft-gate learned adjustments when doc-type inference is weak.
             dp_conf = 0.0
