@@ -1022,6 +1022,8 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                     if isinstance(ev, dict):
                         audit_events.append(
                             AuditEvent(
+                                event_id=ev.get("event_id"),
+                                ts=ev.get("ts"),
                                 source=ev.get("source", "ensemble"),
                                 type=ev.get("type", "reconciliation"),
                                 severity=ev.get("severity"),
@@ -1033,15 +1035,97 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             except Exception:
                 audit_events = []
             
+            # Extract vision/layout signals
+            vision_llm = (results or {}).get("vision_llm", {}) or {}
+            layoutlm = (results or {}).get("layoutlm", {}) or {}
+            
+            vision_verdict = vision_llm.get("verdict")
+            raw_vision_confidence = vision_llm.get("confidence", 0.0)
+            # Normalize vision confidence to [0,1] if needed
+            vision_confidence = float(raw_vision_confidence) if raw_vision_confidence is not None else None
+            if vision_confidence is not None and vision_confidence > 1.0:
+                vision_confidence = vision_confidence / 100.0
+            vision_reasoning = vision_llm.get("reasoning")
+            
+            layoutlm_status = layoutlm.get("data_quality") or layoutlm.get("status") or "unknown"
+            layoutlm_confidence = layoutlm.get("confidence") or "unknown"
+            layoutlm_extracted = {
+                "merchant": layoutlm.get("merchant"),
+                "total": layoutlm.get("total"),
+                "date": layoutlm.get("date"),
+            } if layoutlm else None
+            
+            # Compute corroboration score and flags (simple v1.2 heuristic)
+            corroboration_score = 0.5  # baseline
+            corroboration_flags = []
+            
+            agreement_score = ensemble_verdict.get("agreement_score", 0.0)
+            rule_label = rb.get("label", "unknown")
+            rule_score = rb.get("score", 0.5)
+            
+            # Count critical events
+            critical_count = 0
+            for e in (rule_events or []):
+                if isinstance(e, dict) and str(e.get("severity", "")).upper() == "CRITICAL":
+                    critical_count += 1
+            
+            # Corroboration logic
+            if layoutlm_extracted and layoutlm_extracted.get("total"):
+                corroboration_score += 0.25
+            
+            if agreement_score >= 0.7:
+                corroboration_score += 0.25
+            
+            if critical_count > 0:
+                corroboration_score -= 0.25
+                if vision_verdict == "real":
+                    corroboration_flags.append("VISION_REAL_RULES_CRITICAL")
+            
+            if vision_verdict == "real" and layoutlm_extracted and not layoutlm_extracted.get("total"):
+                corroboration_flags.append("VISION_REAL_LAYOUT_MISSING_TOTAL")
+                corroboration_score -= 0.15
+            
+            if vision_verdict == "real" and rule_label == "fake" and rule_score >= 0.7:
+                corroboration_flags.append("VISION_REAL_RULES_FAKE")
+            
+            if vision_verdict == "fake" and rule_label == "real":
+                corroboration_flags.append("VISION_FAKE_RULES_REAL")
+            
+            # Clamp to [0,1]
+            corroboration_score = max(0.0, min(1.0, corroboration_score))
+            
+            corroboration_signals = {
+                "agreement_score": agreement_score,
+                "critical_count": critical_count,
+                "vision_verdict": vision_verdict,
+                "rule_label": rule_label,
+                "rule_score": rule_score,
+                "layoutlm_has_total": bool(layoutlm_extracted and layoutlm_extracted.get("total")),
+            }
+            
             ensemble_decision = ReceiptDecision(
                 label=ensemble_verdict["final_label"],
                 score=ensemble_verdict["confidence"],
                 reasons=ensemble_verdict.get("reasoning", []),
-                minor_notes=[],
+                minor_notes=rb.get("minor_notes", []) if isinstance(rb, dict) else [],
                 rule_version="0.0.1",
                 policy_version="0.0.1",
                 engine_version="ensemble-v0.0.1",
                 policy_name="ensemble",
+                filename=str(temp_path.name),
+                
+                # Vision/Layout signals
+                vision_verdict=vision_verdict,
+                vision_confidence=vision_confidence,
+                vision_reasoning=vision_reasoning,
+                layoutlm_status=layoutlm_status,
+                layoutlm_confidence=layoutlm_confidence,
+                layoutlm_extracted=layoutlm_extracted,
+                
+                # Corroboration
+                corroboration_score=corroboration_score,
+                corroboration_signals=corroboration_signals,
+                corroboration_flags=corroboration_flags,
                 
                 # Extraction confidence
                 extraction_confidence_score=(converged_data or {}).get("confidence_score"),
@@ -1069,7 +1153,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             
             ensemble_decision.finalize_defaults()
             store.save_analysis(str(temp_path), ensemble_decision)
-            print(f"   💾 Ensemble verdict saved to CSV with {len(reconciliation_events)} audit events")
+            print(f"   💾 Ensemble verdict saved to CSV with {len(audit_events)} audit events")
         except Exception as save_err:
             print(f"   ⚠️ Failed to save ensemble verdict: {save_err}")
         
