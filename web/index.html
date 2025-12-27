@@ -238,16 +238,16 @@
 
                 try {
                     addLog('📤 Uploading receipt...', 'info');
-                    addLog('🚀 Starting rule-based analysis (fast mode)...', 'info');
-                    addLog(`📡 Connecting to: ${API_BASE_URL}/analyze`, 'info');
+                    addLog('🚀 Starting 5-engine hybrid analysis (this may take 3-5 minutes)...', 'info');
+                    addLog(`📡 Connecting to: ${API_BASE_URL}/analyze/hybrid`, 'info');
                     
-                    // Using regular endpoint with extended timeout
+                    // Using hybrid endpoint with extended timeout for Vision LLM
                     const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
+                    const timeoutId = setTimeout(() => controller.abort(), 360000); // 6 minute timeout
                     
                     let response;
                     try {
-                        response = await fetch(`${API_BASE_URL}/analyze`, {
+                        response = await fetch(`${API_BASE_URL}/analyze/hybrid`, {
                             method: 'POST',
                             body: formData,
                             signal: controller.signal,
@@ -262,11 +262,11 @@
                         }
                     } catch (error) {
                         clearTimeout(timeoutId);
-                        console.error('Fetch error details:', error);
+                        
                         addLog(`❌ Fetch error: ${error.name} - ${error.message}`, 'error');
                         
                         if (error.name === 'AbortError') {
-                            throw new Error('Analysis timed out after 2 minutes. The server may be overloaded.');
+                            throw new Error('Analysis timed out after 6 minutes. The Vision LLM model may be too slow for your hardware.');
                         }
                         if (error.name === 'TypeError' && error.message.includes('NetworkError')) {
                             throw new Error(`Cannot connect to backend at ${API_BASE_URL}. Please check:\n1. Backend is running on port 8000\n2. No firewall blocking localhost\n3. Try refreshing the page`);
@@ -274,44 +274,10 @@
                         throw error;
                     }
 
-                    // Get JSON response (not streaming)
+                    // Get JSON response (hybrid format with multiple engines)
                     const data = await response.json();
                     
-                    // Check if this is a simple /analyze response or /analyze/hybrid response
-                    const isSimpleAnalyze = data.label !== undefined && !data.hybrid_verdict;
-                    
-                    if (isSimpleAnalyze) {
-                        // Simple /analyze endpoint - single rule-based result
-                        addLog('⏳ Analyzing with rule-based engine...', 'info');
-                        setProgress(50);
-                        
-                        // Convert simple response to hybrid format for compatibility
-                        const hybridData = {
-                            final_label: data.label,
-                            confidence: data.score,
-                            recommended_action: data.label === 'LEGITIMATE' ? 'approve' : data.label === 'SUSPICIOUS' ? 'review' : 'reject',
-                            reasoning: data.reasons || [],
-                            receipt_id: data.analysis_ref || 'unknown',
-                            rule_based: data,
-                            engines_completed: 1,
-                            total_engines: 1,
-                            engines_status: { critical_complete: true, optional_complete: 0 },
-                            uploaded_image: null,
-                            extracted: {}
-                        };
-                        
-                        setEngineStatus({ 'rule-based': 'completed' });
-                        setEngineResults({ 'rule-based': data });
-                        addLog(`✅ Rule-Based completed in ${data.processing_time_ms / 1000}s`, 'success');
-                        setProgress(100);
-                        setHybridVerdict(hybridData);
-                        addLog('✅ Analysis complete!', 'success');
-                        setAnalyzing(false);
-                        return;
-                    }
-                    
-                    // Hybrid response - multiple engines
-                    addLog('⏳ Analyzing with all 5 engines...', 'info');
+                    addLog('⏳ Processing results from all engines...', 'info');
                     setProgress(25);
                     
                     // Show results for each engine
