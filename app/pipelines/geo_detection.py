@@ -507,13 +507,20 @@ def _score_geo_signal(text: str, signal_type: str, patterns: List[str], has_stro
     return score, evidence
 
 
-def _detect_geo_country(text: str, lang_hint: Optional[str] = None) -> Dict[str, Any]:
+def _detect_geo_country(
+    text: str,
+    lang_hint: Optional[str] = None,
+    lang_confidence: Optional[float] = None,
+    lang_score: Optional[float] = None,
+) -> Dict[str, Any]:
     """
     Multi-signal country/region detection.
     
     Args:
         text: Full text to analyze
         lang_hint: Optional language hint from language detection
+        lang_confidence: Optional language confidence score (0.0-1.0)
+        lang_score: Optional raw language score from detector
     
     Returns:
         {
@@ -567,11 +574,29 @@ def _detect_geo_country(text: str, lang_hint: Optional[str] = None) -> Dict[str,
                 all_evidence.extend(evidence)
         
         # Language hint bonus (proportional, not absolute)
+        # Language is a prior, not ground truth. Keep it capped and proportional to language strength.
         if lang_hint and signals.get("language_hint") == lang_hint:
-            # Proportional bonus: min(3, winner_score * 0.3)
-            lang_bonus = min(3, int(total_score * 0.3))
+            # Prefer an explicit language score if provided; else derive from confidence.
+            # - lang_score: raw-ish score from language detector (e.g., keyword/pattern points)
+            # - lang_confidence: [0,1] confidence from language detector
+            ls = None
+            try:
+                if lang_score is not None:
+                    ls = float(lang_score)
+                elif lang_confidence is not None:
+                    # Map confidence to an approximate score range; keeps bonus proportional.
+                    ls = float(lang_confidence) * 10.0
+            except Exception:
+                ls = None
+
+            # Proportional bonus (cap at 3). If we don't know language strength, apply a tiny nudge (<= 1).
+            if ls is None:
+                lang_bonus = 1.0
+            else:
+                lang_bonus = min(3.0, ls * 0.30)
+
             total_score += lang_bonus
-            all_evidence.append(f"lang_match:{lang_hint}(+{lang_bonus})")
+            all_evidence.append(f"lang_match:{lang_hint}(+{lang_bonus:.2f})")
         
         country_scores[country] = total_score
         country_evidence[country] = all_evidence
@@ -623,6 +648,10 @@ def _detect_geo_country(text: str, lang_hint: Optional[str] = None) -> Dict[str,
         # Keep raw winner for audit/debugging even when we emit UNKNOWN
         "geo_winner_raw": winner,
         "geo_winner_score_raw": int(winner_score),
+        # Echo language prior inputs for debugging/audit
+        "lang_hint": lang_hint,
+        "lang_confidence": round(float(lang_confidence), 2) if isinstance(lang_confidence, (int, float)) else lang_confidence,
+        "lang_score": float(lang_score) if isinstance(lang_score, (int, float)) else lang_score,
     }
 
 
@@ -1063,7 +1092,12 @@ def detect_geo_and_profile(text: str, lines: List[str]) -> Dict[str, Any]:
     lang_result = _detect_language(text)
     
     # Step 2: Detect country/region
-    geo_result = _detect_geo_country(text, lang_hint=lang_result["lang_guess"])
+    geo_result = _detect_geo_country(
+        text,
+        lang_hint=lang_result.get("lang_guess"),
+        lang_confidence=lang_result.get("lang_confidence"),
+        # lang_score=lang_result.get("lang_score"),  # only if you add it later
+    )
     
     # Step 3: Detect document subtype (geo-aware)
     doc_result = _detect_doc_subtype_geo_aware(
