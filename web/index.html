@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>VeriReceipt - Real-Time Analysis v2.0</title>
+    <title>VeriReceipt - Real-Time Analysis v3.0</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -345,6 +345,8 @@
                             _fullData: data
                         };
                         console.log('Setting verdict:', verdictWithId);
+                        console.log('Verdict has rule_based?', !!verdictWithId.rule_based);
+                        console.log('Verdict has audit_report?', !!verdictWithId.rule_based?.audit_report);
                         setHybridVerdict(verdictWithId);
                         addLog('🎉 Analysis complete!', 'success');
                         addLog(`📊 Final verdict: ${(data.hybrid_verdict.final_label || 'unknown').toUpperCase()}`, 'success');
