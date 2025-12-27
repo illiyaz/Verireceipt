@@ -3,7 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VeriReceipt - Real-Time Analysis</title>
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>VeriReceipt - Real-Time Analysis v2.0</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -820,9 +823,8 @@
                                 onClick={() => {
                                     try {
                                         console.log('=== REVIEW BUTTON CLICKED ===');
-                                        
-                                        // Prepare receipt data for review page
-                                        const fullData = hybridVerdict;
+                                        console.log('Verdict object:', verdict);
+                                        console.log('Engine results:', engineResults);
                                         
                                         // Store image separately to avoid sessionStorage size limits
                                         // Use server URL if available, otherwise store preview separately
@@ -840,11 +842,11 @@
                                             verdict: verdict.final_label,
                                             confidence: verdict.confidence,
                                             models: {
-                                                rule_based: fullData.rule_based || engineResults['rule-based'] || {},
-                                                donut: fullData.donut || engineResults['donut'] || {},
-                                                donut_receipt: fullData.donut_receipt || engineResults['donut-receipt'] || {},
-                                                layoutlm: fullData.layoutlm || engineResults['layoutlm'] || {},
-                                                vision_llm: fullData.vision_llm || engineResults['vision-llm'] || {}
+                                                rule_based: verdict.rule_based || engineResults['rule-based'] || {},
+                                                donut: verdict.donut || engineResults['donut'] || {},
+                                                donut_receipt: verdict.donut_receipt || engineResults['donut-receipt'] || {},
+                                                layoutlm: verdict.layoutlm || engineResults['layoutlm'] || {},
+                                                vision_llm: verdict.vision_llm || engineResults['vision-llm'] || {}
                                             },
                                             extracted: verdict.extracted || {}
                                         };
