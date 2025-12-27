@@ -824,15 +824,19 @@
                                         // Prepare receipt data for review page
                                         const fullData = hybridVerdict;
                                         
-                                        // Use server image URL for HEIC, preview for others
-                                        let imageUrl = preview;
-                                        if (verdict.receipt_id && verdict.uploaded_image) {
-                                            imageUrl = verdict.uploaded_image;
+                                        // Store image separately to avoid sessionStorage size limits
+                                        // Use server URL if available, otherwise store preview separately
+                                        let imageUrl = verdict.uploaded_image || `http://localhost:8000/receipt/${verdict.receipt_id}/image`;
+                                        
+                                        // Store preview image separately (if not too large)
+                                        if (preview && preview.length < 500000) {
+                                            sessionStorage.setItem('receiptPreview', preview);
+                                            imageUrl = 'SESSION_STORAGE';
                                         }
                                         
                                         const receiptData = {
                                             receipt_id: verdict.receipt_id || 'current',
-                                            image_url: imageUrl,  // Use server URL for HEIC, preview for others
+                                            image_url: imageUrl,  // Use server URL or SESSION_STORAGE marker
                                             verdict: verdict.final_label,
                                             confidence: verdict.confidence,
                                             models: {
@@ -845,13 +849,11 @@
                                             extracted: verdict.extracted || {}
                                         };
                                         
-                                        console.log('Preview:', preview ? `${preview.substring(0, 50)}... (length: ${preview.length})` : '❌ MISSING');
-                                        console.log('Verdict:', verdict);
-                                        console.log('Full Data keys:', Object.keys(fullData));
-                                        console.log('Engine Results keys:', Object.keys(engineResults));
-                                        console.log('Receipt Data to store:', receiptData);
+                                        console.log('Preview length:', preview ? preview.length : 0);
+                                        console.log('Image URL strategy:', imageUrl === 'SESSION_STORAGE' ? 'Using sessionStorage' : 'Using server URL');
+                                        console.log('Receipt Data to store (without image):', {...receiptData, image_url: '[OMITTED]'});
                                         
-                                        // Store in sessionStorage
+                                        // Store in sessionStorage (without large image data)
                                         const jsonString = JSON.stringify(receiptData);
                                         console.log('JSON string length:', jsonString.length);
                                         sessionStorage.setItem('currentReceipt', jsonString);
