@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from fastapi import FastAPI, UploadFile, File, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import asyncio
 import json as json_module
@@ -63,6 +64,11 @@ app = FastAPI(
 
 # Include feedback router
 app.include_router(feedback_router)
+
+# Mount static files for web UI
+web_dir = Path(__file__).parent.parent.parent / "web"
+if web_dir.exists():
+    app.mount("/web", StaticFiles(directory=str(web_dir), html=True), name="web")
 
 # Enable CORS for web demo
 app.add_middleware(
