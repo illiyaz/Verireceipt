@@ -571,11 +571,19 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         try:
             decision = analyze_receipt(str(temp_path))
             elapsed = time_module.time() - start
+            
+            # Generate audit report
+            try:
+                audit_report = format_audit_for_human_review(decision.to_dict())
+            except Exception as e:
+                audit_report = f"Error generating audit report: {str(e)}"
+            
             return {
                 "label": decision.label,
                 "score": decision.score,
                 "reasons": decision.reasons,
                 "minor_notes": decision.minor_notes,
+                "audit_report": audit_report,
                 "time_seconds": round(elapsed, 2)
             }
         except Exception as e:
