@@ -20,6 +20,18 @@ from typing import Dict, Any, List, Tuple, Optional
 
 # Common words by language (high-frequency, receipt-specific)
 LANGUAGE_MARKERS = {
+    "zh": {  # Chinese (Simplified/Traditional)
+        "keywords": [
+            "total", "receipt", "invoice", "tax", "vat",  # English fallback
+            "rmb", "cny", "yuan", "hkd", "sgd",  # Currency
+        ],
+        "patterns": [
+            r"[\u4e00-\u9fff]{2,}",  # Chinese characters (2+ chars)
+            r"总计|小计|合计|发票|收据|税|增值税",  # Total, subtotal, invoice, receipt, tax, VAT
+            r"人民币|港币|新币",  # RMB, HKD, SGD
+            r"¥\d+",  # Yuan symbol
+        ],
+    },
     "es": {  # Spanish (Mexico, Spain, Latin America)
         "keywords": [
             "total", "subtotal", "iva", "gracias", "fecha", "ticket", "sucursal",
@@ -58,14 +70,73 @@ LANGUAGE_MARKERS = {
             r"\bhsn\s*code\b",
         ],
     },
-    "ar": {  # Arabic (UAE, Saudi, etc.)
+    "ar": {  # Arabic (UAE, Saudi, etc.) - includes Arabic script
         "keywords": [
             "total", "tax", "vat", "invoice", "receipt", "customer", "date",
             "payment", "cash", "card", "trn", "amount", "aed", "sar", "riyal",
         ],
         "patterns": [
+            r"[\u0600-\u06ff]{3,}",  # Arabic script (3+ chars)
             r"\btrn\b",  # Tax Registration Number (UAE)
             r"\bvat\s*\d+%",
+            r"ريال|درهم",  # Riyal, Dirham in Arabic
+        ],
+    },
+    "fr": {  # French (France, Canada, Africa)
+        "keywords": [
+            "total", "sous-total", "tva", "merci", "date", "ticket", "reçu",
+            "client", "caisse", "paiement", "espèces", "carte", "facture",
+            "montant", "taxe", "numéro", "adresse", "téléphone",
+        ],
+        "patterns": [
+            r"\b(merci|merci beaucoup)\b",
+            r"\btva\s*\d+%",
+            r"\b(sous-total|sous total)\b",
+        ],
+    },
+    "de": {  # German (Germany, Austria, Switzerland)
+        "keywords": [
+            "gesamt", "summe", "mwst", "danke", "datum", "rechnung", "beleg",
+            "kunde", "kasse", "zahlung", "bargeld", "karte", "betrag",
+            "steuer", "nummer", "adresse", "telefon",
+        ],
+        "patterns": [
+            r"\b(danke|vielen dank)\b",
+            r"\bmwst\s*\d+%",
+            r"\bgesamt\b",
+        ],
+    },
+    "pt": {  # Portuguese (Brazil, Portugal)
+        "keywords": [
+            "total", "subtotal", "imposto", "obrigado", "data", "recibo", "nota",
+            "cliente", "caixa", "pagamento", "dinheiro", "cartão", "compra",
+            "valor", "número", "endereço", "telefone", "cnpj", "cpf",
+        ],
+        "patterns": [
+            r"\b(obrigado|muito obrigado)\b",
+            r"\bcnpj\b",
+            r"\bnota fiscal\b",
+        ],
+    },
+    "ja": {  # Japanese
+        "keywords": [
+            "total", "receipt", "tax", "yen", "jpy",
+        ],
+        "patterns": [
+            r"[\u3040-\u309f\u30a0-\u30ff]{2,}",  # Hiragana/Katakana
+            r"[\u4e00-\u9fff]{2,}",  # Kanji
+            r"合計|小計|領収書|税|消費税",  # Total, subtotal, receipt, tax
+            r"¥\d+|円",  # Yen
+        ],
+    },
+    "th": {  # Thai
+        "keywords": [
+            "total", "receipt", "tax", "vat", "baht", "thb",
+        ],
+        "patterns": [
+            r"[\u0e00-\u0e7f]{3,}",  # Thai script
+            r"\bvat\s*\d+%",
+            r"บาท",  # Baht
         ],
     },
 }
@@ -227,6 +298,142 @@ GEO_SIGNALS = {
         ],
         "language_hint": "ar",
     },
+    "SA": {  # Saudi Arabia
+        "currency": ["sar", "riyal", "riyals"],
+        "tax_keywords": ["vat", "tax", "ضريبة"],  # Tax in Arabic
+        "phone_patterns": [
+            r"\+966[\s\-]?\d{9}",
+            r"\b0\d{9}\b",
+        ],
+        "postal_patterns": [
+            r"\b\d{5}(-\d{4})?\b",  # Saudi postal code
+        ],
+        "location_markers": [
+            "riyadh", "jeddah", "mecca", "medina", "dammam", "ksa", "saudi",
+        ],
+        "language_hint": "ar",
+    },
+    "CN": {  # China
+        "currency": ["cny", "rmb", "yuan", "¥"],
+        "tax_keywords": ["vat", "tax", "增值税", "税"],  # VAT, Tax in Chinese
+        "phone_patterns": [
+            r"\+86[\s\-]?1[3-9]\d{9}",  # +86 mobile
+            r"\b1[3-9]\d{9}\b",  # Mobile without country code
+        ],
+        "postal_patterns": [
+            r"\b\d{6}\b",  # 6-digit postal code
+        ],
+        "location_markers": [
+            "beijing", "shanghai", "guangzhou", "shenzhen", "chengdu",
+            "北京", "上海", "广州", "深圳",  # Cities in Chinese
+        ],
+        "language_hint": "zh",
+    },
+    "HK": {  # Hong Kong
+        "currency": ["hkd", "hk$", "dollar"],
+        "tax_keywords": [],  # Hong Kong has no VAT/GST
+        "phone_patterns": [
+            r"\+852[\s\-]?\d{8}",
+            r"\b[2-9]\d{7}\b",
+        ],
+        "postal_patterns": [],  # Hong Kong doesn't use postal codes
+        "location_markers": [
+            "hong kong", "kowloon", "tsim sha tsui", "central", "causeway bay",
+            "香港", "九龍",  # Hong Kong, Kowloon in Chinese
+        ],
+        "language_hint": "zh",
+    },
+    "SG": {  # Singapore
+        "currency": ["sgd", "s$", "dollar"],
+        "tax_keywords": ["gst", "tax"],
+        "phone_patterns": [
+            r"\+65[\s\-]?[689]\d{7}",
+            r"\b[689]\d{7}\b",
+        ],
+        "postal_patterns": [
+            r"\b\d{6}\b",  # 6-digit postal code
+        ],
+        "location_markers": [
+            "singapore", "orchard", "marina bay", "sentosa", "changi",
+        ],
+        "language_hint": "en",
+    },
+    "FR": {  # France
+        "currency": ["eur", "€", "euro"],
+        "tax_keywords": ["tva", "taxe"],
+        "phone_patterns": [
+            r"\+33[\s\-]?[1-9]\d{8}",
+            r"\b0[1-9]\d{8}\b",
+        ],
+        "postal_patterns": [
+            r"\b\d{5}\b",  # 5-digit postal code
+        ],
+        "location_markers": [
+            "paris", "lyon", "marseille", "toulouse", "nice", "france",
+        ],
+        "language_hint": "fr",
+    },
+    "DE": {  # Germany
+        "currency": ["eur", "€", "euro"],
+        "tax_keywords": ["mwst", "steuer", "ust"],
+        "phone_patterns": [
+            r"\+49[\s\-]?\d{10,11}",
+            r"\b0\d{9,10}\b",
+        ],
+        "postal_patterns": [
+            r"\b\d{5}\b",  # 5-digit postal code
+        ],
+        "location_markers": [
+            "berlin", "munich", "hamburg", "frankfurt", "cologne", "deutschland",
+        ],
+        "language_hint": "de",
+    },
+    "BR": {  # Brazil
+        "currency": ["brl", "r$", "real", "reais"],
+        "tax_keywords": ["icms", "nota fiscal", "cnpj", "cpf"],
+        "phone_patterns": [
+            r"\+55[\s\-]?\d{10,11}",
+            r"\b\d{10,11}\b",
+        ],
+        "postal_patterns": [
+            r"\b\d{5}-\d{3}\b",  # CEP format: 12345-678
+        ],
+        "location_markers": [
+            "são paulo", "rio", "brasília", "salvador", "fortaleza", "brasil",
+        ],
+        "language_hint": "pt",
+    },
+    "JP": {  # Japan
+        "currency": ["jpy", "¥", "yen", "円"],
+        "tax_keywords": ["tax", "消費税", "税"],  # Consumption tax in Japanese
+        "phone_patterns": [
+            r"\+81[\s\-]?\d{9,10}",
+            r"\b0\d{9,10}\b",
+        ],
+        "postal_patterns": [
+            r"\b\d{3}-\d{4}\b",  # Japanese postal code: 123-4567
+        ],
+        "location_markers": [
+            "tokyo", "osaka", "kyoto", "yokohama", "nagoya",
+            "東京", "大阪", "京都",  # Cities in Japanese
+        ],
+        "language_hint": "ja",
+    },
+    "TH": {  # Thailand
+        "currency": ["thb", "baht", "฿"],
+        "tax_keywords": ["vat", "tax"],
+        "phone_patterns": [
+            r"\+66[\s\-]?[689]\d{8}",
+            r"\b0[689]\d{8}\b",
+        ],
+        "postal_patterns": [
+            r"\b\d{5}\b",  # 5-digit postal code
+        ],
+        "location_markers": [
+            "bangkok", "phuket", "chiang mai", "pattaya", "thailand",
+        ],
+        "language_hint": "th",
+    },
 }
 
 
@@ -380,6 +587,76 @@ GEO_SUBTYPE_KEYWORDS = {
         "FUEL": ["petrol", "diesel", "fuel", "litres"],
         "UTILITY": ["electricity", "water", "gas", "bill", "consumer"],
         "TELECOM": ["mobile", "recharge", "plan", "data"],
+    },
+    "CN": {  # China
+        "POS_RESTAURANT": ["restaurant", "receipt", "bill", "发票", "收据"],
+        "POS_RETAIL": ["store", "shop", "retail", "商店", "零售"],
+        "TAX_INVOICE": ["invoice", "tax", "vat", "发票", "增值税"],
+        "ECOMMERCE": ["order", "delivery", "tracking", "订单", "快递"],
+    },
+    "HK": {  # Hong Kong
+        "POS_RESTAURANT": ["restaurant", "receipt", "bill", "餐廳", "收據"],
+        "POS_RETAIL": ["store", "shop", "retail"],
+        "TAX_INVOICE": ["invoice", "receipt", "發票"],
+        "ECOMMERCE": ["order", "delivery", "tracking"],
+    },
+    "SG": {  # Singapore
+        "POS_RESTAURANT": ["restaurant", "server", "bill", "table"],
+        "POS_RETAIL": ["store", "retail", "shop"],
+        "TAX_INVOICE": ["invoice", "gst", "tax"],
+        "ECOMMERCE": ["order", "delivery", "tracking"],
+    },
+    "SA": {  # Saudi Arabia
+        "POS_RESTAURANT": ["restaurant", "receipt", "bill"],
+        "POS_RETAIL": ["store", "shop", "retail"],
+        "TAX_INVOICE": ["invoice", "vat", "tax"],
+        "ECOMMERCE": ["order", "delivery"],
+    },
+    "AE": {  # UAE
+        "POS_RESTAURANT": ["restaurant", "receipt", "bill"],
+        "POS_RETAIL": ["store", "shop", "retail"],
+        "TAX_INVOICE": ["invoice", "vat", "trn"],
+        "ECOMMERCE": ["order", "delivery"],
+    },
+    "FR": {  # France
+        "POS_RESTAURANT": ["restaurant", "serveur", "pourboire", "table"],
+        "POS_RETAIL": ["magasin", "boutique", "vente"],
+        "TAX_INVOICE": ["facture", "tva", "taxe"],
+        "ECOMMERCE": ["commande", "livraison", "suivi"],
+        "PARKING": ["parking", "stationnement"],
+    },
+    "DE": {  # Germany
+        "POS_RESTAURANT": ["restaurant", "kellner", "trinkgeld", "tisch"],
+        "POS_RETAIL": ["geschäft", "laden", "verkauf"],
+        "TAX_INVOICE": ["rechnung", "mwst", "steuer"],
+        "ECOMMERCE": ["bestellung", "lieferung", "sendung"],
+        "PARKING": ["parkplatz", "parkschein"],
+    },
+    "BR": {  # Brazil
+        "POS_RESTAURANT": ["restaurante", "garçom", "gorjeta", "mesa"],
+        "POS_RETAIL": ["loja", "varejo", "venda"],
+        "TAX_INVOICE": ["nota fiscal", "cnpj", "icms"],
+        "ECOMMERCE": ["pedido", "entrega", "rastreamento"],
+        "FUEL": ["gasolina", "diesel", "combustível"],
+    },
+    "JP": {  # Japan
+        "POS_RESTAURANT": ["restaurant", "receipt", "領収書", "レシート"],
+        "POS_RETAIL": ["store", "shop", "店舗"],
+        "TAX_INVOICE": ["invoice", "receipt", "領収書", "消費税"],
+        "ECOMMERCE": ["order", "delivery"],
+    },
+    "TH": {  # Thailand
+        "POS_RESTAURANT": ["restaurant", "receipt", "bill"],
+        "POS_RETAIL": ["store", "shop", "retail"],
+        "TAX_INVOICE": ["invoice", "vat", "tax"],
+        "ECOMMERCE": ["order", "delivery"],
+    },
+    "CA": {  # Canada (same as US mostly)
+        "POS_RESTAURANT": ["restaurant", "server", "tip", "gratuity", "table"],
+        "POS_RETAIL": ["store", "retail", "merchandise"],
+        "TAX_INVOICE": ["invoice", "gst", "hst", "pst"],
+        "ECOMMERCE": ["order", "shipping", "tracking"],
+        "HOTEL_FOLIO": ["hotel", "room", "night"],
     },
 }
 
@@ -560,6 +837,94 @@ def extract_in_specific(text: str) -> Dict[str, Any]:
     return features
 
 
+def extract_cn_specific(text: str) -> Dict[str, Any]:
+    """Extract China-specific fields (tax ID, postal code, etc.)."""
+    features = {}
+    
+    # Chinese tax ID (统一社会信用代码) - 18 digits/chars
+    tax_id_pattern = r'\b[0-9A-Z]{18}\b'
+    tax_match = re.search(tax_id_pattern, text)
+    if tax_match:
+        features["cn_tax_id"] = tax_match.group(0)
+    
+    # Postal code (6 digits)
+    postal_pattern = r'\b\d{6}\b'
+    postal_matches = re.findall(postal_pattern, text)
+    if postal_matches:
+        features["cn_postal_code"] = postal_matches[0]
+    
+    # Phone (China format)
+    phone_pattern = r'\+?86[\s\-]?(1[3-9]\d{9})'
+    phone_match = re.search(phone_pattern, text)
+    if phone_match:
+        features["cn_phone"] = phone_match.group(1)
+    
+    return features
+
+
+def extract_sa_specific(text: str) -> Dict[str, Any]:
+    """Extract Saudi Arabia-specific fields."""
+    features = {}
+    
+    # VAT number (15 digits)
+    vat_pattern = r'\b\d{15}\b'
+    vat_match = re.search(vat_pattern, text)
+    if vat_match:
+        features["sa_vat_number"] = vat_match.group(0)
+    
+    # Phone (Saudi format)
+    phone_pattern = r'\+?966[\s\-]?(\d{9})'
+    phone_match = re.search(phone_pattern, text)
+    if phone_match:
+        features["sa_phone"] = phone_match.group(1)
+    
+    return features
+
+
+def extract_br_specific(text: str) -> Dict[str, Any]:
+    """Extract Brazil-specific fields (CNPJ, CPF, CEP)."""
+    features = {}
+    
+    # CNPJ (14 digits with formatting)
+    cnpj_pattern = r'\b\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\b'
+    cnpj_match = re.search(cnpj_pattern, text)
+    if cnpj_match:
+        features["br_cnpj"] = cnpj_match.group(0)
+    
+    # CPF (11 digits with formatting)
+    cpf_pattern = r'\b\d{3}\.\d{3}\.\d{3}-\d{2}\b'
+    cpf_match = re.search(cpf_pattern, text)
+    if cpf_match:
+        features["br_cpf"] = cpf_match.group(0)
+    
+    # CEP (postal code)
+    cep_pattern = r'\b(\d{5}-\d{3})\b'
+    cep_match = re.search(cep_pattern, text)
+    if cep_match:
+        features["br_cep"] = cep_match.group(1)
+    
+    return features
+
+
+def extract_jp_specific(text: str) -> Dict[str, Any]:
+    """Extract Japan-specific fields."""
+    features = {}
+    
+    # Postal code (Japanese format: 123-4567)
+    postal_pattern = r'\b(\d{3}-\d{4})\b'
+    postal_match = re.search(postal_pattern, text)
+    if postal_match:
+        features["jp_postal_code"] = postal_match.group(1)
+    
+    # Phone (Japan format)
+    phone_pattern = r'\+?81[\s\-]?(\d{9,10})'
+    phone_match = re.search(phone_pattern, text)
+    if phone_match:
+        features["jp_phone"] = phone_match.group(1)
+    
+    return features
+
+
 def extract_geo_specific_features(text: str, geo_country: str) -> Dict[str, Any]:
     """
     Run country-specific extractors based on detected geo.
@@ -578,8 +943,18 @@ def extract_geo_specific_features(text: str, geo_country: str) -> Dict[str, Any]
     elif geo_country == "IN":
         return extract_in_specific(text)
     elif geo_country == "CA":
-        # Canada is similar to US for now
-        return extract_us_specific(text)
+        return extract_us_specific(text)  # Canada similar to US
+    elif geo_country == "CN":
+        return extract_cn_specific(text)
+    elif geo_country == "SA":
+        return extract_sa_specific(text)
+    elif geo_country == "BR":
+        return extract_br_specific(text)
+    elif geo_country == "JP":
+        return extract_jp_specific(text)
+    elif geo_country in ["HK", "SG", "AE", "FR", "DE", "TH"]:
+        # Generic extraction for these countries (can be expanded later)
+        return {}
     else:
         # Generic fallback
         return {}
