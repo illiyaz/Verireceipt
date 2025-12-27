@@ -2097,6 +2097,9 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
         rule_version=RULE_VERSION,
         policy_version=POLICY_VERSION,
         engine_version=ENGINE_VERSION,
+        debug={
+            "doc_profile": doc_profile,
+        },
     )
 
 
