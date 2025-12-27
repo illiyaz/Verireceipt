@@ -1807,6 +1807,8 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
                         "doc_family": doc_profile.get("family"),
                         "doc_subtype": doc_profile.get("subtype"),
                         "doc_profile_confidence": doc_profile.get("confidence"),
+                        "missing_fields_enabled": missing_fields_enabled,
+                        "missing_field_gate": _missing_field_gate_evidence(tf, doc_profile),
                     },
                     reason_text="💰 No Amounts Detected: The document contains no recognizable currency amounts.",
                 )
@@ -1850,6 +1852,8 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
                         "doc_family": doc_profile.get("family"),
                         "doc_subtype": doc_profile.get("subtype"),
                         "doc_profile_confidence": doc_profile.get("confidence"),
+                        "missing_fields_enabled": missing_fields_enabled,
+                        "missing_field_gate": _missing_field_gate_evidence(tf, doc_profile),
                     },
                     reason_text="🧾 No Total Line: Document has amounts but no clear total/grand total line.",
                 )
@@ -1902,6 +1906,8 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
                         "doc_family": doc_profile.get("family"),
                         "doc_subtype": doc_profile.get("subtype"),
                         "doc_profile_confidence": doc_profile.get("confidence"),
+                        "missing_fields_enabled": missing_fields_enabled,
+                        "missing_field_gate": _missing_field_gate_evidence(tf, doc_profile),
                     },
                     reason_text="📅 No Date Found: Receipt/invoice is missing a transaction date.",
                 )
@@ -1934,7 +1940,11 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
                 severity="CRITICAL",
                 weight=0.15,
                 message="No merchant name could be identified",
-                evidence={"merchant_candidate": None},
+                evidence={
+                    "merchant_candidate": None,
+                    "missing_fields_enabled": missing_fields_enabled,
+                    "missing_field_gate": _missing_field_gate_evidence(tf, doc_profile),
+                },
                 reason_text="🏪 No Merchant: Could not identify a merchant/vendor name.",
             )
 
