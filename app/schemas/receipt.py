@@ -138,6 +138,20 @@ class ReceiptDecision:
     extraction_confidence_score: Optional[float] = None   # float in [0,1]
     extraction_confidence_level: Optional[str] = None     # "low"|"medium"|"high"
 
+    # --- Geo/Language/Doc-profile tags (normalized, optional) ---------------
+    # These are duplicated at the top-level for easier analytics/querying.
+    # They should match what is emitted in ENS_DOC_PROFILE_TAGS (ensemble) and
+    # what the geo-aware pipeline attaches into text/layout features.
+    lang_guess: Optional[str] = None                 # e.g., "en", "es"
+    lang_confidence: Optional[float] = None          # float in [0,1]
+
+    geo_country_guess: Optional[str] = None          # e.g., "US", "MX", "IN", "UNKNOWN"
+    geo_confidence: Optional[float] = None           # float in [0,1]
+
+    doc_family: Optional[str] = None                 # e.g., "TRANSACTIONAL", "LOGISTICS", "PAYMENT"
+    doc_subtype: Optional[str] = None                # e.g., "POS_RESTAURANT", "TAX_INVOICE", "MISC"
+    doc_profile_confidence: Optional[float] = None   # float in [0,1]
+
     # --- Monetary extraction / normalization (optional) ---------------------
     parsed_totals: Optional[List[Dict[str, Any]]] = None  # e.g., [{"label":"total","raw":"$88.89","value":88.89,"confidence":0.95}]
     normalized_total: Optional[float] = None              # single best total chosen after normalization

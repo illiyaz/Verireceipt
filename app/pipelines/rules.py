@@ -138,6 +138,34 @@ def _confidence_factor_from_features(
     if source_type == "image" and not ff.get("exif_present"):
         factor = min(factor, 0.80)
 
+    # Geo-aware softening:
+    # UNKNOWN (low confidence) geo should NOT automatically imply a suspicious receipt.
+    # We soften *soft* rule weights (never HARD_FAIL) when geo detection is weak.
+    try:
+        geo_country = str(tf.get("geo_country_guess") or "UNKNOWN").upper().strip()
+        geo_conf = tf.get("geo_confidence")
+        geo_conf_f = float(geo_conf) if geo_conf is not None else 0.0
+    except Exception:
+        geo_country = "UNKNOWN"
+        geo_conf_f = 0.0
+
+    if geo_country == "UNKNOWN" and geo_conf_f < 0.30:
+        # Reduce the impact of missing-field and pattern-based soft rules.
+        factor = min(factor, 0.70)
+
+    # Doc subtype fallback guard: if subtype is MISC/UNKNOWN with low confidence,
+    # keep soft rules conservative to avoid false positives.
+    try:
+        subtype_guess = str(tf.get("doc_subtype_guess") or "UNKNOWN").upper().strip()
+        dp_conf = tf.get("doc_profile_confidence")
+        dp_conf_f = float(dp_conf) if dp_conf is not None else 0.0
+    except Exception:
+        subtype_guess = "UNKNOWN"
+        dp_conf_f = 0.0
+
+    if subtype_guess in ("MISC", "UNKNOWN") and dp_conf_f < 0.55:
+        factor = min(factor, 0.75)
+
     return max(0.60, min(1.00, float(factor)))
 
 def _normalize_amount_str(val: Any) -> Optional[float]:
@@ -238,6 +266,67 @@ def _get_doc_profile(tf: Dict[str, Any], doc_type_hint: Optional[str] = None) ->
         "subtype": str(subtype),
         "confidence": max(0.0, min(1.0, conf_f)),
         "evidence": tf.get("doc_profile_evidence") or [],
+        # Geo-aware tags (may be UNKNOWN / None)
+        "geo_country": str(tf.get("geo_country_guess") or "UNKNOWN"),
+        "geo_confidence": tf.get("geo_confidence"),
+        "lang": tf.get("lang_guess"),
+        "lang_confidence": tf.get("lang_confidence"),
+    }
+
+
+# --------------------------------------------------------------------------
+# Geo and doc-profile aware missing-field penalty gating helpers
+# --------------------------------------------------------------------------
+def _geo_unknown_low(tf: Dict[str, Any], doc_profile: Optional[Dict[str, Any]] = None) -> bool:
+    """True when geo detection is too weak to treat missing-field expectations as fraud."""
+    try:
+        geo_country = str(tf.get("geo_country_guess") or (doc_profile or {}).get("geo_country") or "UNKNOWN").upper().strip()
+        geo_conf = tf.get("geo_confidence")
+        geo_conf_f = float(geo_conf) if geo_conf is not None else 0.0
+    except Exception:
+        geo_country = "UNKNOWN"
+        geo_conf_f = 0.0
+    return geo_country == "UNKNOWN" and geo_conf_f < 0.30
+
+
+def _doc_misc_low(tf: Dict[str, Any], doc_profile: Optional[Dict[str, Any]] = None) -> bool:
+    """True when doc subtype is a fallback (MISC/UNKNOWN) with low confidence."""
+    try:
+        subtype = str(tf.get("doc_subtype_guess") or (doc_profile or {}).get("subtype") or "UNKNOWN").upper().strip()
+        dp_conf = tf.get("doc_profile_confidence")
+        if dp_conf is None and doc_profile is not None:
+            dp_conf = doc_profile.get("confidence")
+        dp_conf_f = float(dp_conf) if dp_conf is not None else 0.0
+    except Exception:
+        subtype = "UNKNOWN"
+        dp_conf_f = 0.0
+    return subtype in ("MISC", "UNKNOWN") and dp_conf_f < 0.55
+
+
+def _missing_field_penalties_enabled(tf: Dict[str, Any], doc_profile: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether to apply penalties for missing transactional fields (merchant/phone/address/total/date/etc.).
+
+    Design:
+    - If geo is UNKNOWN with low confidence, do NOT treat missing fields as fraud.
+    - If doc subtype is MISC/UNKNOWN with low confidence, do NOT treat missing fields as fraud.
+    """
+    if _geo_unknown_low(tf, doc_profile=doc_profile):
+        return False
+    if _doc_misc_low(tf, doc_profile=doc_profile):
+        return False
+    return True
+
+
+def _missing_field_gate_evidence(tf: Dict[str, Any], doc_profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Common evidence for audit when missing-field penalties are gated off."""
+    dp = doc_profile or {}
+    return {
+        "geo_country_guess": tf.get("geo_country_guess") or dp.get("geo_country"),
+        "geo_confidence": tf.get("geo_confidence") or dp.get("geo_confidence"),
+        "doc_subtype_guess": tf.get("doc_subtype_guess") or dp.get("subtype"),
+        "doc_profile_confidence": tf.get("doc_profile_confidence") or dp.get("confidence"),
+        "lang_guess": tf.get("lang_guess") or dp.get("lang"),
+        "lang_confidence": tf.get("lang_confidence") or dp.get("lang_confidence"),
     }
 
 
@@ -1636,6 +1725,9 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
     expects_amounts = _expects_amounts(doc_profile)
     expects_total_line = _expects_total_line(doc_profile)
     expects_date = _expects_date(doc_profile)
+    
+    # Gate flag: emit once if missing-field penalties are disabled
+    missing_gate_emitted = False
 
     # If upstream extractors (LayoutLM / DONUT / ensemble) already provided a total,
     # do NOT flag "No Total Line" purely based on missing TOTAL keyword/line.
@@ -1668,21 +1760,35 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
 
     if not has_any_amount:
         if expects_amounts:
-            score += emit_event(
-                events=events,
-                reasons=reasons,
-                rule_id="R5_NO_AMOUNTS",
-                severity="CRITICAL",
-                weight=0.40,
-                message="No currency amounts detected in document",
-                evidence={
-                    "has_any_amount": False,
-                    "doc_family": doc_profile.get("family"),
-                    "doc_subtype": doc_profile.get("subtype"),
-                    "doc_profile_confidence": doc_profile.get("confidence"),
-                },
-                reason_text="💰 No Amounts Detected: The document contains no recognizable currency amounts.",
-            )
+            # Geo/doc-aware safeguard: UNKNOWN geo or low-confidence MISC must not imply fraud
+            if not _missing_field_penalties_enabled(tf, doc_profile):
+                if not missing_gate_emitted:
+                    emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="GATE_MISSING_FIELDS",
+                        severity="INFO",
+                        weight=0.0,
+                        message="Missing-field penalties gated due to UNKNOWN geo or low-confidence MISC subtype",
+                        evidence=_missing_field_gate_evidence(tf, doc_profile),
+                    )
+                    missing_gate_emitted = True
+            else:
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R5_NO_AMOUNTS",
+                    severity="CRITICAL",
+                    weight=0.40,
+                    message="No currency amounts detected in document",
+                    evidence={
+                        "has_any_amount": False,
+                        "doc_family": doc_profile.get("family"),
+                        "doc_subtype": doc_profile.get("subtype"),
+                        "doc_profile_confidence": doc_profile.get("confidence"),
+                    },
+                    reason_text="💰 No Amounts Detected: The document contains no recognizable currency amounts.",
+                )
         else:
             minor_notes.append(
                 "Amounts were not detected, but this document type often does not contain totals/amounts."
@@ -1707,23 +1813,37 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
         has_usable_total_value = bool(_has_total_value(tf) or has_extracted_total)
 
         if expects_total_line and not has_usable_total_value:
-            score += emit_event(
-                events=events,
-                reasons=reasons,
-                rule_id="R6_NO_TOTAL_LINE",
-                severity="CRITICAL",
-                weight=0.15,
-                message="Amounts present but no total line found",
-                evidence={
-                    "has_any_amount": True,
-                    "total_line_present": False,
-                    "has_usable_total_value": has_usable_total_value,
-                    "doc_family": doc_profile.get("family"),
-                    "doc_subtype": doc_profile.get("subtype"),
-                    "doc_profile_confidence": doc_profile.get("confidence"),
-                },
-                reason_text="🧾 No Total Line: Document has amounts but no clear total/grand total line.",
-            )
+            # Geo/doc-aware safeguard: UNKNOWN geo or low-confidence MISC must not imply fraud
+            if not _missing_field_penalties_enabled(tf, doc_profile):
+                if not missing_gate_emitted:
+                    emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="GATE_MISSING_FIELDS",
+                        severity="INFO",
+                        weight=0.0,
+                        message="Missing-field penalties gated due to UNKNOWN geo or low-confidence MISC subtype",
+                        evidence=_missing_field_gate_evidence(tf, doc_profile),
+                    )
+                    missing_gate_emitted = True
+            else:
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R6_NO_TOTAL_LINE",
+                    severity="CRITICAL",
+                    weight=0.15,
+                    message="Amounts present but no total line found",
+                    evidence={
+                        "has_any_amount": True,
+                        "total_line_present": False,
+                        "has_usable_total_value": has_usable_total_value,
+                        "doc_family": doc_profile.get("family"),
+                        "doc_subtype": doc_profile.get("subtype"),
+                        "doc_profile_confidence": doc_profile.get("confidence"),
+                    },
+                    reason_text="🧾 No Total Line: Document has amounts but no clear total/grand total line.",
+                )
         else:
             minor_notes.append(
                 "Total line keyword was not detected, but this document type may not use a TOTAL label (or a total value was extracted)."
@@ -1759,21 +1879,35 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
 
     if not has_date:
         if expects_date:
-            score += emit_event(
-                events=events,
-                reasons=reasons,
-                rule_id="R8_NO_DATE",
-                severity="CRITICAL",
-                weight=0.20,
-                message="No date found in document",
-                evidence={
-                    "has_date": False,
-                    "doc_family": doc_profile.get("family"),
-                    "doc_subtype": doc_profile.get("subtype"),
-                    "doc_profile_confidence": doc_profile.get("confidence"),
-                },
-                reason_text="📅 No Date Found: Receipt/invoice is missing a transaction date.",
-            )
+            # Geo/doc-aware safeguard: UNKNOWN geo or low-confidence MISC must not imply fraud
+            if not _missing_field_penalties_enabled(tf, doc_profile):
+                if not missing_gate_emitted:
+                    emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="GATE_MISSING_FIELDS",
+                        severity="INFO",
+                        weight=0.0,
+                        message="Missing-field penalties gated due to UNKNOWN geo or low-confidence MISC subtype",
+                        evidence=_missing_field_gate_evidence(tf, doc_profile),
+                    )
+                    missing_gate_emitted = True
+            else:
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R8_NO_DATE",
+                    severity="CRITICAL",
+                    weight=0.20,
+                    message="No date found in document",
+                    evidence={
+                        "has_date": False,
+                        "doc_family": doc_profile.get("family"),
+                        "doc_subtype": doc_profile.get("subtype"),
+                        "doc_profile_confidence": doc_profile.get("confidence"),
+                    },
+                    reason_text="📅 No Date Found: Receipt/invoice is missing a transaction date.",
+                )
         else:
             minor_notes.append(
                 "Date was not detected, but this document subtype often omits dates (or date is not central)."
@@ -1794,16 +1928,30 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
             )
 
     if not merchant_candidate:
-        score += emit_event(
-            events=events,
-            reasons=reasons,
-            rule_id="R9_NO_MERCHANT",
-            severity="CRITICAL",
-            weight=0.15,
-            message="No merchant name could be identified",
-            evidence={"merchant_candidate": None},
-            reason_text="🏪 No Merchant: Could not identify a merchant/vendor name.",
-        )
+        # Geo/doc-aware safeguard: UNKNOWN geo or low-confidence MISC must not imply fraud
+        if not _missing_field_penalties_enabled(tf, doc_profile):
+            if not missing_gate_emitted:
+                emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="GATE_MISSING_FIELDS",
+                    severity="INFO",
+                    weight=0.0,
+                    message="Missing-field penalties gated due to UNKNOWN geo or low-confidence MISC subtype",
+                    evidence=_missing_field_gate_evidence(tf, doc_profile),
+                )
+                missing_gate_emitted = True
+        else:
+            score += emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="R9_NO_MERCHANT",
+                severity="CRITICAL",
+                weight=0.15,
+                message="No merchant name could be identified",
+                evidence={"merchant_candidate": None},
+                reason_text="🏪 No Merchant: Could not identify a merchant/vendor name.",
+            )
 
     # Merchant plausibility checks
     if merchant_candidate:

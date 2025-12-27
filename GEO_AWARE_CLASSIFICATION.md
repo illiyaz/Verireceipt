@@ -78,22 +78,58 @@ Hindi/IN: r"\bgstin\b"
 
 4. **Postal Code Patterns** (2 points each)
    - Mexico: `C.P. 12345` (5 digits, but ambiguous with US)
-   - US: `12345` or `12345-6789` (ZIP or ZIP+4)
+   - US: ZIP+4 (`12345-6789`) or State+ZIP (`CA 94102`) are strong; plain 5-digit ZIP (`12345`) is ambiguous and requires corroborating signals.
    - India: `PIN Code: 123456` (6 digits)
 
 5. **Location Markers** (1 point each)
    - Mexico: `CDMX`, `Guadalajara`, `Monterrey`, `Col.`, `Delegación`
-   - US: `CA`, `TX`, `NY`, `ZIP`, `State`
+   - US: ZIP, ZIP Code, State, City, County (avoid 2-letter state-code substring matching).
    - India: `Mumbai`, `Delhi`, `Bangalore`, `Nagar`, `Road`
 
-**Language Hint Bonus:** +5 points if detected language matches expected language for country
+**Language Hint Bonus (Proportional):**
+Language is treated as a *prior*, not ground truth.
+
+Bonus applied as:
+```python
+language_bonus = min(3, winner_score * 0.3)
+total_score += language_bonus
+```
 
 **Confidence Calculation:**
 ```python
 confidence = min(1.0, winner_score / max(10, total_score))
+
+# Strong-signal bonus (bounded)
 if winner_score >= 10:
-    confidence += 0.2  # Boost for strong signals
+    confidence += 0.2
+
+# Minimum absolute-score gate
+if winner_score < 6:
+    confidence *= 0.5
+
+confidence = min(confidence, 1.0)
+
+# Explicit UNKNOWN handling
+if confidence < 0.3:
+    geo_country_guess = "UNKNOWN"
 ```
+
+If `geo_country_guess == "UNKNOWN"`:
+- Treat geo as a weak prior, not ground truth
+- Downstream rules must not assume transactional completeness
+- Route to human_review instead of suspicious when other signals are weak
+
+### ⚠️ UNKNOWN Geo Handling (Critical)
+
+When:
+- `geo_country_guess == "UNKNOWN"`
+- `geo_confidence < 0.3`
+
+Then:
+- Disable missing-field penalties (tax id, address, phone)
+- Do NOT escalate to suspicious by default
+- Prefer `human_review` routing
+- Allow vision + layout models to corroborate before penalties
 
 **Output:**
 ```json
@@ -153,6 +189,16 @@ base_confidence = min(1.0, keyword_matches / 5.0)
 final_confidence = base_confidence * (0.5 + 0.5 * geo_confidence)
 ```
 
+Fallback:
+"MISC", confidence=0.3 (non-transactional-safe)
+
+If `doc_subtype == "MISC"`:
+- Disable learned missing-field penalties
+- Require at least one of:
+  - Vision model corroboration
+  - Layout consistency signal
+- Never mark suspicious on rules alone
+
 **Output:**
 ```json
 {
@@ -186,6 +232,7 @@ us_zip_code: r'\b(\d{5}(?:-\d{4})?)\b'  # 94102 or 94102-1234
 us_state: r'\b([A-Z]{2})\s+\d{5}\b'  # CA 94102
 us_ein: r'\b\d{2}-\d{7}\b'  # 12-3456789
 us_phone: r'\((\d{3})\)\s*(\d{3})[-\s]?(\d{4})'  # (415) 555-1234
+# Note: plain 5-digit ZIPs (e.g., 12345) can be ambiguous and should be corroborated with other US-specific signals.
 ```
 
 **India (IN) Extractor:**
@@ -248,11 +295,12 @@ Geo information is included in `ENS_DOC_PROFILE_TAGS` events:
     "doc_profile_confidence": 0.67,
     "lang_guess": "es",
     "lang_confidence": 0.82,
-    "geo_country_guess": "MX",
-    "geo_confidence": 0.84
+    "geo_country_guess": "UNKNOWN",
+    "geo_confidence": 0.22
   }
 }
 ```
+UNKNOWN geo explicitly prevents false positives on foreign or low-signal receipts (e.g., Popeyes case).
 
 ---
 
@@ -456,3 +504,14 @@ Done! The system now supports Brazil.
 5. **Evidence tracking** - Full audit trail for debugging
 
 This system scales to any number of countries without touching existing code. Just add new signal definitions and extractors.
+
+
+## 🧠 Design Principles (Hard-Learned)
+
+1. Language is a hint, never truth
+2. Missing fields ≠ fraud when geo is uncertain
+3. UNKNOWN is a first-class state, not a failure
+4. Penalize only after corroboration
+5. Human review beats false positives
+
+These rules exist to prevent overconfidence on short, noisy, or foreign receipts.

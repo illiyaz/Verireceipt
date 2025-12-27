@@ -216,6 +216,13 @@ def _detect_language(text: str, sample_size: int = 1000) -> Dict[str, Any]:
 # STEP 2: GEO/COUNTRY DETECTION (Multi-Signal Scoring)
 # =============================================================================
 
+# Ambiguous signals that match multiple countries (scored lower)
+AMBIGUOUS_SIGNALS = {
+    "currency": {"$", "¥"},  # USD, MXN, CAD, SGD, HKD, AUD / CNY, JPY
+    "postal": {r"\b\d{5}\b", r"\b\d{6}\b"},  # US ZIP, MX C.P., FR/DE/TH / CN, IN, SG
+    "phone": {r"\b\d{10}\b"},  # MX, US (without formatting)
+}
+
 # Signal definitions for each country
 GEO_SIGNALS = {
     "MX": {  # Mexico
@@ -243,12 +250,12 @@ GEO_SIGNALS = {
             r"\d{3}[-\s]\d{3}[-\s]\d{4}",  # 555-123-4567
         ],
         "postal_patterns": [
-            r"\b\d{5}(-\d{4})?\b",  # ZIP or ZIP+4
-            r"\b[A-Z]{2}\s+\d{5}\b",  # State + ZIP
+            r"\b\d{5}-\d{4}\b",      # ZIP+4 (strong)
+            r"\b[A-Z]{2}\s+\d{5}\b", # State + ZIP (strong)
+            r"\b\d{5}\b",            # 5 digits (ambiguous; gated)
         ],
         "location_markers": [
-            "ca", "tx", "ny", "fl", "il", "pa", "oh", "ga", "nc", "mi",
-            "zip", "state", "city", "county",
+            "zip", "zip code", "state", "city", "county",
         ],
         "language_hint": "en",
     },
@@ -437,43 +444,65 @@ GEO_SIGNALS = {
 }
 
 
-def _score_geo_signal(text: str, signal_type: str, patterns: List[str]) -> Tuple[int, List[str]]:
-    """Score a specific signal type and return (score, evidence)."""
+def _score_geo_signal(text: str, signal_type: str, patterns: List[str], has_strong_signal: bool = False) -> Tuple[int, List[str]]:
+    """Score a specific signal type and return (score, evidence).
+    
+    Args:
+        text: Text to search
+        signal_type: Type of signal (currency, tax_keywords, etc.)
+        patterns: List of patterns to match
+        has_strong_signal: Whether a strong signal (tax/phone) already exists
+    
+    Returns:
+        (score, evidence_list)
+    """
     score = 0
     evidence = []
     text_lower = text.lower()
     
     if signal_type == "currency":
-        for curr in patterns:
-            if curr in text_lower:
-                score += 2
-                evidence.append(f"currency:{curr}")
+        for pattern in patterns:
+            if pattern in text_lower:
+                # Check if ambiguous
+                is_ambiguous = pattern in AMBIGUOUS_SIGNALS.get("currency", set())
+                if is_ambiguous:
+                    # Only score ambiguous currency if we have strong signals
+                    if has_strong_signal:
+                        score += 1
+                        evidence.append(f"currency:{pattern}(ambiguous)")
+                else:
+                    score += 2
+                    evidence.append(f"currency:{pattern}")
+                break  # Only count once per type
     
     elif signal_type == "tax_keywords":
-        for keyword in patterns:
-            if keyword in text_lower:
+        for pattern in patterns:
+            if pattern in text_lower:
                 score += 3  # Tax keywords are strong signals
-                evidence.append(f"tax:{keyword}")
+                evidence.append(f"tax:{pattern}")
     
-    elif signal_type == "phone_patterns":
+    elif signal_type in ["phone_patterns", "postal_patterns"]:
         for pattern in patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            if matches:
-                score += 2
-                evidence.append(f"phone:{matches[0][:15]}")
-    
-    elif signal_type == "postal_patterns":
-        for pattern in patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            if matches:
-                score += 2
-                evidence.append(f"postal:{matches[0]}")
+            if re.search(pattern, text, re.IGNORECASE):
+                # Check if ambiguous
+                signal_key = "phone" if signal_type == "phone_patterns" else "postal"
+                is_ambiguous = pattern in AMBIGUOUS_SIGNALS.get(signal_key, set())
+                
+                if is_ambiguous:
+                    # Only score ambiguous patterns if we have strong signals
+                    if has_strong_signal:
+                        score += 1
+                        evidence.append(f"{signal_key}:{pattern[:20]}(ambiguous)")
+                else:
+                    score += 2
+                    evidence.append(f"{signal_key}:{pattern[:20]}")
+                break  # Only count once per type
     
     elif signal_type == "location_markers":
-        for marker in patterns:
-            if marker in text_lower:
+        for pattern in patterns:
+            if pattern in text_lower:
                 score += 1
-                evidence.append(f"location:{marker}")
+                evidence.append(f"location:{pattern}")
     
     return score, evidence
 
@@ -505,21 +534,44 @@ def _detect_geo_country(text: str, lang_hint: Optional[str] = None) -> Dict[str,
     country_scores = {}
     country_evidence = {}
     
+    # FIRST PASS: Check for strong signals (tax keywords, formatted phone/postal)
+    strong_signals_by_country = {}
+    for country, signals in GEO_SIGNALS.items():
+        has_strong = False
+        # Tax keywords are always strong
+        if "tax_keywords" in signals:
+            for pattern in signals["tax_keywords"]:
+                if pattern in text.lower():
+                    has_strong = True
+                    break
+        # Formatted phone/postal (non-ambiguous patterns)
+        if not has_strong and "phone_patterns" in signals:
+            for pattern in signals["phone_patterns"]:
+                if pattern not in AMBIGUOUS_SIGNALS.get("phone", set()):
+                    if re.search(pattern, text, re.IGNORECASE):
+                        has_strong = True
+                        break
+        strong_signals_by_country[country] = has_strong
+    
+    # SECOND PASS: Score with ambiguous signal awareness
     for country, signals in GEO_SIGNALS.items():
         total_score = 0
         all_evidence = []
+        has_strong = strong_signals_by_country[country]
         
         # Score each signal type
         for signal_type in ["currency", "tax_keywords", "phone_patterns", "postal_patterns", "location_markers"]:
             if signal_type in signals:
-                score, evidence = _score_geo_signal(text, signal_type, signals[signal_type])
+                score, evidence = _score_geo_signal(text, signal_type, signals[signal_type], has_strong)
                 total_score += score
                 all_evidence.extend(evidence)
         
-        # Language hint bonus (if matches expected language)
+        # Language hint bonus (proportional, not absolute)
         if lang_hint and signals.get("language_hint") == lang_hint:
-            total_score += 5
-            all_evidence.append(f"lang_match:{lang_hint}")
+            # Proportional bonus: min(3, winner_score * 0.3)
+            lang_bonus = min(3, int(total_score * 0.3))
+            total_score += lang_bonus
+            all_evidence.append(f"lang_match:{lang_hint}(+{lang_bonus})")
         
         country_scores[country] = total_score
         country_evidence[country] = all_evidence
@@ -531,28 +583,46 @@ def _detect_geo_country(text: str, lang_hint: Optional[str] = None) -> Dict[str,
             "geo_confidence": 0.0,
             "geo_evidence": [],
             "geo_scores": country_scores,
+            "geo_suspicious": False,
+            "geo_winner_raw": None,
+            "geo_winner_score_raw": 0,
         }
-    
+
     winner = max(country_scores, key=country_scores.get)
     winner_score = country_scores[winner]
-    total_score = sum(country_scores.values())
-    
-    # Confidence calculation
-    # High confidence if winner is clearly ahead
-    if total_score > 0:
-        confidence = min(1.0, winner_score / max(10, total_score))
-    else:
-        confidence = 0.0
-    
-    # Boost confidence if winner has strong signals
+    total_score = sum(country_scores.values()) or 1.0
+
+    # Confidence calculation with minimum score gate
+    confidence = min(1.0, winner_score / max(10, total_score))
+
+    # Minimum absolute score gate: penalize weak signals
+    if winner_score < 6:
+        confidence *= 0.5  # Cut confidence in half for weak signals
+
+    # Boost confidence if winner has strong signals (>= 10)
     if winner_score >= 10:
         confidence = min(1.0, confidence + 0.2)
-    
+
+    # NEW: Explicit UNKNOWN gating (unknown geo ≠ suspicious receipt)
+    # If we don't have enough absolute signal strength, emit UNKNOWN even if a country "wins".
+    geo_country_guess = winner
+    if confidence < 0.30 or winner_score < 6:
+        geo_country_guess = "UNKNOWN"
+
+    # Suspicious geo means: there were some signals, but not enough to be confident.
+    geo_suspicious = False
+    if geo_country_guess == "UNKNOWN" and winner_score > 0 and confidence < 0.30:
+        geo_suspicious = True
+
     return {
-        "geo_country_guess": winner,
+        "geo_country_guess": geo_country_guess,
         "geo_confidence": round(confidence, 2),
-        "geo_evidence": country_evidence[winner][:10],  # Top 10 signals
+        "geo_evidence": country_evidence.get(winner, [])[:10],  # Top 10 signals from raw winner
         "geo_scores": country_scores,
+        "geo_suspicious": geo_suspicious,  # Flag for downstream rules
+        # Keep raw winner for audit/debugging even when we emit UNKNOWN
+        "geo_winner_raw": winner,
+        "geo_winner_score_raw": int(winner_score),
     }
 
 
@@ -708,11 +778,14 @@ def _detect_doc_subtype_geo_aware(
     # Pick winner
     if not subtype_scores or max(subtype_scores.values()) == 0:
         # Fallback to generic detection
+        # IMPORTANT: MISC subtype should disable strict field expectations
         return {
             "doc_family_guess": "TRANSACTIONAL",
             "doc_subtype_guess": "MISC",
-            "doc_profile_confidence": 0.3,
+            "doc_profile_confidence": 0.2,  # Lower confidence for MISC
             "doc_profile_evidence": [],
+            "requires_corroboration": True,  # Flag: need vision/layout confirmation
+            "disable_missing_field_penalties": True,  # Flag: don't penalize missing fields
         }
     
     winner = max(subtype_scores, key=subtype_scores.get)
@@ -731,11 +804,16 @@ def _detect_doc_subtype_geo_aware(
     base_confidence = min(1.0, winner_score / 5.0)
     final_confidence = base_confidence * (0.5 + 0.5 * geo_confidence)
     
+    # Determine if this needs corroboration (low confidence)
+    requires_corroboration = final_confidence < 0.4
+    
     return {
         "doc_family_guess": family,
         "doc_subtype_guess": winner,
         "doc_profile_confidence": round(final_confidence, 2),
         "doc_profile_evidence": subtype_evidence[winner][:5],
+        "requires_corroboration": requires_corroboration,
+        "disable_missing_field_penalties": False,  # Normal subtypes use standard rules
     }
 
 
