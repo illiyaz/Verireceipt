@@ -56,7 +56,7 @@ class AuditFormatter:
         decision_id = decision.get("decision_id", "N/A")
         created_at = decision.get("created_at", "N/A")
         label = decision.get("label") or "UNKNOWN"
-        score = decision.get("score", 0.0)
+        score = decision.get("score") or 0.0
         policy_name = decision.get("policy_name") or "default"
         policy_version = decision.get("policy_version") or "0.0.0"
         rule_version = decision.get("rule_version") or "0.0.0"
@@ -76,8 +76,8 @@ Rule Version:    {decision.get("rule_version", "0.0.0")}
     @staticmethod
     def _format_executive_summary(decision: Dict[str, Any]) -> str:
         """Format executive summary section."""
-        label = decision.get("label", "UNKNOWN")
-        score = decision.get("score", 0.0)
+        label = decision.get("label") or "UNKNOWN"
+        score = decision.get("score") or 0.0
         reasons = decision.get("reasons", [])
         
         # Determine verdict explanation
@@ -115,12 +115,12 @@ Fraud Risk Score: {score:.2f} / 1.00
     def _format_geo_context(decision: Dict[str, Any]) -> str:
         """Format geo-aware classification context."""
         lang = decision.get("lang_guess") or "UNKNOWN"
-        lang_conf = decision.get("lang_confidence", 0.0)
+        lang_conf = decision.get("lang_confidence") or 0.0
         geo = decision.get("geo_country_guess") or "UNKNOWN"
-        geo_conf = decision.get("geo_confidence", 0.0)
+        geo_conf = decision.get("geo_confidence") or 0.0
         doc_family = decision.get("doc_family") or "UNKNOWN"
         doc_subtype = decision.get("doc_subtype") or "UNKNOWN"
-        doc_conf = decision.get("doc_profile_confidence", 0.0)
+        doc_conf = decision.get("doc_profile_confidence") or 0.0
         
         # Get geo evidence from debug or audit events
         geo_evidence = []
@@ -333,11 +333,11 @@ CRITICAL EVENTS ({len(critical_events)} found)
     @staticmethod
     def _format_recommendations(decision: Dict[str, Any]) -> str:
         """Format auditor recommendations."""
-        label = decision.get("label", "UNKNOWN")
-        score = decision.get("score", 0.0)
-        geo = decision.get("geo_country_guess", "UNKNOWN")
-        geo_conf = decision.get("geo_confidence", 0.0)
-        doc_subtype = decision.get("doc_subtype", "UNKNOWN")
+        label = decision.get("label") or "UNKNOWN"
+        score = decision.get("score") or 0.0
+        geo = decision.get("geo_country_guess") or "UNKNOWN"
+        geo_conf = decision.get("geo_confidence") or 0.0
+        doc_subtype = decision.get("doc_subtype") or "UNKNOWN"
         
         section = f"""
 ═══════════════════════════════════════════════════════════════════════════
