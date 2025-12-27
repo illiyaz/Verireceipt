@@ -986,7 +986,53 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         
         # Save ensemble verdict to CSV for audit trail
         try:
-            from app.schemas.receipt import ReceiptDecision, AuditEvent
+            from app.schemas.receipt import ReceiptDecision, AuditEvent, LearnedRuleAudit
+            
+            # Extract doc profile and rule-based data
+            rb = (results or {}).get("rule_based", {}) or {}
+            rule_events = rb.get("events") or rb.get("rule_events") or []
+            doc_profile = rb.get("doc_profile") or (rb.get("debug") or {}).get("doc_profile") or {}
+            
+            # Convert learned-rule events into LearnedRuleAudit
+            learned_rule_audits = []
+            try:
+                for e in (rule_events or []):
+                    if not isinstance(e, dict):
+                        continue
+                    if str(e.get("rule_id", "")) != "LR_LEARNED_PATTERN":
+                        continue
+                    ev = e.get("evidence", {}) or {}
+                    learned_rule_audits.append(
+                        LearnedRuleAudit(
+                            pattern=str(ev.get("pattern") or "unknown"),
+                            message="Learned rule triggered",
+                            confidence_adjustment=float(ev.get("confidence_adjustment") or 0.0),
+                            times_seen=ev.get("times_seen"),
+                            severity=str(e.get("severity") or "INFO"),
+                            evidence=ev,
+                        )
+                    )
+            except Exception:
+                learned_rule_audits = []
+            
+            # Convert ensemble reconciliation events into AuditEvent
+            audit_events = []
+            try:
+                for ev in (ensemble_verdict or {}).get("reconciliation_events", []) or []:
+                    if isinstance(ev, dict):
+                        audit_events.append(
+                            AuditEvent(
+                                source=ev.get("source", "ensemble"),
+                                type=ev.get("type", "reconciliation"),
+                                severity=ev.get("severity"),
+                                code=ev.get("code"),
+                                message=ev.get("message", ""),
+                                evidence=ev.get("evidence", {}) or {},
+                            )
+                        )
+            except Exception:
+                audit_events = []
+            
             ensemble_decision = ReceiptDecision(
                 label=ensemble_verdict["final_label"],
                 score=ensemble_verdict["confidence"],
@@ -996,21 +1042,30 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 policy_version="0.0.1",
                 engine_version="ensemble-v0.0.1",
                 policy_name="ensemble",
+                
+                # Extraction confidence
+                extraction_confidence_score=(converged_data or {}).get("confidence_score"),
+                extraction_confidence_level=(converged_data or {}).get("confidence_level"),
+                
+                # Geo/Lang tags
+                lang_guess=(doc_profile or {}).get("lang_guess"),
+                lang_confidence=(doc_profile or {}).get("lang_confidence"),
+                geo_country_guess=(doc_profile or {}).get("geo_country_guess"),
+                geo_confidence=(doc_profile or {}).get("geo_confidence"),
+                
+                # Doc profile tags
+                doc_family=(doc_profile or {}).get("family") or (doc_profile or {}).get("doc_family"),
+                doc_subtype=(doc_profile or {}).get("subtype") or (doc_profile or {}).get("doc_subtype"),
+                doc_profile_confidence=(doc_profile or {}).get("confidence") or (doc_profile or {}).get("doc_profile_confidence"),
+                
+                # Missing-field gate
+                missing_fields_enabled=(doc_profile or {}).get("missing_fields_enabled"),
+                missing_field_gate=(doc_profile or {}).get("missing_field_gate"),
+                
+                # Audit events and learned rules
+                audit_events=audit_events,
+                learned_rule_audits=learned_rule_audits,
             )
-            
-            # Transfer reconciliation_events from ensemble verdict to audit_events
-            reconciliation_events = ensemble_verdict.get("reconciliation_events", [])
-            for rec_event in reconciliation_events:
-                if isinstance(rec_event, dict):
-                    audit_event = AuditEvent(
-                        source="ensemble",
-                        type=rec_event.get("type", "reconciliation"),
-                        severity=rec_event.get("severity", "INFO"),
-                        code=rec_event.get("code", ""),
-                        message=rec_event.get("message", ""),
-                        evidence=rec_event.get("evidence", {}),
-                    )
-                    ensemble_decision.add_audit_event(audit_event)
             
             ensemble_decision.finalize_defaults()
             store.save_analysis(str(temp_path), ensemble_decision)
