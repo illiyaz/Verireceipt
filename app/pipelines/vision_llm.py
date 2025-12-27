@@ -45,7 +45,7 @@ def query_vision_model(
     prompt: str,
     model: str = DEFAULT_VISION_MODEL,
     temperature: float = 0.3,
-    timeout: int = 120
+    timeout: int = 300
 ) -> str:
     """
     Query Ollama vision model with an image and prompt.
