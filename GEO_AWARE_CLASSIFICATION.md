@@ -91,26 +91,28 @@ Language is treated as a *prior*, not ground truth.
 
 Bonus applied as:
 ```python
-language_bonus = min(3, winner_score * 0.3)
+# Language is a prior, not ground truth.
+# Proportional bonus capped to avoid overpowering tax/phone/location signals.
+language_bonus = min(3.0, float(winner_score or 0.0) * 0.30)
 total_score += language_bonus
 ```
 
 **Confidence Calculation:**
 ```python
-confidence = min(1.0, winner_score / max(10, total_score))
+# Base confidence: winner contribution vs total evidence
+confidence = min(1.0, float(winner_score or 0.0) / max(10.0, float(total_score or 0.0)))
 
 # Strong-signal bonus (bounded)
-if winner_score >= 10:
-    confidence += 0.2
+if float(winner_score or 0.0) >= 10.0:
+    confidence = min(1.0, confidence + 0.2)
 
-# Minimum absolute-score gate
-if winner_score < 6:
+# Minimum absolute-score gate (prevents misleading confidence on weak evidence)
+if float(winner_score or 0.0) < 6.0:
     confidence *= 0.5
 
-confidence = min(confidence, 1.0)
-
 # Explicit UNKNOWN handling
-if confidence < 0.3:
+geo_country_guess = winner_country
+if confidence < 0.30:
     geo_country_guess = "UNKNOWN"
 ```
 
@@ -126,10 +128,10 @@ When:
 - `geo_confidence < 0.3`
 
 Then:
-- Disable missing-field penalties (tax id, address, phone)
-- Do NOT escalate to suspicious by default
-- Prefer `human_review` routing
-- Allow vision + layout models to corroborate before penalties
+- Disable missing-field penalties (merchant/phone/address/tax id/total/date) in the rule engine.
+- Do NOT treat UNKNOWN geo as fraud; UNKNOWN geo ≠ suspicious.
+- Prefer human_review when other fraud signals are weak (instead of labeling suspicious).
+- Allow vision + layout to corroborate before escalating (rules alone should not over-penalize).
 
 **Output:**
 ```json
@@ -190,14 +192,13 @@ final_confidence = base_confidence * (0.5 + 0.5 * geo_confidence)
 ```
 
 Fallback:
-"MISC", confidence=0.3 (non-transactional-safe)
+"MISC", confidence=0.3 (fallback; treat as non-transactional-safe)
 
 If `doc_subtype == "MISC"`:
-- Disable learned missing-field penalties
-- Require at least one of:
-  - Vision model corroboration
-  - Layout consistency signal
-- Never mark suspicious on rules alone
+- Disable learned missing-field penalties (especially “missing_elements” patterns).
+- Gate all missing-field penalties in rules unless geo/doc profile is confident.
+- Require corroboration from at least one of: Vision realism OR Layout consistency.
+- Do not mark suspicious on rules alone when subtype is MISC/UNKNOWN with low confidence; route to human_review.
 
 **Output:**
 ```json
@@ -296,7 +297,9 @@ Geo information is included in `ENS_DOC_PROFILE_TAGS` events:
     "lang_guess": "es",
     "lang_confidence": 0.82,
     "geo_country_guess": "UNKNOWN",
-    "geo_confidence": 0.22
+    "geo_confidence": 0.22,
+    "geo_evidence_top": ["currency:$", "postal:5d_ambiguous"],
+    "note": "UNKNOWN geo disables missing-field penalties; prefer human review unless strong fraud signals exist."
   }
 }
 ```
@@ -513,5 +516,7 @@ This system scales to any number of countries without touching existing code. Ju
 3. UNKNOWN is a first-class state, not a failure
 4. Penalize only after corroboration
 5. Human review beats false positives
+6. Gate missing-field penalties behind geo/doc confidence
+7. Emit audit evidence when gating is applied (so you can debug false positives fast)
 
 These rules exist to prevent overconfidence on short, noisy, or foreign receipts.
