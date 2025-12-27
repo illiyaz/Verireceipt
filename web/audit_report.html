@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VeriReceipt - Audit Report Viewer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .audit-report {
+            font-family: 'JetBrains Mono', monospace;
+            white-space: pre-wrap;
+            line-height: 1.6;
+            font-size: 0.875rem;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            padding: 2rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+        }
+        
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .card-shadow {
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+        }
+        
+        .dropzone {
+            border: 3px dashed #cbd5e0;
+            transition: all 0.3s ease;
+        }
+        
+        .dropzone.drag-over {
+            border-color: #667eea;
+            background-color: #f7fafc;
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .tab-button {
+            transition: all 0.3s ease;
+        }
+        
+        .tab-button.active {
+            background: white;
+            color: #667eea;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="text-center mb-8">
+            <h1 class="text-5xl font-extrabold text-white mb-2">
+                <i class="fas fa-file-invoice mr-3"></i>
+                VeriReceipt Audit Report
+            </h1>
+            <p class="text-white text-lg opacity-90">
+                Upload a receipt to view comprehensive audit analysis
+            </p>
+        </div>
+
+        <!-- Upload Section -->
+        <div class="bg-white rounded-2xl card-shadow p-8 mb-6">
+            <div id="dropzone" class="dropzone rounded-xl p-12 text-center cursor-pointer">
+                <i class="fas fa-cloud-upload-alt text-6xl text-gray-400 mb-4"></i>
+                <p class="text-xl font-semibold text-gray-700 mb-2">
+                    Drop your receipt here or click to browse
+                </p>
+                <p class="text-gray-500">
+                    Supports PDF, JPG, PNG (Max 10MB)
+                </p>
+                <input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png" class="hidden">
+            </div>
+
+            <div id="fileInfo" class="hidden mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <i class="fas fa-file text-blue-600 text-2xl"></i>
+                        <div>
+                            <p id="fileName" class="font-semibold text-gray-800"></p>
+                            <p id="fileSize" class="text-sm text-gray-500"></p>
+                        </div>
+                    </div>
+                    <button id="analyzeBtn" class="bg-gradient-to-r from-purple-600 to-purple-700 text-white px-6 py-3 rounded-lg font-semibold hover:from-purple-700 hover:to-purple-800 transition-all">
+                        <i class="fas fa-search mr-2"></i>
+                        Analyze & View Report
+                    </button>
+                </div>
+            </div>
+
+            <div id="error" class="hidden mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                <p class="text-red-700">
+                    <i class="fas fa-exclamation-circle mr-2"></i>
+                    <span id="errorMessage"></span>
+                </p>
+            </div>
+
+            <div id="loading" class="hidden mt-4 text-center">
+                <i class="fas fa-spinner fa-spin text-4xl text-purple-600 mb-2"></i>
+                <p class="text-gray-700 font-semibold">Analyzing receipt and generating audit report...</p>
+                <p class="text-sm text-gray-500">This may take 10-30 seconds</p>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="results" class="hidden">
+            <!-- Tabs -->
+            <div class="bg-white rounded-t-2xl card-shadow p-4 flex space-x-2">
+                <button id="tabAudit" class="tab-button active flex-1 px-6 py-3 rounded-lg font-semibold">
+                    <i class="fas fa-clipboard-list mr-2"></i>
+                    Audit Report
+                </button>
+                <button id="tabSummary" class="tab-button flex-1 px-6 py-3 rounded-lg font-semibold text-gray-600 hover:bg-gray-100">
+                    <i class="fas fa-chart-pie mr-2"></i>
+                    Summary
+                </button>
+                <button id="tabEvents" class="tab-button flex-1 px-6 py-3 rounded-lg font-semibold text-gray-600 hover:bg-gray-100">
+                    <i class="fas fa-list mr-2"></i>
+                    Events
+                </button>
+            </div>
+
+            <!-- Tab Content -->
+            <div class="bg-white rounded-b-2xl card-shadow">
+                <!-- Audit Report Tab -->
+                <div id="contentAudit" class="p-6">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-2xl font-bold text-gray-800">
+                            <i class="fas fa-file-alt mr-2 text-purple-600"></i>
+                            Comprehensive Audit Report
+                        </h2>
+                        <button id="copyBtn" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-semibold transition-all">
+                            <i class="fas fa-copy mr-2"></i>
+                            Copy Report
+                        </button>
+                    </div>
+                    <div id="auditReportContent" class="audit-report"></div>
+                </div>
+
+                <!-- Summary Tab -->
+                <div id="contentSummary" class="hidden p-6">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-6">
+                        <i class="fas fa-chart-pie mr-2 text-purple-600"></i>
+                        Analysis Summary
+                    </h2>
+                    <div id="summaryContent" class="space-y-4"></div>
+                </div>
+
+                <!-- Events Tab -->
+                <div id="contentEvents" class="hidden p-6">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-6">
+                        <i class="fas fa-list mr-2 text-purple-600"></i>
+                        Audit Events
+                    </h2>
+                    <div id="eventsContent"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'http://localhost:8000';
+        let currentFile = null;
+        let currentResult = null;
+
+        // DOM elements
+        const dropzone = document.getElementById('dropzone');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const fileSize = document.getElementById('fileSize');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        const error = document.getElementById('error');
+        const errorMessage = document.getElementById('errorMessage');
+        const loading = document.getElementById('loading');
+        const results = document.getElementById('results');
+        const auditReportContent = document.getElementById('auditReportContent');
+        const summaryContent = document.getElementById('summaryContent');
+        const eventsContent = document.getElementById('eventsContent');
+        const copyBtn = document.getElementById('copyBtn');
+
+        // Tab elements
+        const tabAudit = document.getElementById('tabAudit');
+        const tabSummary = document.getElementById('tabSummary');
+        const tabEvents = document.getElementById('tabEvents');
+        const contentAudit = document.getElementById('contentAudit');
+        const contentSummary = document.getElementById('contentSummary');
+        const contentEvents = document.getElementById('contentEvents');
+
+        // Drag and drop
+        dropzone.addEventListener('click', () => fileInput.click());
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.classList.add('drag-over');
+        });
+        dropzone.addEventListener('dragleave', () => {
+            dropzone.classList.remove('drag-over');
+        });
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('drag-over');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFileSelect(files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
+
+        function handleFileSelect(file) {
+            const allowedTypes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
+            if (!allowedTypes.includes(file.type)) {
+                showError('Unsupported file type. Please upload PDF, JPG, or PNG.');
+                return;
+            }
+
+            if (file.size > 10 * 1024 * 1024) {
+                showError('File too large. Maximum size is 10MB.');
+                return;
+            }
+
+            currentFile = file;
+            fileName.textContent = file.name;
+            fileSize.textContent = `${(file.size / 1024 / 1024).toFixed(2)} MB`;
+            fileInfo.classList.remove('hidden');
+            error.classList.add('hidden');
+            results.classList.add('hidden');
+        }
+
+        analyzeBtn.addEventListener('click', analyzeReceipt);
+
+        async function analyzeReceipt() {
+            if (!currentFile) return;
+
+            loading.classList.remove('hidden');
+            error.classList.add('hidden');
+            results.classList.add('hidden');
+
+            const formData = new FormData();
+            formData.append('file', currentFile);
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/analyze`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Analysis failed: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                currentResult = data;
+                displayResults(data);
+            } catch (err) {
+                showError(err.message);
+            } finally {
+                loading.classList.add('hidden');
+            }
+        }
+
+        function displayResults(data) {
+            // Display audit report
+            if (data.audit_report) {
+                auditReportContent.textContent = data.audit_report;
+            } else {
+                auditReportContent.textContent = 'Audit report not available.';
+            }
+
+            // Display summary
+            displaySummary(data);
+
+            // Display events
+            displayEvents(data.audit_events || []);
+
+            results.classList.remove('hidden');
+        }
+
+        function displaySummary(data) {
+            const getVerdictColor = (label) => {
+                if (label === 'LEGITIMATE') return 'bg-green-100 text-green-800 border-green-300';
+                if (label === 'SUSPICIOUS') return 'bg-red-100 text-red-800 border-red-300';
+                return 'bg-yellow-100 text-yellow-800 border-yellow-300';
+            };
+
+            summaryContent.innerHTML = `
+                <div class="border-2 ${getVerdictColor(data.label)} rounded-lg p-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <h3 class="text-2xl font-bold">${data.label}</h3>
+                            <p class="text-sm opacity-75">Final Verdict</p>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-3xl font-bold">${(data.score * 100).toFixed(1)}%</div>
+                            <p class="text-sm opacity-75">Fraud Score</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-gray-50 rounded-lg p-6">
+                    <h3 class="font-bold text-lg mb-3">Key Concerns</h3>
+                    ${data.reasons && data.reasons.length > 0 ? `
+                        <ul class="space-y-2">
+                            ${data.reasons.map(reason => `
+                                <li class="flex items-start">
+                                    <i class="fas fa-exclamation-circle text-red-500 mt-1 mr-2"></i>
+                                    <span>${reason}</span>
+                                </li>
+                            `).join('')}
+                        </ul>
+                    ` : '<p class="text-gray-500">No specific concerns identified.</p>'}
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-blue-50 rounded-lg p-4">
+                        <div class="text-sm text-gray-600 mb-1">Decision ID</div>
+                        <div class="font-mono text-sm">${data.decision_id || 'N/A'}</div>
+                    </div>
+                    <div class="bg-blue-50 rounded-lg p-4">
+                        <div class="text-sm text-gray-600 mb-1">Timestamp</div>
+                        <div class="font-mono text-sm">${data.created_at || 'N/A'}</div>
+                    </div>
+                    <div class="bg-purple-50 rounded-lg p-4">
+                        <div class="text-sm text-gray-600 mb-1">Rule Version</div>
+                        <div class="font-mono text-sm">${data.rule_version || 'N/A'}</div>
+                    </div>
+                    <div class="bg-purple-50 rounded-lg p-4">
+                        <div class="text-sm text-gray-600 mb-1">Policy</div>
+                        <div class="font-mono text-sm">${data.policy_name || 'default'} v${data.policy_version || '0.0.0'}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function displayEvents(events) {
+            if (!events || events.length === 0) {
+                eventsContent.innerHTML = '<p class="text-gray-500">No audit events recorded.</p>';
+                return;
+            }
+
+            const getSeverityColor = (severity) => {
+                if (severity === 'HARD_FAIL') return 'bg-red-100 text-red-800';
+                if (severity === 'CRITICAL') return 'bg-orange-100 text-orange-800';
+                if (severity === 'WARNING') return 'bg-yellow-100 text-yellow-800';
+                return 'bg-blue-100 text-blue-800';
+            };
+
+            eventsContent.innerHTML = `
+                <div class="space-y-3">
+                    ${events.map((event, idx) => `
+                        <div class="border rounded-lg p-4 hover:shadow-md transition-all">
+                            <div class="flex items-start justify-between mb-2">
+                                <div class="flex items-center space-x-3">
+                                    <span class="text-gray-400 font-mono text-sm">#${idx + 1}</span>
+                                    <span class="px-3 py-1 rounded-full text-xs font-semibold ${getSeverityColor(event.severity)}">
+                                        ${event.severity || 'INFO'}
+                                    </span>
+                                    <code class="text-sm font-mono text-purple-600">${event.code || 'UNKNOWN'}</code>
+                                </div>
+                                <span class="text-xs text-gray-400">${event.source || 'unknown'}</span>
+                            </div>
+                            <p class="text-gray-700 mb-2">${event.message || 'No message'}</p>
+                            ${event.evidence && Object.keys(event.evidence).length > 0 ? `
+                                <details class="mt-2">
+                                    <summary class="text-sm text-gray-600 cursor-pointer hover:text-gray-800">
+                                        <i class="fas fa-code mr-1"></i>
+                                        View Evidence
+                                    </summary>
+                                    <pre class="mt-2 p-3 bg-gray-50 rounded text-xs overflow-x-auto">${JSON.stringify(event.evidence, null, 2)}</pre>
+                                </details>
+                            ` : ''}
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        // Tab switching
+        function switchTab(tab) {
+            // Update tab buttons
+            [tabAudit, tabSummary, tabEvents].forEach(t => t.classList.remove('active'));
+            [tabAudit, tabSummary, tabEvents].forEach(t => t.classList.add('text-gray-600', 'hover:bg-gray-100'));
+            
+            tab.classList.add('active');
+            tab.classList.remove('text-gray-600', 'hover:bg-gray-100');
+
+            // Update content
+            [contentAudit, contentSummary, contentEvents].forEach(c => c.classList.add('hidden'));
+            
+            if (tab === tabAudit) contentAudit.classList.remove('hidden');
+            if (tab === tabSummary) contentSummary.classList.remove('hidden');
+            if (tab === tabEvents) contentEvents.classList.remove('hidden');
+        }
+
+        tabAudit.addEventListener('click', () => switchTab(tabAudit));
+        tabSummary.addEventListener('click', () => switchTab(tabSummary));
+        tabEvents.addEventListener('click', () => switchTab(tabEvents));
+
+        // Copy button
+        copyBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(auditReportContent.textContent).then(() => {
+                const originalText = copyBtn.innerHTML;
+                copyBtn.innerHTML = '<i class="fas fa-check mr-2"></i>Copied!';
+                copyBtn.classList.add('bg-green-100', 'text-green-700');
+                setTimeout(() => {
+                    copyBtn.innerHTML = originalText;
+                    copyBtn.classList.remove('bg-green-100', 'text-green-700');
+                }, 2000);
+            });
+        });
+
+        function showError(message) {
+            errorMessage.textContent = message;
+            error.classList.remove('hidden');
+        }
+    </script>
+</body>
+</html>

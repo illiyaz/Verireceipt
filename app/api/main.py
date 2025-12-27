@@ -20,6 +20,7 @@ from app.pipelines.rules import analyze_receipt
 from app.repository.receipt_store import get_receipt_store
 from app.pipelines.ensemble import get_ensemble
 from app.api.feedback import router as feedback_router
+from app.utils.audit_formatter import format_audit_for_human_review
 
 # PDF to image conversion
 try:
@@ -103,6 +104,7 @@ class AnalyzeResponse(BaseModel):
     normalized_total: Optional[float] = None
     currency: Optional[str] = None
     audit_events: Optional[List[Dict[str, Any]]] = None
+    audit_report: Optional[str] = Field(None, description="Formatted audit report for human review")
 
 
 class BatchAnalyzeResponse(BaseModel):
@@ -295,6 +297,12 @@ async def analyze_endpoint(file: UploadFile = File(..., description="Receipt fil
         # Serialize audit events to dicts
         audit_events_dicts = [e.to_dict() if hasattr(e, 'to_dict') else e for e in decision.audit_events]
         
+        # Generate formatted audit report for human review
+        try:
+            audit_report = format_audit_for_human_review(decision.to_dict())
+        except Exception as e:
+            audit_report = f"Error generating audit report: {str(e)}"
+        
         return AnalyzeResponse(
             label=decision.label,
             score=decision.score,
@@ -314,6 +322,7 @@ async def analyze_endpoint(file: UploadFile = File(..., description="Receipt fil
             normalized_total=decision.normalized_total,
             currency=decision.currency,
             audit_events=audit_events_dicts,
+            audit_report=audit_report,
         )
     except Exception as e:
         raise HTTPException(
