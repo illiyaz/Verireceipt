@@ -332,7 +332,7 @@
                     
                     // Show hybrid verdict
                     if (data.hybrid_verdict) {
-                        // Add receipt_id to verdict for later use
+                        // Add receipt_id and engine data to verdict for later use
                         const verdictWithId = {
                             ...data.hybrid_verdict,
                             receipt_id: data.receipt_id,
@@ -341,6 +341,12 @@
                             confidence: data.hybrid_verdict.confidence || 0,
                             recommended_action: data.hybrid_verdict.recommended_action || 'review',
                             reasoning: data.hybrid_verdict.reasoning || [],
+                            // Add engine results including audit report
+                            rule_based: data.rule_based || {},
+                            donut: data.donut || {},
+                            donut_receipt: data.donut_receipt || {},
+                            layoutlm: data.layoutlm || {},
+                            vision_llm: data.vision_llm || {},
                             // Store full API response for review page
                             _fullData: data
                         };
