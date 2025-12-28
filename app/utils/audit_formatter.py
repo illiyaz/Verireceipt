@@ -15,6 +15,30 @@ class AuditFormatter:
     """Format receipt analysis decisions for human auditors."""
     
     @staticmethod
+    def _get_all_events(decision: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Get all events from both audit_events (ensemble) and events (rules).
+        This ensures we don't miss rule events like GATE_MISSING_FIELDS.
+        """
+        all_events = []
+        
+        # Get ensemble audit events (reconciliation events)
+        audit_events = decision.get("audit_events", [])
+        if audit_events:
+            for e in audit_events:
+                if isinstance(e, dict):
+                    all_events.append(e)
+        
+        # Get rule-based events (includes GATE_MISSING_FIELDS, R5, R6, R8, R9, etc.)
+        rule_events = decision.get("events", [])
+        if rule_events:
+            for e in rule_events:
+                if isinstance(e, dict):
+                    all_events.append(e)
+        
+        return all_events
+    
+    @staticmethod
     def format_decision_summary(decision: Dict[str, Any]) -> str:
         """
         Create a comprehensive, human-readable summary for auditors.
@@ -187,7 +211,7 @@ Document Classification:
     def _interpret_doc_subtype(subtype: str, confidence: float) -> str:
         """Provide human interpretation of document subtype."""
         if subtype in ("MISC", "UNKNOWN"):
-            return "⚠️  Document type unclear - fallback classification used (missing-field penalties disabled)"
+            return "⚠️  Document type unclear - fallback classification used"
         elif confidence < 0.4:
             return f"Low confidence in {subtype} classification - requires corroboration"
         elif confidence < 0.7:
@@ -198,7 +222,7 @@ Document Classification:
     @staticmethod
     def _format_decision_logic(decision: Dict[str, Any]) -> str:
         """Format decision logic explanation."""
-        audit_events = decision.get("audit_events", [])
+        audit_events = AuditFormatter._get_all_events(decision)
         
         section = f"""
 ═══════════════════════════════════════════════════════════════════════════
@@ -227,7 +251,7 @@ Event Summary:
     @staticmethod
     def _format_missing_field_analysis(decision: Dict[str, Any]) -> str:
         """Format missing field analysis with gate reasoning."""
-        audit_events = decision.get("audit_events", [])
+        audit_events = AuditFormatter._get_all_events(decision)
         
         # Check if missing-field gate was triggered
         gate_event = None
@@ -289,7 +313,7 @@ Missing critical fields (merchant, date, etc.) are treated as fraud indicators.
     @staticmethod
     def _format_critical_events(decision: Dict[str, Any]) -> str:
         """Format critical and hard-fail events."""
-        audit_events = decision.get("audit_events", [])
+        audit_events = AuditFormatter._get_all_events(decision)
         
         critical_events = [
             e for e in audit_events 
@@ -363,7 +387,7 @@ AUDITOR RECOMMENDATIONS
             recommendations.append("⚠️  Marked legitimate but has elevated fraud score - spot check recommended")
         
         # Check for editing software
-        audit_events = decision.get("audit_events", [])
+        audit_events = AuditFormatter._get_all_events(decision)
         has_editing_software = any(
             e.get("code") == "R1_SUSPICIOUS_SOFTWARE" 
             for e in audit_events
