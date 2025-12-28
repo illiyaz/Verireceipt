@@ -2130,20 +2130,6 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
 
             learned_adjustment, triggered_rules = apply_learned_rules(features.__dict__)
 
-            # If missing-field penalties are gated off, do NOT apply learned "missing_elements" adjustments.
-            # Other learned patterns (spacing_anomaly, invalid_address, etc.) should still apply.
-            if not missing_fields_enabled:
-                # Check if any triggered rules are missing_elements patterns
-                has_missing_elements = False
-                for rule in (triggered_rules or []):
-                    if "missing_elements" in str(rule).lower():
-                        has_missing_elements = True
-                        break
-                
-                # Only zero out adjustment if it's from missing_elements patterns
-                if has_missing_elements:
-                    learned_adjustment = 0.0
-
             # Soft-gate learned adjustments when doc-type inference is weak.
             dp_conf = 0.0
             try:
@@ -2164,10 +2150,8 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
             if optional_subtype:
                 learned_adjustment *= 0.60
 
-            # Apply the total learned adjustment once.
-            if learned_adjustment != 0.0:
-                score += float(learned_adjustment)
-                score = max(0.0, min(1.0, score))
+            # Track if any non-suppressed learned rules exist
+            non_suppressed_found = False
 
             # Emit one audit/event per learned rule trigger (structured, no scoring weight).
             for rule in (triggered_rules or []):
@@ -2197,6 +2181,10 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
                 # Check if this pattern is suppressed by missing-field gate
                 is_missing_elements = "missing_elements" in pattern.lower()
                 suppressed = is_missing_elements and not missing_fields_enabled
+                
+                # Track if we have any non-suppressed rules
+                if not suppressed:
+                    non_suppressed_found = True
                 
                 # Keep the existing user-facing reason with suppression indicator
                 if suppressed:
@@ -2230,6 +2218,16 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
                         "gating": gating,
                     },
                 )
+
+            # Apply learned_adjustment only if at least one non-suppressed rule exists
+            # If all rules were suppressed (e.g., only missing_elements when gate is off), zero it out
+            if not non_suppressed_found:
+                learned_adjustment = 0.0
+
+            # Apply the total learned adjustment once
+            if learned_adjustment != 0.0:
+                score += float(learned_adjustment)
+                score = max(0.0, min(1.0, score))
 
         except Exception as e:
             logger.warning(f"Failed to apply learned rules: {e}")
