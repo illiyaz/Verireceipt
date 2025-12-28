@@ -1056,24 +1056,43 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             # Convert rule-based events AND ensemble reconciliation events into AuditEvent
             audit_events = []
             try:
+                # DEBUG: Log rule events
+                print(f"🔍 DEBUG: Processing {len(rule_events or [])} rule events")
+                gate_found = False
+                
                 # First, add all rule-based events (including GATE_MISSING_FIELDS)
                 for ev in (rule_events or []):
                     if isinstance(ev, dict):
+                        rule_id = str(ev.get("rule_id", ""))
+                        
+                        # DEBUG: Log each event
+                        if rule_id == "GATE_MISSING_FIELDS":
+                            gate_found = True
+                            print(f"   ✅ Found GATE_MISSING_FIELDS event: {ev}")
+                        
                         # Skip learned rule events (they go in learned_rule_audits)
-                        if str(ev.get("rule_id", "")) == "LR_LEARNED_PATTERN":
+                        if rule_id == "LR_LEARNED_PATTERN":
                             continue
-                        audit_events.append(
-                            AuditEvent(
-                                event_id=ev.get("event_id"),
-                                ts=ev.get("ts"),
-                                source=ev.get("source", "rules"),
-                                type=ev.get("type", "rule"),
-                                severity=ev.get("severity"),
-                                code=ev.get("code") or ev.get("rule_id"),
-                                message=ev.get("message", ""),
-                                evidence=ev.get("evidence", {}) or {},
-                            )
+                        
+                        audit_event = AuditEvent(
+                            event_id=ev.get("event_id"),
+                            ts=ev.get("ts"),
+                            source=ev.get("source", "rules"),
+                            type=ev.get("type", "rule"),
+                            severity=ev.get("severity"),
+                            code=ev.get("code") or ev.get("rule_id"),
+                            message=ev.get("message", ""),
+                            evidence=ev.get("evidence", {}) or {},
                         )
+                        audit_events.append(audit_event)
+                        
+                        # DEBUG: Log gate event conversion
+                        if rule_id == "GATE_MISSING_FIELDS":
+                            print(f"   ✅ Converted to AuditEvent with code: {audit_event.code}")
+                
+                if not gate_found:
+                    print(f"   ❌ GATE_MISSING_FIELDS event NOT found in rule_events!")
+                    print(f"   Rule event IDs: {[ev.get('rule_id') for ev in (rule_events or []) if isinstance(ev, dict)]}")
                 
                 # Then add ensemble reconciliation events
                 for ev in (ensemble_verdict or {}).get("reconciliation_events", []) or []:
