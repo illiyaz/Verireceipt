@@ -106,24 +106,6 @@ class LearnedRuleAudit:
         return asdict(self)
 
 @dataclass
-class LearnedRuleAudit:
-    """
-    Structured audit record for feedback-derived (learned) rules.
-
-    Persist this as JSON so we can explain *which learned pattern fired* and
-    *what adjustment was applied* in a machine-queryable way.
-    """
-    pattern: str                         # e.g., "missing_elements", "spacing_anomaly"
-    message: str                         # human-readable explanation
-    confidence_adjustment: float = 0.0   # signed delta applied by learned rules
-    times_seen: Optional[int] = None     # number of times users flagged this pattern
-    severity: str = "INFO"              # INFO/WARNING/CRITICAL (kept simple for now)
-    evidence: Dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-@dataclass
 class ReceiptDecision:
     """
     Final decision returned by VeriReceipt.
@@ -152,6 +134,23 @@ class ReceiptDecision:
     features: Optional[ReceiptFeatures] = None
     minor_notes: Optional[List[str]] = None
     debug: Optional[Dict[str, Any]] = None
+
+    # --- Vision / Layout extraction signals (optional) ----------------------
+    # These are *signals*, not the final ensemble decision.
+    # Populate these when available so audits can query model agreement.
+    vision_verdict: Optional[str] = None            # "real"|"fake"|"suspicious"|"unknown"
+    vision_confidence: Optional[float] = None       # float in [0,1]
+    vision_reasoning: Optional[str] = None          # short text (optional)
+
+    layoutlm_status: Optional[str] = None           # "good"|"bad"|"error"|"n/a"|"unknown"
+    layoutlm_confidence: Optional[str] = None       # "low"|"medium"|"high"|"unknown"
+    layoutlm_extracted: Optional[Dict[str, Any]] = None  # e.g., {"merchant":...,"total":...,"date":...}
+
+    # --- Corroboration (vision/layout vs rules) -----------------------------
+    # Allows downstream policy/audit queries like: "vision said real but layout found no amounts".
+    corroboration_score: Optional[float] = None     # float in [0,1] - higher means stronger cross-engine agreement
+    corroboration_signals: Optional[Dict[str, Any]] = None  # structured evidence used to compute corroboration_score
+    corroboration_flags: Optional[List[str]] = None         # e.g., ["VISION_REAL_LAYOUT_MISSING_TOTAL"]
 
     # --- Extraction confidence (normalized) ---------------------------------
     # Always prefer these two fields over any ad-hoc text_features["confidence"] usage.
@@ -208,6 +207,12 @@ class ReceiptDecision:
         # Learned rule audits are plain dataclasses; nothing to finalize, but keep for symmetry
         if self.learned_rule_audits is None:
             self.learned_rule_audits = []
+        if self.layoutlm_extracted is None:
+            self.layoutlm_extracted = None
+        if self.corroboration_signals is None:
+            self.corroboration_signals = None
+        if self.corroboration_flags is None:
+            self.corroboration_flags = []
 
     def add_audit_event(self, event: AuditEvent) -> None:
         """Append an AuditEvent to the decision (auto-filling ids/timestamps)."""
