@@ -254,9 +254,11 @@ Event Summary:
         audit_events = AuditFormatter._get_all_events(decision)
         
         # Check if missing-field gate was triggered
+        # Note: Events may have either 'code' (from AuditEvent) or 'rule_id' (from RuleEvent)
         gate_event = None
         for event in audit_events:
-            if event.get("code") == "GATE_MISSING_FIELDS":
+            event_code = event.get("code") or event.get("rule_id")
+            if event_code == "GATE_MISSING_FIELDS":
                 gate_event = event
                 break
         
