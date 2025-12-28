@@ -341,24 +341,24 @@
                             confidence: data.hybrid_verdict.confidence || 0,
                             recommended_action: data.hybrid_verdict.recommended_action || 'review',
                             reasoning: data.hybrid_verdict.reasoning || [],
-                            // Add engine results including audit report
+                            // Add engine results
                             rule_based: data.rule_based || {},
                             donut: data.donut || {},
                             donut_receipt: data.donut_receipt || {},
                             layoutlm: data.layoutlm || {},
                             vision_llm: data.vision_llm || {},
+                            // Add audit report from top-level response (ensemble audit report)
+                            audit_report: data.audit_report || null,
                             // Store full API response for review page
                             _fullData: data
                         };
                         console.log('=== FULL API RESPONSE ===');
-                        console.log('data.rule_based:', data.rule_based);
-                        console.log('data.rule_based.audit_report exists?', !!data.rule_based?.audit_report);
-                        if (data.rule_based?.audit_report) {
-                            console.log('Audit report length:', data.rule_based.audit_report.length);
+                        console.log('data.audit_report exists?', !!data.audit_report);
+                        if (data.audit_report) {
+                            console.log('Audit report length:', data.audit_report.length);
+                            console.log('First 100 chars:', data.audit_report.substring(0, 100));
                         }
-                        console.log('Setting verdict:', verdictWithId);
-                        console.log('Verdict has rule_based?', !!verdictWithId.rule_based);
-                        console.log('Verdict has audit_report?', !!verdictWithId.rule_based?.audit_report);
+                        console.log('verdictWithId.audit_report exists?', !!verdictWithId.audit_report);
                         setHybridVerdict(verdictWithId);
                         addLog('🎉 Analysis complete!', 'success');
                         addLog(`📊 Final verdict: ${(data.hybrid_verdict.final_label || 'unknown').toUpperCase()}`, 'success');
