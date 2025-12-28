@@ -1235,6 +1235,11 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 "learned_rule_audits": learned_rule_audits,
             }
 
+            # DEBUG: Show geo values in decision_payload before filtering
+            print(f"\n🔍 ENSEMBLE - decision_payload geo values (before filter):")
+            print(f"   geo_country_guess: {decision_payload.get('geo_country_guess')}")
+            print(f"   geo_confidence: {decision_payload.get('geo_confidence')}")
+            
             # Drop any keys not defined on the dataclass (prevents __init__ errors)
             try:
                 allowed_fields = set(getattr(ReceiptDecision, "__dataclass_fields__", {}).keys())
@@ -1243,7 +1248,23 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             except Exception:
                 pass
 
+            # DEBUG: Show geo values after filtering
+            print(f"🔍 ENSEMBLE - decision_payload geo values (after filter):")
+            print(f"   geo_country_guess: {decision_payload.get('geo_country_guess')}")
+            print(f"   geo_confidence: {decision_payload.get('geo_confidence')}")
+
             ensemble_decision = ReceiptDecision(**decision_payload)
+            
+            # DEBUG: Show geo values in final decision object
+            print(f"🔍 ENSEMBLE - ReceiptDecision object geo values:")
+            print(f"   geo_country_guess: {ensemble_decision.geo_country_guess}")
+            print(f"   geo_confidence: {ensemble_decision.geo_confidence}")
+            
+            # DEBUG: Show geo values in to_dict()
+            decision_dict = ensemble_decision.to_dict()
+            print(f"🔍 ENSEMBLE - to_dict() geo values:")
+            print(f"   geo_country_guess: {decision_dict.get('geo_country_guess')}")
+            print(f"   geo_confidence: {decision_dict.get('geo_confidence')}\n")
 
     # Save ensemble decision to CSV
             
