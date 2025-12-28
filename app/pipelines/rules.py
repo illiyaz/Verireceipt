@@ -2155,7 +2155,13 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
 
             # Emit one audit/event per learned rule trigger (structured, no scoring weight).
             for rule in (triggered_rules or []):
-                raw = str(rule)
+                raw = str(rule or "")
+                
+                # Check if this pattern is suppressed by missing-field gate (check raw string)
+                is_missing_elements = "missing_elements" in raw.lower()
+                suppressed = is_missing_elements and not missing_fields_enabled
+                
+                # Extract pattern details for evidence
                 pattern = "unknown"
                 times_seen = None
                 conf_adj = 0.0
@@ -2177,10 +2183,6 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
                         conf_adj = float(m3.group(1))
                     except Exception:
                         conf_adj = 0.0
-
-                # Check if this pattern is suppressed by missing-field gate
-                is_missing_elements = "missing_elements" in pattern.lower()
-                suppressed = is_missing_elements and not missing_fields_enabled
                 
                 # Track if we have any non-suppressed rules
                 if not suppressed:
