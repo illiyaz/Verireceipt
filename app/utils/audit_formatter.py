@@ -253,6 +253,12 @@ Event Summary:
         """Format missing field analysis with gate reasoning."""
         audit_events = AuditFormatter._get_all_events(decision)
         
+        # DEBUG: Print all events to see what we're receiving
+        print(f"\n🔍 AUDIT FORMATTER - Missing Field Analysis:")
+        print(f"   Total events received: {len(audit_events)}")
+        event_codes = [e.get("code") or e.get("rule_id") for e in audit_events if isinstance(e, dict)]
+        print(f"   Event codes/rule_ids: {event_codes}")
+        
         # Check if missing-field gate was triggered
         # Note: Events may have either 'code' (from AuditEvent) or 'rule_id' (from RuleEvent)
         gate_event = None
@@ -260,7 +266,11 @@ Event Summary:
             event_code = event.get("code") or event.get("rule_id")
             if event_code == "GATE_MISSING_FIELDS":
                 gate_event = event
+                print(f"   ✅ Found GATE_MISSING_FIELDS event!")
                 break
+        
+        if not gate_event:
+            print(f"   ❌ GATE_MISSING_FIELDS event NOT found in audit events")
         
         section = f"""
 ═══════════════════════════════════════════════════════════════════════════
