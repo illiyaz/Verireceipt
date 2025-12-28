@@ -1755,15 +1755,15 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
     # Compute missing-field gate once (early)
     missing_fields_enabled = _missing_field_penalties_enabled(tf, doc_profile=doc_profile)
     
-    # DEBUG: Log gate decision
-    logger.info(f"🔍 Missing-field gate check:")
-    logger.info(f"   geo_country_guess: {tf.get('geo_country_guess')} (conf: {tf.get('geo_confidence')})")
-    logger.info(f"   doc_subtype_guess: {tf.get('doc_subtype_guess')} (conf: {tf.get('doc_profile_confidence')})")
-    logger.info(f"   doc_profile: {doc_profile}")
-    logger.info(f"   missing_fields_enabled: {missing_fields_enabled}")
+    # DEBUG: ALWAYS print to console (not just logger)
+    print(f"\n🔍 GATE CHECK:")
+    print(f"   geo_country: {tf.get('geo_country_guess')} (conf: {tf.get('geo_confidence')})")
+    print(f"   doc_subtype: {tf.get('doc_subtype_guess')} (conf: {tf.get('doc_profile_confidence')})")
+    print(f"   missing_fields_enabled: {missing_fields_enabled}")
+    print(f"   Total events before gate: {len(events)}")
     
     if not missing_fields_enabled:
-        logger.info(f"   ✅ Gate ACTIVE - emitting GATE_MISSING_FIELDS event")
+        print(f"   ✅ GATE ACTIVE - emitting GATE_MISSING_FIELDS event")
         _emit_missing_field_gate_event(
             events=events,
             reasons=reasons,
@@ -1771,8 +1771,9 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
             doc_profile=doc_profile,
             message="Missing-field penalties disabled: geo/doc profile confidence too low (UNKNOWN geo or MISC/UNKNOWN subtype).",
         )
+        print(f"   Total events after gate emission: {len(events)}")
     else:
-        logger.info(f"   ❌ Gate INACTIVE - missing-field penalties ENABLED")
+        print(f"   ❌ GATE INACTIVE - penalties ENABLED\n")
 
     # If upstream extractors (LayoutLM / DONUT / ensemble) already provided a total,
     # do NOT flag "No Total Line" purely based on missing TOTAL keyword/line.
