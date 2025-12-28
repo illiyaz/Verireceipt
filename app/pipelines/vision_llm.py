@@ -65,7 +65,7 @@ def query_vision_model(
         image_b64 = encode_image_to_base64(image_path)
         
         # Prepare request
-        url = "http://localhost:11434/api/generate"
+        url = OLLAMA_API_URL
         payload = {
             "model": model,
             "prompt": prompt,
@@ -130,22 +130,40 @@ If any field is not visible or unclear, use null. Only return the JSON, no other
 
     response = query_vision_model(image_path, prompt, model)
     
-    # Try to parse JSON response
+    data = _extract_json_object(response)
+    if data is not None:
+        return data
+    print(f"⚠️  No JSON found in response: {response[:100]}")
+    return {}
+
+
+# --- Robust JSON Extraction Helper ---
+def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+    """
+    Best-effort extraction of a JSON object from model output.
+    Handles cases where the model wraps JSON with extra text.
+    Returns None if parsing fails.
+    """
+    if not text:
+        return None
+
+    # Fast path: try parse whole string
     try:
-        # Extract JSON from response (model might add extra text)
-        json_start = response.find("{")
-        json_end = response.rfind("}") + 1
-        if json_start >= 0 and json_end > json_start:
-            json_str = response[json_start:json_end]
-            data = json.loads(json_str)
-            return data
-        else:
-            print(f"⚠️  No JSON found in response: {response[:100]}")
-            return {}
-    except json.JSONDecodeError as e:
-        print(f"⚠️  JSON parse error: {e}")
-        print(f"   Response: {response[:200]}")
-        return {}
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        pass
+
+    # Fallback: slice first {...} block
+    json_start = text.find("{")
+    json_end = text.rfind("}") + 1
+    if json_start >= 0 and json_end > json_start:
+        try:
+            obj = json.loads(text[json_start:json_end])
+            return obj if isinstance(obj, dict) else None
+        except Exception:
+            return None
+    return None
 
 def detect_fraud_indicators_with_vision(image_path: str, model: str = DEFAULT_VISION_MODEL) -> Dict[str, Any]:
     """
@@ -200,58 +218,51 @@ Only return the JSON, no other text."""
     response = query_vision_model(image_path, prompt, model, temperature=0.2)
 
     # Parse JSON
-    try:
-        json_start = response.find("{")
-        json_end = response.rfind("}") + 1
-        if json_start >= 0 and json_end > json_start:
-            json_str = response[json_start:json_end]
-            data = json.loads(json_str)
+    data = _extract_json_object(response)
+    if data is None:
+        return {"is_suspicious": False, "confidence": 0.0, "claims": [], "overall_assessment": "no JSON found"}
 
-            # Normalize/defensive defaults (models sometimes omit fields)
-            if not isinstance(data, dict):
-                return {
-                    "is_suspicious": False,
-                    "confidence": 0.0,
-                    "claims": [],
-                    "overall_assessment": "unparseable model output",
-                }
+    # Normalize/defensive defaults (models sometimes omit fields)
+    if not isinstance(data, dict):
+        return {
+            "is_suspicious": False,
+            "confidence": 0.0,
+            "claims": [],
+            "overall_assessment": "unparseable model output",
+        }
 
-            data.setdefault("is_suspicious", False)
-            data.setdefault("confidence", 0.0)
-            data.setdefault("claims", [])
-            data.setdefault("overall_assessment", "")
+    data.setdefault("is_suspicious", False)
+    data.setdefault("confidence", 0.0)
+    data.setdefault("claims", [])
+    data.setdefault("overall_assessment", "")
 
-            # Ensure claims is a list of dicts
-            if not isinstance(data.get("claims"), list):
-                data["claims"] = []
-            else:
-                normalized_claims = []
-                for c in data["claims"]:
-                    if not isinstance(c, dict):
-                        continue
-                    c.setdefault("claim_id", "VCLM_UNK")
-                    c.setdefault("category", "unknown")
-                    c.setdefault("observable_claim", "")
-                    c.setdefault("severity", "INFO")
-                    c.setdefault("confidence", 0.0)
-                    c.setdefault("where", {"region": "unknown", "notes": ""})
-                    c.setdefault(
-                        "evidence",
-                        {
-                            "visual_cue": "",
-                            "comparison": "",
-                            "alt_explanations": [],
-                            "why_alt_less_likely": "",
-                        },
-                    )
-                    normalized_claims.append(c)
-                data["claims"] = normalized_claims
+    # Ensure claims is a list of dicts
+    if not isinstance(data.get("claims"), list):
+        data["claims"] = []
+    else:
+        normalized_claims = []
+        for c in data["claims"]:
+            if not isinstance(c, dict):
+                continue
+            c.setdefault("claim_id", "VCLM_UNK")
+            c.setdefault("category", "unknown")
+            c.setdefault("observable_claim", "")
+            c.setdefault("severity", "INFO")
+            c.setdefault("confidence", 0.0)
+            c.setdefault("where", {"region": "unknown", "notes": ""})
+            c.setdefault(
+                "evidence",
+                {
+                    "visual_cue": "",
+                    "comparison": "",
+                    "alt_explanations": [],
+                    "why_alt_less_likely": "",
+                },
+            )
+            normalized_claims.append(c)
+        data["claims"] = normalized_claims
 
-            return data
-        else:
-            return {"is_suspicious": False, "confidence": 0.0, "claims": [], "overall_assessment": "no JSON found"}
-    except json.JSONDecodeError:
-        return {"is_suspicious": False, "confidence": 0.0, "claims": [], "overall_assessment": "JSON parse error"}
+    return data
         
 def detect_fraud_indicators_with_vision_old(image_path: str, model: str = DEFAULT_VISION_MODEL) -> Dict[str, Any]:
     """
@@ -336,21 +347,28 @@ Only return the JSON, no other text."""
 
     response = query_vision_model(image_path, prompt, model, temperature=0.1)
     
-    # Parse JSON
-    try:
-        json_start = response.find("{")
-        json_end = response.rfind("}") + 1
-        if json_start >= 0 and json_end > json_start:
-            json_str = response[json_start:json_end]
-            data = json.loads(json_str)
-            return data
-        else:
-            print(f"⚠️ Vision LLM response has no JSON: {response[:200]}")
-            return {"verdict": "unknown", "confidence": 0.0, "reasoning": f"Failed to parse response (no JSON found)"}
-    except json.JSONDecodeError as e:
-        print(f"⚠️ Vision LLM JSON parse error: {e}")
-        print(f"   Response: {response[:200]}")
-        return {"verdict": "unknown", "confidence": 0.0, "reasoning": f"Failed to parse response: {str(e)}"}
+    data = _extract_json_object(response)
+    if data is not None:
+        return data
+
+    print(f"⚠️ Vision LLM response has no JSON: {response[:200]}")
+    return {"verdict": "unknown", "confidence": 0.0, "reasoning": "Failed to parse response (no JSON found)"}
+
+
+# --- Convenience wrapper for pipeline: run_vision() style verdict/confidence/reasoning ---
+def run_vision_authenticity(image_path: str, model: str = DEFAULT_VISION_MODEL) -> Dict[str, Any]:
+    """
+    Lightweight wrapper used by the pipeline: returns verdict/confidence/reasoning.
+    Keeps the contract stable for ensemble/main.py.
+    """
+    auth = assess_receipt_authenticity(image_path, model=model) or {}
+    return {
+        "verdict": auth.get("verdict", "unknown"),
+        "confidence": float(auth.get("confidence", 0.0) or 0.0),
+        "reasoning": auth.get("reasoning", "") or "",
+        "red_flags": auth.get("red_flags", []) or [],
+        "raw": auth,
+    }
 
 
 def analyze_receipt_with_vision(

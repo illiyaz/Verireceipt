@@ -350,6 +350,12 @@
                             // Store full API response for review page
                             _fullData: data
                         };
+                        console.log('=== FULL API RESPONSE ===');
+                        console.log('data.rule_based:', data.rule_based);
+                        console.log('data.rule_based.audit_report exists?', !!data.rule_based?.audit_report);
+                        if (data.rule_based?.audit_report) {
+                            console.log('Audit report length:', data.rule_based.audit_report.length);
+                        }
                         console.log('Setting verdict:', verdictWithId);
                         console.log('Verdict has rule_based?', !!verdictWithId.rule_based);
                         console.log('Verdict has audit_report?', !!verdictWithId.rule_based?.audit_report);

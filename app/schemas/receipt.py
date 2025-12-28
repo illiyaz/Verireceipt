@@ -85,6 +85,26 @@ class AuditEvent:
         self.finalize_defaults()
         return asdict(self)
 
+
+# --- LearnedRuleAudit: audit trail for feedback-derived (learned) rules ---
+@dataclass
+class LearnedRuleAudit:
+    """
+    Structured audit record for feedback-derived (learned) rules.
+
+    Persist this as JSON so we can explain *which learned pattern fired* and
+    *what adjustment was applied* in a machine-queryable way.
+    """
+    pattern: str                         # e.g., "missing_elements", "spacing_anomaly"
+    message: str                         # human-readable explanation
+    confidence_adjustment: float = 0.0   # signed delta applied by learned rules
+    times_seen: Optional[int] = None     # number of times users flagged this pattern
+    severity: str = "INFO"              # INFO/WARNING/CRITICAL (kept simple for now)
+    evidence: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
 @dataclass
 class LearnedRuleAudit:
     """
@@ -152,6 +172,11 @@ class ReceiptDecision:
     doc_subtype: Optional[str] = None                # e.g., "POS_RESTAURANT", "TAX_INVOICE", "MISC"
     doc_profile_confidence: Optional[float] = None   # float in [0,1]
 
+    # --- Missing-field gating (geo/doc-profile aware) ----------------------
+    # When False, we intentionally avoid treating missing totals/dates/merchant/etc as fraud.
+    missing_fields_enabled: Optional[bool] = None
+    missing_field_gate: Optional[Dict[str, Any]] = None  # structured evidence explaining the gate decision
+
     # --- Monetary extraction / normalization (optional) ---------------------
     parsed_totals: Optional[List[Dict[str, Any]]] = None  # e.g., [{"label":"total","raw":"$88.89","value":88.89,"confidence":0.95}]
     normalized_total: Optional[float] = None              # single best total chosen after normalization
@@ -189,7 +214,7 @@ class ReceiptDecision:
         if hasattr(event, "finalize_defaults"):
             event.finalize_defaults()
         self.audit_events.append(event)
-        
+
     def add_learned_rule_audit(self, audit: LearnedRuleAudit) -> None:
         """Append a LearnedRuleAudit to the decision."""
         self.learned_rule_audits.append(audit)
@@ -198,6 +223,10 @@ class ReceiptDecision:
         """Return a JSON-serializable dict for persistence."""
         self.finalize_defaults()
         d = asdict(self)
+
+        # Defensive: ensure gate evidence is JSON-friendly
+        if d.get("missing_field_gate") is None:
+            d["missing_field_gate"] = None
 
         # Ensure nested dataclasses remain JSON-friendly
         d["audit_events"] = [

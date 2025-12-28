@@ -292,13 +292,15 @@ async def analyze_endpoint(file: UploadFile = File(..., description="Receipt fil
         decision = analyze_receipt(str(tmp_path))
         processing_time_ms = (time.time() - start_time) * 1000
 
+        # Finalize decision to populate IDs and timestamps
+        decision.finalize_defaults()
+
         # 3. Persist via repository (CSV or DB)
         analysis_ref = store.save_analysis(str(tmp_path), decision)
         # For DB backend, we may have a numeric analysis_id; for CSV, maybe filename.
         # For now, we don't expose receipt_id separately unless DB backend needs it.
 
-        # Finalize decision to populate IDs and timestamps
-        decision.finalize_defaults()
+        
         
         # Serialize audit events to dicts
         audit_events_dicts = [e.to_dict() if hasattr(e, 'to_dict') else e for e in decision.audit_events]
@@ -405,6 +407,7 @@ async def batch_analyze_endpoint(files: List[UploadFile] = File(..., description
         
         try:
             decision = analyze_receipt(str(tmp_path))
+            decision.finalize_defaults()  # Finalize decision
             processing_time_ms = (time.time() - file_start) * 1000
             analysis_ref = store.save_analysis(str(tmp_path), decision)
             
@@ -570,21 +573,35 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         start = time_module.time()
         try:
             decision = analyze_receipt(str(temp_path))
+            decision.finalize_defaults()
             elapsed = time_module.time() - start
-            
+
+            # Keep the full decision payload for ensemble/audit (events, doc_profile, etc.)
+            try:
+                decision_dict = decision.to_dict() if hasattr(decision, "to_dict") else {}
+            except Exception:
+                decision_dict = {}
+
             # Generate audit report
             try:
                 audit_report = format_audit_for_human_review(decision.to_dict())
             except Exception as e:
                 audit_report = f"Error generating audit report: {str(e)}"
-            
+
             return {
                 "label": decision.label,
                 "score": decision.score,
                 "reasons": decision.reasons,
                 "minor_notes": decision.minor_notes,
                 "audit_report": audit_report,
-                "time_seconds": round(elapsed, 2)
+                "time_seconds": round(elapsed, 2),
+                "events": decision_dict.get("events") or decision_dict.get("rule_events") or [],
+                "doc_profile": (
+                    decision_dict.get("doc_profile")
+                    or (decision_dict.get("debug") or {}).get("doc_profile")
+                    or {}
+                ),
+                "debug": decision_dict.get("debug") or {},
             }
         except Exception as e:
             return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
@@ -752,7 +769,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 extracted_total = f"{float(extracted_total):.2f}"
             else:
                 extracted_total = str(extracted_total)
-        
+
         try:
             enhanced_decision = analyze_receipt(
                 str(temp_path),
@@ -760,13 +777,25 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 extracted_merchant=extracted_merchant,
                 extracted_date=extracted_date
             )
+            # Preserve full decision payload for ensemble/audit
+            try:
+                enhanced_dict = enhanced_decision.to_dict() if hasattr(enhanced_decision, "to_dict") else {}
+            except Exception:
+                enhanced_dict = {}
             results["rule_based"] = {
                 "label": enhanced_decision.label,
                 "score": enhanced_decision.score,
                 "reasons": enhanced_decision.reasons,
                 "minor_notes": enhanced_decision.minor_notes,
                 "time_seconds": 0,
-                "enhanced": True
+                "enhanced": True,
+                "events": enhanced_dict.get("events") or enhanced_dict.get("rule_events") or [],
+                "doc_profile": (
+                    enhanced_dict.get("doc_profile")
+                    or (enhanced_dict.get("debug") or {}).get("doc_profile")
+                    or {}
+                ),
+                "debug": enhanced_dict.get("debug") or {},
             }
             print(f"   ✅ Rule-Based (enhanced): {enhanced_decision.label} ({enhanced_decision.score*100:.0f}%)")
         except Exception as e:
@@ -1045,7 +1074,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             vision_confidence = float(raw_vision_confidence) if raw_vision_confidence is not None else None
             if vision_confidence is not None and vision_confidence > 1.0:
                 vision_confidence = vision_confidence / 100.0
-            vision_reasoning = vision_llm.get("reasoning")
+            vision_reasoning = (vision_llm or {}).get("reasoning") or ""
             
             layoutlm_status = layoutlm.get("data_quality") or layoutlm.get("status") or "unknown"
             layoutlm_confidence = layoutlm.get("confidence") or "unknown"
@@ -1103,53 +1132,65 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 "layoutlm_has_total": bool(layoutlm_extracted and layoutlm_extracted.get("total")),
             }
             
-            ensemble_decision = ReceiptDecision(
-                label=ensemble_verdict["final_label"],
-                score=ensemble_verdict["confidence"],
-                reasons=ensemble_verdict.get("reasoning", []),
-                minor_notes=rb.get("minor_notes", []) if isinstance(rb, dict) else [],
-                rule_version="0.0.1",
-                policy_version="0.0.1",
-                engine_version="ensemble-v0.0.1",
-                policy_name="ensemble",
-                filename=str(temp_path.name),
-                
+            # Build ReceiptDecision payload (filter unknown fields defensively)
+            decision_payload = {
+                "label": ensemble_verdict["final_label"],
+                "score": ensemble_verdict["confidence"],
+                "reasons": ensemble_verdict.get("reasoning", []),
+                "minor_notes": rb.get("minor_notes", []) if isinstance(rb, dict) else [],
+                "rule_version": "0.0.1",
+                "policy_version": "0.0.1",
+                "engine_version": "ensemble-v0.0.1",
+                "policy_name": "ensemble",
+
                 # Vision/Layout signals
-                vision_verdict=vision_verdict,
-                vision_confidence=vision_confidence,
-                vision_reasoning=vision_reasoning,
-                layoutlm_status=layoutlm_status,
-                layoutlm_confidence=layoutlm_confidence,
-                layoutlm_extracted=layoutlm_extracted,
-                
+                "vision_verdict": vision_verdict,
+                "vision_confidence": vision_confidence,
+                "vision_reasoning": vision_reasoning,
+                "layoutlm_status": layoutlm_status,
+                "layoutlm_confidence": layoutlm_confidence,
+                "layoutlm_extracted": layoutlm_extracted,
+
                 # Corroboration
-                corroboration_score=corroboration_score,
-                corroboration_signals=corroboration_signals,
-                corroboration_flags=corroboration_flags,
-                
+                "corroboration_score": corroboration_score,
+                "corroboration_signals": corroboration_signals,
+                "corroboration_flags": corroboration_flags,
+
                 # Extraction confidence
-                extraction_confidence_score=(converged_data or {}).get("confidence_score"),
-                extraction_confidence_level=(converged_data or {}).get("confidence_level"),
-                
+                "extraction_confidence_score": (converged_data or {}).get("confidence_score"),
+                "extraction_confidence_level": (converged_data or {}).get("confidence_level"),
+
                 # Geo/Lang tags
-                lang_guess=(doc_profile or {}).get("lang_guess"),
-                lang_confidence=(doc_profile or {}).get("lang_confidence"),
-                geo_country_guess=(doc_profile or {}).get("geo_country_guess"),
-                geo_confidence=(doc_profile or {}).get("geo_confidence"),
-                
+                "lang_guess": (doc_profile or {}).get("lang_guess"),
+                "lang_confidence": (doc_profile or {}).get("lang_confidence"),
+                "geo_country_guess": (doc_profile or {}).get("geo_country_guess"),
+                "geo_confidence": (doc_profile or {}).get("geo_confidence"),
+
                 # Doc profile tags
-                doc_family=(doc_profile or {}).get("family") or (doc_profile or {}).get("doc_family"),
-                doc_subtype=(doc_profile or {}).get("subtype") or (doc_profile or {}).get("doc_subtype"),
-                doc_profile_confidence=(doc_profile or {}).get("confidence") or (doc_profile or {}).get("doc_profile_confidence"),
-                
+                "doc_family": (doc_profile or {}).get("family") or (doc_profile or {}).get("doc_family"),
+                "doc_subtype": (doc_profile or {}).get("subtype") or (doc_profile or {}).get("doc_subtype"),
+                "doc_profile_confidence": (doc_profile or {}).get("confidence") or (doc_profile or {}).get("doc_profile_confidence"),
+
                 # Missing-field gate
-                missing_fields_enabled=(doc_profile or {}).get("missing_fields_enabled"),
-                missing_field_gate=(doc_profile or {}).get("missing_field_gate"),
-                
+                "missing_fields_enabled": (doc_profile or {}).get("missing_fields_enabled"),
+                "missing_field_gate": (doc_profile or {}).get("missing_field_gate"),
+
                 # Audit events and learned rules
-                audit_events=audit_events,
-                learned_rule_audits=learned_rule_audits,
-            )
+                "audit_events": audit_events,
+                "learned_rule_audits": learned_rule_audits,
+            }
+
+            # Drop any keys not defined on the dataclass (prevents __init__ errors)
+            try:
+                allowed_fields = set(getattr(ReceiptDecision, "__dataclass_fields__", {}).keys())
+                if allowed_fields:
+                    decision_payload = {k: v for k, v in decision_payload.items() if k in allowed_fields}
+            except Exception:
+                pass
+
+            ensemble_decision = ReceiptDecision(**decision_payload)
+
+    # Save ensemble decision to CSV
             
             ensemble_decision.finalize_defaults()
             store.save_analysis(str(temp_path), ensemble_decision)
@@ -1218,6 +1259,7 @@ async def analyze_hybrid_stream(file: UploadFile = File(...)):
         start = time_module.time()
         try:
             decision = analyze_receipt(str(temp_path))
+            decision.finalize_defaults()
             elapsed = time_module.time() - start
             result = {
                 "label": decision.label,

@@ -1096,7 +1096,7 @@ def detect_geo_and_profile(text: str, lines: List[str]) -> Dict[str, Any]:
         text,
         lang_hint=lang_result.get("lang_guess"),
         lang_confidence=lang_result.get("lang_confidence"),
-        # lang_score=lang_result.get("lang_score"),  # only if you add it later
+        lang_score=lang_result.get("lang_score"), 
     )
     
     # Step 3: Detect document subtype (geo-aware)
