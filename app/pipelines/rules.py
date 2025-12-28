@@ -5,6 +5,7 @@
 import logging
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional
+import re
 
 from app.pipelines.features import build_features
 from app.pipelines.ingest import ingest_and_ocr
@@ -2157,10 +2158,6 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
             for rule in (triggered_rules or []):
                 raw = str(rule or "")
                 
-                # Check if this pattern is suppressed by missing-field gate (check raw string)
-                is_missing_elements = "missing_elements" in raw.lower()
-                suppressed = is_missing_elements and not missing_fields_enabled
-                
                 # Extract pattern details for evidence
                 pattern = "unknown"
                 times_seen = None
@@ -2169,6 +2166,10 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
                 m = re.search(r"pattern detected:\s*([a-zA-Z0-9_\-]+)", raw, flags=re.IGNORECASE)
                 if m:
                     pattern = m.group(1).strip()
+                
+                # Check if this pattern is suppressed by missing-field gate (check both raw string and extracted pattern)
+                is_missing_elements = ("missing_elements" in raw.lower()) or (pattern.lower() == "missing_elements")
+                suppressed = is_missing_elements and not missing_fields_enabled
 
                 m2 = re.search(r"identified by users\s+(\d+)\s+time", raw, flags=re.IGNORECASE)
                 if m2:
