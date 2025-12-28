@@ -1031,6 +1031,13 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             rule_events = rb.get("events") or rb.get("rule_events") or []
             doc_profile = rb.get("doc_profile") or (rb.get("debug") or {}).get("doc_profile") or {}
             
+            # DEBUG: Show what geo data we're getting from doc_profile
+            print(f"\n🔍 ENSEMBLE - doc_profile geo data:")
+            print(f"   geo_country_guess: {doc_profile.get('geo_country_guess')}")
+            print(f"   geo_confidence: {doc_profile.get('geo_confidence')}")
+            print(f"   doc_subtype: {doc_profile.get('subtype')}")
+            print(f"   doc_profile_confidence: {doc_profile.get('confidence')}")
+            
             # Convert learned-rule events into LearnedRuleAudit
             learned_rule_audits = []
             try:
