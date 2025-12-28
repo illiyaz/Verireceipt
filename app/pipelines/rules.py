@@ -2130,9 +2130,19 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
 
             learned_adjustment, triggered_rules = apply_learned_rules(features.__dict__)
 
-            # If missing-field penalties are gated off, do NOT apply learned "missing elements" adjustments.
+            # If missing-field penalties are gated off, do NOT apply learned "missing_elements" adjustments.
+            # Other learned patterns (spacing_anomaly, invalid_address, etc.) should still apply.
             if not missing_fields_enabled:
-                learned_adjustment = 0.0
+                # Check if any triggered rules are missing_elements patterns
+                has_missing_elements = False
+                for rule in (triggered_rules or []):
+                    if "missing_elements" in str(rule).lower():
+                        has_missing_elements = True
+                        break
+                
+                # Only zero out adjustment if it's from missing_elements patterns
+                if has_missing_elements:
+                    learned_adjustment = 0.0
 
             # Soft-gate learned adjustments when doc-type inference is weak.
             dp_conf = 0.0
@@ -2161,9 +2171,6 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
 
             # Emit one audit/event per learned rule trigger (structured, no scoring weight).
             for rule in (triggered_rules or []):
-                # Keep the existing user-facing reason
-                reasons.append(f"[INFO] 🎓 Learned Rule: {rule}")
-
                 raw = str(rule)
                 pattern = "unknown"
                 times_seen = None
@@ -2187,11 +2194,23 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
                     except Exception:
                         conf_adj = 0.0
 
+                # Check if this pattern is suppressed by missing-field gate
+                is_missing_elements = "missing_elements" in pattern.lower()
+                suppressed = is_missing_elements and not missing_fields_enabled
+                
+                # Keep the existing user-facing reason with suppression indicator
+                if suppressed:
+                    reasons.append(f"[INFO] 🎓 Learned Rule (suppressed): {rule}")
+                else:
+                    reasons.append(f"[INFO] 🎓 Learned Rule: {rule}")
+
                 gating = {
                     "doc_family": doc_profile.get("family") if isinstance(doc_profile, dict) else None,
                     "doc_subtype": doc_profile.get("subtype") if isinstance(doc_profile, dict) else None,
                     "doc_profile_confidence": dp_conf,
                     "optional_subtype": optional_subtype,
+                    "missing_fields_enabled": missing_fields_enabled,
+                    "suppressed": suppressed,
                 }
 
                 # Use the standard emitter so downstream logic (e.severity checks) stays consistent.
@@ -2201,7 +2220,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
                     rule_id="LR_LEARNED_PATTERN",
                     severity="INFO",
                     weight=0.0,
-                    message="Learned rule triggered",
+                    message=f"Learned rule triggered{' (suppressed by missing-field gate)' if suppressed else ''}",
                     evidence={
                         "pattern": pattern,
                         "times_seen": times_seen,
