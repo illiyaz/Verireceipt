@@ -475,6 +475,7 @@ class HybridAnalyzeResponse(BaseModel):
     hybrid_verdict: dict = Field(..., description="Combined verdict from all engines")
     timing: dict = Field(..., description="Timing information for each engine")
     engines_used: List[str] = Field(..., description="List of engines that were used")
+    audit_report: Optional[str] = Field(None, description="Formatted audit report for human review")
 
 
 def _convert_pdf_to_image(pdf_path: Path) -> Optional[Path]:
@@ -1195,6 +1196,16 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             ensemble_decision.finalize_defaults()
             store.save_analysis(str(temp_path), ensemble_decision)
             print(f"   💾 Ensemble verdict saved to CSV with {len(audit_events)} audit events")
+            
+            # Generate audit report from ensemble decision
+            try:
+                audit_report = format_audit_for_human_review(ensemble_decision.to_dict())
+                results["audit_report"] = audit_report
+                print(f"   📋 Audit report generated successfully")
+            except Exception as audit_err:
+                results["audit_report"] = f"Error generating audit report: {str(audit_err)}"
+                print(f"   ⚠️ Failed to generate audit report: {audit_err}")
+                
         except Exception as save_err:
             print(f"   ⚠️ Failed to save ensemble verdict: {save_err}")
         
