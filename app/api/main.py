@@ -1053,9 +1053,29 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             except Exception:
                 learned_rule_audits = []
             
-            # Convert ensemble reconciliation events into AuditEvent
+            # Convert rule-based events AND ensemble reconciliation events into AuditEvent
             audit_events = []
             try:
+                # First, add all rule-based events (including GATE_MISSING_FIELDS)
+                for ev in (rule_events or []):
+                    if isinstance(ev, dict):
+                        # Skip learned rule events (they go in learned_rule_audits)
+                        if str(ev.get("rule_id", "")) == "LR_LEARNED_PATTERN":
+                            continue
+                        audit_events.append(
+                            AuditEvent(
+                                event_id=ev.get("event_id"),
+                                ts=ev.get("ts"),
+                                source=ev.get("source", "rules"),
+                                type=ev.get("type", "rule"),
+                                severity=ev.get("severity"),
+                                code=ev.get("code") or ev.get("rule_id"),
+                                message=ev.get("message", ""),
+                                evidence=ev.get("evidence", {}) or {},
+                            )
+                        )
+                
+                # Then add ensemble reconciliation events
                 for ev in (ensemble_verdict or {}).get("reconciliation_events", []) or []:
                     if isinstance(ev, dict):
                         audit_events.append(
