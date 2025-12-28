@@ -684,10 +684,10 @@
                                                                 <i className="fas fa-clipboard-list mr-3 text-purple-600"></i>
                                                                 Comprehensive Audit Report
                                                             </h2>
-                                                            {hybridVerdict.rule_based?.audit_report && (
+                                                            {hybridVerdict.audit_report && (
                                                                 <button
                                                                     onClick={() => {
-                                                                        navigator.clipboard.writeText(hybridVerdict.rule_based.audit_report);
+                                                                        navigator.clipboard.writeText(hybridVerdict.audit_report);
                                                                         alert('Audit report copied to clipboard!');
                                                                     }}
                                                                     className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm transition-all"
@@ -697,9 +697,9 @@
                                                                 </button>
                                                             )}
                                                         </div>
-                                                        {hybridVerdict.rule_based?.audit_report ? (
+                                                        {hybridVerdict.audit_report ? (
                                                             <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed overflow-y-auto bg-gray-900 p-6 rounded-lg" style={{maxHeight: '600px'}}>
-{hybridVerdict.rule_based.audit_report}
+{hybridVerdict.audit_report}
                                                             </pre>
                                                         ) : (
                                                             <div className="text-center py-12 text-gray-500">
