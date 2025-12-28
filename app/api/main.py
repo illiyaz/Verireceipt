@@ -783,11 +783,19 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 enhanced_dict = enhanced_decision.to_dict() if hasattr(enhanced_decision, "to_dict") else {}
             except Exception:
                 enhanced_dict = {}
+            
+            # Generate audit report for enhanced decision
+            try:
+                audit_report = format_audit_for_human_review(enhanced_decision.to_dict())
+            except Exception as e:
+                audit_report = f"Error generating audit report: {str(e)}"
+            
             results["rule_based"] = {
                 "label": enhanced_decision.label,
                 "score": enhanced_decision.score,
                 "reasons": enhanced_decision.reasons,
                 "minor_notes": enhanced_decision.minor_notes,
+                "audit_report": audit_report,
                 "time_seconds": 0,
                 "enhanced": True,
                 "events": enhanced_dict.get("events") or enhanced_dict.get("rule_events") or [],
