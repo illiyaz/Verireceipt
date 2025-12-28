@@ -1294,6 +1294,18 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     # Don't cleanup - keep file for feedback submission
     # File will be cleaned up later or by a background job
     
+    # DEBUG: Verify audit_report is in results
+    print(f"\n🔍 FINAL RESPONSE - Checking audit_report:")
+    print(f"   'audit_report' in results: {'audit_report' in results}")
+    if 'audit_report' in results:
+        audit_len = len(results['audit_report']) if results['audit_report'] else 0
+        print(f"   audit_report length: {audit_len} chars")
+        if audit_len > 0:
+            print(f"   First 100 chars: {results['audit_report'][:100]}")
+    else:
+        print(f"   ❌ audit_report NOT in results dict!")
+        print(f"   Available keys: {list(results.keys())}")
+    
     return HybridAnalyzeResponse(**results)
 
 
