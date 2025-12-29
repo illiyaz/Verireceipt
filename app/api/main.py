@@ -1306,7 +1306,22 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         print(f"   ❌ audit_report NOT in results dict!")
         print(f"   Available keys: {list(results.keys())}")
     
-    return HybridAnalyzeResponse(**results)
+    response = HybridAnalyzeResponse(**results)
+    
+    # DEBUG: Verify audit_report is in the Pydantic model
+    print(f"\n🔍 PYDANTIC MODEL - Checking audit_report:")
+    print(f"   response.audit_report exists: {response.audit_report is not None}")
+    if response.audit_report:
+        print(f"   response.audit_report length: {len(response.audit_report)} chars")
+    
+    # DEBUG: Check JSON serialization
+    response_dict = response.model_dump()
+    print(f"\n🔍 JSON SERIALIZATION - Checking audit_report:")
+    print(f"   'audit_report' in response_dict: {'audit_report' in response_dict}")
+    if 'audit_report' in response_dict and response_dict['audit_report']:
+        print(f"   audit_report in JSON: {len(response_dict['audit_report'])} chars")
+    
+    return response
 
 
 # ---------- Streaming Analysis Endpoint ----------
