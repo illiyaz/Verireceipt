@@ -320,7 +320,8 @@ class EnsembleIntelligence:
         self,
         code: str,
         message: str,
-        evidence: Optional[Dict[str, Any]] = None
+        evidence: Optional[Dict[str, Any]] = None,
+        severity: str = "INFO"
     ) -> Dict[str, Any]:
         """Structured reconciliation/audit event that callers can persist."""
         return {
@@ -329,6 +330,7 @@ class EnsembleIntelligence:
             "code": code,
             "message": message,
             "evidence": evidence or {},
+            "severity": severity,
         }
     
     def _confidence_level(self, score: Any) -> str:
