@@ -1647,6 +1647,132 @@ def _is_hard_fail_reason(reason: str) -> bool:
 def _is_critical_reason(reason: str) -> bool:
     return (reason or "").lstrip().startswith("[CRITICAL]")
 
+
+# ---------------------------------------------------------------------------
+# Learned Rules Mini-Engine
+# ---------------------------------------------------------------------------
+
+def _learned_rule_dedupe_key(raw: str) -> str:
+    """Stable dedupe key for learned rule triggers."""
+    s = (raw or "").strip().lower()
+    s = re.sub(r"\s+", " ", s)  # collapse whitespace
+    return s
+
+
+def _parse_learned_rule(raw: str) -> Dict[str, Any]:
+    """Parse a learned rule string into structured fields."""
+    out: Dict[str, Any] = {
+        "raw": raw or "",
+        "pattern": "unknown",
+        "times_seen": None,
+        "confidence_adjustment": 0.0,
+    }
+
+    m = re.search(r"pattern detected:\s*([a-zA-Z0-9_\-]+)", raw or "", flags=re.IGNORECASE)
+    if m:
+        out["pattern"] = (m.group(1) or "unknown").strip()
+
+    m2 = re.search(r"identified by users\s+(\d+)\s+time", raw or "", flags=re.IGNORECASE)
+    if m2:
+        try:
+            out["times_seen"] = int(m2.group(1))
+        except Exception:
+            out["times_seen"] = None
+
+    m3 = re.search(r"Confidence adjustment:\s*([+\-]?[0-9]*\.?[0-9]+)", raw or "", flags=re.IGNORECASE)
+    if m3:
+        try:
+            out["confidence_adjustment"] = float(m3.group(1))
+        except Exception:
+            out["confidence_adjustment"] = 0.0
+
+    return out
+
+
+def _apply_learned_rules(
+    *,
+    triggered_rules: List[Any],
+    events: List["RuleEvent"],
+    reasons: List[str],
+    tf: Dict[str, Any],
+    doc_profile: Dict[str, Any],
+    missing_fields_enabled: bool,
+    dp_conf: float,
+    optional_subtype: bool,
+) -> float:
+    """
+    Apply learned-rule adjustments safely.
+
+    Guarantees:
+    - Dedupe duplicate triggers.
+    - Suppress `missing_elements` when missing-field gate is OFF.
+    - Only non-suppressed adjustments affect score.
+    - Soft-gating factors are applied exactly once.
+    """
+    non_suppressed_adjustment = 0.0
+
+    seen = set()
+    for rule in (triggered_rules or []):
+        raw = str(rule or "")
+        key = _learned_rule_dedupe_key(raw)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+
+        parsed = _parse_learned_rule(raw)
+        pattern = parsed.get("pattern") or "unknown"
+        conf_adj = float(parsed.get("confidence_adjustment") or 0.0)
+
+        is_missing_elements = ("missing_elements" in raw.lower()) or (str(pattern).lower() == "missing_elements")
+        suppressed = bool(is_missing_elements and (not missing_fields_enabled))
+
+        if not suppressed:
+            non_suppressed_adjustment += conf_adj
+
+        # User-facing reasons: mark suppressed explicitly
+        if suppressed:
+            reasons.append(f"ℹ️ [INFO] Learned Rule (suppressed): {raw}")
+        else:
+            reasons.append(f"[INFO] 🎓 Learned Rule: {raw}")
+
+        gating = {
+            "doc_family": doc_profile.get("family") if isinstance(doc_profile, dict) else None,
+            "doc_subtype": doc_profile.get("subtype") if isinstance(doc_profile, dict) else None,
+            "doc_profile_confidence": dp_conf,
+            "optional_subtype": optional_subtype,
+            "missing_fields_enabled": missing_fields_enabled,
+            "suppressed": suppressed,
+        }
+
+        # Use standard emitter
+        _emit_event(
+            events=events,
+            reasons=None,
+            rule_id="LR_LEARNED_PATTERN",
+            severity="INFO",
+            weight=0.0,
+            message=f"Learned rule triggered{' (suppressed by missing-field gate)' if suppressed else ''}",
+            evidence={
+                "pattern": pattern,
+                "times_seen": parsed.get("times_seen"),
+                "raw": raw,
+                "confidence_adjustment": conf_adj,
+                "suppressed": suppressed,
+                "applied_to_score": (not suppressed),
+                "gating": gating,
+            },
+            confidence_factor=1.0,
+        )
+
+    # Apply soft-gating exactly once
+    if dp_conf < 0.55:
+        non_suppressed_adjustment *= 0.65
+    if optional_subtype:
+        non_suppressed_adjustment *= 0.60
+
+    return float(non_suppressed_adjustment)
+
+
 def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) -> ReceiptDecision:
     score = 0.0
     reasons: List[str] = []
@@ -2143,128 +2269,35 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
 
             learned_adjustment, triggered_rules = apply_learned_rules(features.__dict__)
 
-            # DEDUPE: Pattern-level deduplication to avoid duplicate missing_elements
-            # Extract pattern from each rule and keep only first occurrence of each pattern
-            seen_patterns = set()
-            deduped_rules = []
-            for rule in (triggered_rules or []):
-                raw = str(rule or "")
-                # Extract pattern name
-                m = re.search(r"pattern detected:\s*([a-zA-Z0-9_\-]+)", raw, flags=re.IGNORECASE)
-                pattern = m.group(1).strip() if m else raw[:50]  # fallback to first 50 chars
-                
-                if pattern not in seen_patterns:
-                    seen_patterns.add(pattern)
-                    deduped_rules.append(rule)
-            
-            triggered_rules = deduped_rules
-
-            # Soft-gate learned adjustments when doc-type inference is weak.
+            # Compute doc profile confidence and optional subtype once
             dp_conf = 0.0
             try:
                 dp_conf = float(doc_profile.get("confidence") or 0.0)
             except Exception:
                 dp_conf = 0.0
 
-            if dp_conf < 0.55:
-                learned_adjustment *= 0.65
-
-            # If this doc subtype often omits amounts/totals/dates, reduce learned penalties further.
             st = (doc_profile.get("subtype") or "").upper() if isinstance(doc_profile, dict) else ""
             optional_subtype = (
                 st in _DOC_SUBTYPES_TOTAL_OPTIONAL
                 or st in _DOC_SUBTYPES_AMOUNTS_OPTIONAL
                 or st in _DOC_SUBTYPES_DATE_OPTIONAL
             )
-            if optional_subtype:
-                learned_adjustment *= 0.60
 
-            # Track non-suppressed adjustment separately to prevent leakage
-            non_suppressed_adjustment = 0.0
+            # Apply learned rules using refactored mini-engine
+            delta = _apply_learned_rules(
+                triggered_rules=list(triggered_rules or []),
+                events=events,
+                reasons=reasons,
+                tf=tf,
+                doc_profile=doc_profile,
+                missing_fields_enabled=missing_fields_enabled,
+                dp_conf=dp_conf,
+                optional_subtype=optional_subtype,
+            )
 
-            # Emit one audit/event per learned rule trigger (structured, no scoring weight).
-            for rule in (triggered_rules or []):
-                raw = str(rule or "")
-                
-                # Extract pattern details for evidence
-                pattern = "unknown"
-                times_seen = None
-                conf_adj = 0.0
-
-                m = re.search(r"pattern detected:\s*([a-zA-Z0-9_\-]+)", raw, flags=re.IGNORECASE)
-                if m:
-                    pattern = m.group(1).strip()
-                
-                # Check if this pattern is suppressed by missing-field gate (check both raw string and extracted pattern)
-                is_missing_elements = ("missing_elements" in raw.lower()) or (pattern.lower() == "missing_elements")
-                suppressed = is_missing_elements and not missing_fields_enabled
-
-                m2 = re.search(r"identified by users\s+(\d+)\s+time", raw, flags=re.IGNORECASE)
-                if m2:
-                    try:
-                        times_seen = int(m2.group(1))
-                    except Exception:
-                        times_seen = None
-
-                m3 = re.search(r"Confidence adjustment:\s*([+\-]?[0-9]*\.?[0-9]+)", raw, flags=re.IGNORECASE)
-                if m3:
-                    try:
-                        conf_adj = float(m3.group(1))
-                    except Exception:
-                        conf_adj = 0.0
-                
-                # Accumulate adjustment based on suppression status
-                # This prevents suppressed rules from affecting score
-                if not suppressed:
-                    non_suppressed_adjustment += conf_adj
-                
-                # Keep the existing user-facing reason with suppression indicator
-                # Suppressed rules show as [INFO] to indicate they don't affect score
-                if suppressed:
-                    reasons.append(f"ℹ️ [INFO] Learned Rule (suppressed): {rule}")
-                else:
-                    reasons.append(f"[INFO] 🎓 Learned Rule: {rule}")
-
-                gating = {
-                    "doc_family": doc_profile.get("family") if isinstance(doc_profile, dict) else None,
-                    "doc_subtype": doc_profile.get("subtype") if isinstance(doc_profile, dict) else None,
-                    "doc_profile_confidence": dp_conf,
-                    "optional_subtype": optional_subtype,
-                    "missing_fields_enabled": missing_fields_enabled,
-                    "suppressed": suppressed,
-                }
-
-                # Use the standard emitter so downstream logic (e.severity checks) stays consistent.
-                # Suppressed rules always show as INFO severity
-                emit_event(
-                    events=events,
-                    reasons=None,
-                    rule_id="LR_LEARNED_PATTERN",
-                    severity="INFO",
-                    weight=0.0,
-                    message=f"Learned rule triggered{' (suppressed by missing-field gate)' if suppressed else ''}",
-                    evidence={
-                        "pattern": pattern,
-                        "times_seen": times_seen,
-                        "raw": raw,
-                        "confidence_adjustment": conf_adj,
-                        "suppressed": suppressed,
-                        "applied_to_score": not suppressed,
-                        "gating": gating,
-                    },
-                )
-
-            # Apply only the non-suppressed adjustment to score
-            # This ensures suppressed missing_elements rules don't leak into the score
-            # Apply soft-gating factors to non-suppressed adjustment
-            if dp_conf < 0.55:
-                non_suppressed_adjustment *= 0.65
-            if optional_subtype:
-                non_suppressed_adjustment *= 0.60
-            
-            if non_suppressed_adjustment != 0.0:
-                score += float(non_suppressed_adjustment)
-                score = max(0.0, min(1.0, score))
+            if delta != 0.0:
+                score += float(delta)
+                score = max(0.0, min(1.0, float(score)))
 
         except Exception as e:
             logger.warning(f"Failed to apply learned rules: {e}")
