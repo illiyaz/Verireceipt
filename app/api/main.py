@@ -1264,7 +1264,24 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             decision_dict = ensemble_decision.to_dict()
             print(f"🔍 ENSEMBLE - to_dict() geo values:")
             print(f"   geo_country_guess: {decision_dict.get('geo_country_guess')}")
-            print(f"   geo_confidence: {decision_dict.get('geo_confidence')}\n")
+            print(f"   geo_confidence: {decision_dict.get('geo_confidence')}")
+            
+            # DEBUG: Print events list with severities and codes
+            print(f"\n🔍 ENSEMBLE - Events list from decision.to_dict():")
+            events_list = decision_dict.get('events', [])
+            audit_events_list = decision_dict.get('audit_events', [])
+            print(f"   Total events: {len(events_list)}")
+            print(f"   Total audit_events: {len(audit_events_list)}")
+            print(f"\n   Events (severity + code):")
+            for i, event in enumerate(events_list, 1):
+                severity = event.get('severity', 'UNKNOWN')
+                code = event.get('code') or event.get('rule_id', 'UNKNOWN')
+                print(f"      {i}. [{severity}] {code}")
+            print(f"\n   Audit Events (severity + code):")
+            for i, event in enumerate(audit_events_list, 1):
+                severity = event.get('severity', 'UNKNOWN')
+                code = event.get('code') or event.get('rule_id', 'UNKNOWN')
+                print(f"      {i}. [{severity}] {code}\n")
 
     # Save ensemble decision to CSV
             
