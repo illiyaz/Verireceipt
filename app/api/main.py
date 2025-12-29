@@ -1268,20 +1268,25 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             
             # DEBUG: Print events list with severities and codes
             print(f"\n🔍 ENSEMBLE - Events list from decision.to_dict():")
-            events_list = decision_dict.get('events', [])
-            audit_events_list = decision_dict.get('audit_events', [])
+            events_list = decision_dict.get('events') or []
+            audit_events_list = decision_dict.get('audit_events') or []
             print(f"   Total events: {len(events_list)}")
             print(f"   Total audit_events: {len(audit_events_list)}")
-            print(f"\n   Events (severity + code):")
-            for i, event in enumerate(events_list, 1):
-                severity = event.get('severity', 'UNKNOWN')
-                code = event.get('code') or event.get('rule_id', 'UNKNOWN')
-                print(f"      {i}. [{severity}] {code}")
-            print(f"\n   Audit Events (severity + code):")
-            for i, event in enumerate(audit_events_list, 1):
-                severity = event.get('severity', 'UNKNOWN')
-                code = event.get('code') or event.get('rule_id', 'UNKNOWN')
-                print(f"      {i}. [{severity}] {code}\n")
+            if events_list:
+                print(f"\n   Events (severity + code):")
+                for i, event in enumerate(events_list, 1):
+                    if isinstance(event, dict):
+                        severity = event.get('severity', 'UNKNOWN')
+                        code = event.get('code') or event.get('rule_id', 'UNKNOWN')
+                        print(f"      {i}. [{severity}] {code}")
+            if audit_events_list:
+                print(f"\n   Audit Events (severity + code):")
+                for i, event in enumerate(audit_events_list, 1):
+                    if isinstance(event, dict):
+                        severity = event.get('severity', 'UNKNOWN')
+                        code = event.get('code') or event.get('rule_id', 'UNKNOWN')
+                        print(f"      {i}. [{severity}] {code}")
+            print()
 
     # Save ensemble decision to CSV
             
