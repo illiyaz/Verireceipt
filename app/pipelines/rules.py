@@ -2143,6 +2143,22 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
 
             learned_adjustment, triggered_rules = apply_learned_rules(features.__dict__)
 
+            # DEDUPE: Pattern-level deduplication to avoid duplicate missing_elements
+            # Extract pattern from each rule and keep only first occurrence of each pattern
+            seen_patterns = set()
+            deduped_rules = []
+            for rule in (triggered_rules or []):
+                raw = str(rule or "")
+                # Extract pattern name
+                m = re.search(r"pattern detected:\s*([a-zA-Z0-9_\-]+)", raw, flags=re.IGNORECASE)
+                pattern = m.group(1).strip() if m else raw[:50]  # fallback to first 50 chars
+                
+                if pattern not in seen_patterns:
+                    seen_patterns.add(pattern)
+                    deduped_rules.append(rule)
+            
+            triggered_rules = deduped_rules
+
             # Soft-gate learned adjustments when doc-type inference is weak.
             dp_conf = 0.0
             try:
@@ -2163,8 +2179,8 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
             if optional_subtype:
                 learned_adjustment *= 0.60
 
-            # Track if any non-suppressed learned rules exist
-            non_suppressed_found = False
+            # Track non-suppressed adjustment separately to prevent leakage
+            non_suppressed_adjustment = 0.0
 
             # Emit one audit/event per learned rule trigger (structured, no scoring weight).
             for rule in (triggered_rules or []):
@@ -2197,13 +2213,15 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
                     except Exception:
                         conf_adj = 0.0
                 
-                # Track if we have any non-suppressed rules
+                # Accumulate adjustment based on suppression status
+                # This prevents suppressed rules from affecting score
                 if not suppressed:
-                    non_suppressed_found = True
+                    non_suppressed_adjustment += conf_adj
                 
                 # Keep the existing user-facing reason with suppression indicator
+                # Suppressed rules show as [INFO] to indicate they don't affect score
                 if suppressed:
-                    reasons.append(f"[INFO] 🎓 Learned Rule (suppressed): {rule}")
+                    reasons.append(f"ℹ️ [INFO] Learned Rule (suppressed): {rule}")
                 else:
                     reasons.append(f"[INFO] 🎓 Learned Rule: {rule}")
 
@@ -2217,6 +2235,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
                 }
 
                 # Use the standard emitter so downstream logic (e.severity checks) stays consistent.
+                # Suppressed rules always show as INFO severity
                 emit_event(
                     events=events,
                     reasons=None,
@@ -2229,19 +2248,22 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
                         "times_seen": times_seen,
                         "raw": raw,
                         "confidence_adjustment": conf_adj,
-                        "applied_learned_adjustment": float(learned_adjustment),
+                        "suppressed": suppressed,
+                        "applied_to_score": not suppressed,
                         "gating": gating,
                     },
                 )
 
-            # Apply learned_adjustment only if at least one non-suppressed rule exists
-            # If all rules were suppressed (e.g., only missing_elements when gate is off), zero it out
-            if not non_suppressed_found:
-                learned_adjustment = 0.0
-
-            # Apply the total learned adjustment once
-            if learned_adjustment != 0.0:
-                score += float(learned_adjustment)
+            # Apply only the non-suppressed adjustment to score
+            # This ensures suppressed missing_elements rules don't leak into the score
+            # Apply soft-gating factors to non-suppressed adjustment
+            if dp_conf < 0.55:
+                non_suppressed_adjustment *= 0.65
+            if optional_subtype:
+                non_suppressed_adjustment *= 0.60
+            
+            if non_suppressed_adjustment != 0.0:
+                score += float(non_suppressed_adjustment)
                 score = max(0.0, min(1.0, score))
 
         except Exception as e:
