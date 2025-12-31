@@ -3,15 +3,15 @@ Geo-aware document classification system.
 
 This module implements a multi-signal approach to detect:
 1. Language (fast heuristic)
-2. Country/region (multi-signal scoring)
+2. Country/region (enriched geo inference with postal patterns, cities, terms)
 3. Geo-specific document features
 
-This enables accurate classification of receipts from different countries
-without hardcoding assumptions about currency, tax systems, or formats.
+Uses the new geo enrichment system (app/geo) for accurate location detection.
 """
 
 import re
 from typing import Dict, Any, List, Tuple, Optional
+from app.geo import infer_geo
 
 
 # =============================================================================
@@ -1091,13 +1091,18 @@ def detect_geo_and_profile(text: str, lines: List[str]) -> Dict[str, Any]:
     # Step 1: Detect language
     lang_result = _detect_language(text)
     
-    # Step 2: Detect country/region
-    geo_result = _detect_geo_country(
-        text,
-        lang_hint=lang_result.get("lang_guess"),
-        lang_confidence=lang_result.get("lang_confidence"),
-        lang_score=lang_result.get("lang_score"), 
-    )
+    # Step 2: Use ENRICHED geo inference system (NEW)
+    # This replaces the old _detect_geo_country with database-backed inference
+    geo_enriched = infer_geo(text)
+    
+    # Map enriched result to expected format
+    geo_result = {
+        "geo_country_guess": geo_enriched["geo_country_guess"],
+        "geo_confidence": geo_enriched["geo_confidence"],
+        "geo_evidence": geo_enriched["geo_evidence"],
+        "geo_candidates": geo_enriched["candidates"],
+        "geo_mixed": geo_enriched["geo_mixed"],
+    }
     
     # Step 3: Detect document subtype (geo-aware)
     doc_result = _detect_doc_subtype_geo_aware(
