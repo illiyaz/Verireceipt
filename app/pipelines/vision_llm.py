@@ -323,9 +323,13 @@ Only return the JSON, no other text."""
 
 def assess_receipt_authenticity(image_path: str, model: str = DEFAULT_VISION_MODEL) -> Dict[str, Any]:
     """
-    Visual integrity assessment using vision model.
+    @deprecated - Used internally by build_vision_assessment() only.
     
-    This asks the model to ONLY report visual integrity, not overall authenticity.
+    High-level authenticity assessment using vision model.
+    This function outputs "real"/"fake" verdicts which violate veto-only design.
+    
+    DO NOT call this directly. Use build_vision_assessment() instead.
+    Kept for comparison during validation phase.
     """
     prompt = """You are a forensic document examiner.
 
@@ -369,8 +373,13 @@ Only return the JSON, no other text."""
 # --- Convenience wrapper for pipeline: returns visual_integrity/confidence/claims/raw ---
 def run_vision_authenticity(image_path: str, model: str = DEFAULT_VISION_MODEL) -> Dict[str, Any]:
     """
-    Wrapper used by the pipeline: returns visual_integrity/confidence/claims/raw.
-    Vision LLM is veto-only: cannot assert authenticity, only visual integrity.
+    @deprecated - DO NOT USE - Violates veto-only design.
+    
+    This function outputs "verdict" which allows vision to upgrade trust.
+    Use build_vision_assessment() instead.
+    
+    Kept for backward compatibility during validation phase only.
+    Will be removed after sample validation.
     """
     vis = assess_receipt_authenticity(image_path, model=model) or {}
     # Compose claims from observable_reasons for contract compatibility
@@ -391,19 +400,25 @@ def analyze_receipt_with_vision(
     assess_authenticity: bool = True
 ) -> Dict[str, Any]:
     """
-    Complete vision-based receipt analysis.
+    @deprecated - DO NOT USE - Violates veto-only design.
     
-    Routes to either Ollama (dev) or PyTorch (prod) based on USE_OLLAMA env var.
+    This function returns raw authenticity assessments with "verdict" fields
+    that allow vision to upgrade trust and override rules.
+    
+    Use build_vision_assessment() instead for veto-safe contract.
+    
+    Kept for comparison during validation phase only.
+    Will be removed after sample validation.
     
     Args:
         image_path: Path to receipt image
         model: Vision model to use
         extract_data: Extract structured data
         detect_fraud: Detect fraud indicators
-        assess_authenticity: Visual integrity assessment
+        assess_authenticity: Overall authenticity assessment
     
     Returns:
-        Dictionary with all vision analysis results
+        Dictionary with all vision analysis results (DEPRECATED FORMAT)
     """
     # Production mode: Use full-precision PyTorch
     if not USE_OLLAMA:
@@ -535,12 +550,17 @@ def build_vision_assessment(image_path: str, model: str = DEFAULT_VISION_MODEL) 
     ]
     
     # Determine visual_integrity (veto-safe)
+    # Confidence calculation:
+    # - HARD_FAIL: Use max confidence from HARD_FAIL claims (most confident veto signal)
+    # - Otherwise: Use overall fraud detection confidence
+    # This ensures HARD_FAIL confidence dominates and prevents hallucinated certainty.
     if hard_fail_claims:
         # HARD_FAIL with high confidence → tampered (triggers veto in rules.py)
         visual_integrity = "tampered"
         confidence = max(float(c.get("confidence", 0.0)) for c in hard_fail_claims)
     elif fraud.get("is_suspicious"):
-        # Suspicious but not HARD_FAIL → suspicious (no veto, just audit)
+        # Suspicious but not HARD_FAIL → suspicious (audit-only, NO VETO)
+        # This is explicitly audit-only and will NOT trigger any rule events.
         visual_integrity = "suspicious"
         confidence = float(fraud.get("confidence", 0.0))
     else:

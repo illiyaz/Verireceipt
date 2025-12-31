@@ -97,14 +97,16 @@ assert len(vision_events) == 0, f"Expected 0 vision events for 'clean', got {len
 print("✅ TEST 2 PASSED: Vision veto does NOT trigger for 'clean' integrity")
 
 print("\n" + "=" * 80)
-print("TEST 3: Vision veto with 'suspicious' visual_integrity (no veto)")
+print("TEST 3: Vision veto with 'suspicious' visual_integrity (AUDIT-ONLY, NO VETO)")
 print("=" * 80)
+print("⚠️  IMPORTANT: 'suspicious' is explicitly audit-only and must NOT trigger veto")
+print("   This test prevents future regressions where someone 'helpfully' adds veto logic")
 
 features = create_test_features()
 vision_assessment_suspicious = {
     "visual_integrity": "suspicious",
     "confidence": 0.60,
-    "observable_reasons": ["Some minor artifacts detected"]
+    "observable_reasons": ["Some minor artifacts detected", "Possible scanner noise"]
 }
 
 decision = _score_and_explain(features, apply_learned=False, vision_assessment=vision_assessment_suspicious)
@@ -112,15 +114,23 @@ decision = _score_and_explain(features, apply_learned=False, vision_assessment=v
 print(f"\n📊 Decision: {decision.label}")
 print(f"📈 Score: {decision.score:.2f}")
 
+# CRITICAL: Verify NO veto event is emitted
 vision_events = [e for e in decision.events if e.get("rule_id") == "V1_VISION_TAMPERED"]
 if vision_events:
-    print(f"\n❌ Unexpected V1_VISION_TAMPERED event found!")
+    print(f"\n❌ CRITICAL FAILURE: V1_VISION_TAMPERED event found for 'suspicious'!")
+    print(f"   This violates the audit-only contract for 'suspicious' visual_integrity")
+    raise AssertionError("'suspicious' must NOT trigger veto events")
 else:
-    print(f"\n✅ No V1_VISION_TAMPERED event (correct - only 'tampered' triggers veto)")
+    print(f"\n✅ No V1_VISION_TAMPERED event (correct - 'suspicious' is audit-only)")
+    print(f"   'suspicious' provides context for audit reports but does NOT affect decision")
+
+# Verify decision is based on rules, not vision
+assert decision.label != "fake" or decision.score >= 0.5, "Decision should be based on rules, not vision 'suspicious'"
 
 # Verify no veto when suspicious
-assert len(vision_events) == 0, f"Expected 0 vision events for 'suspicious', got {len(vision_events)}"
-print("✅ TEST 3 PASSED: Vision veto does NOT trigger for 'suspicious' integrity")
+assert len(vision_events) == 0, f"CRITICAL: 'suspicious' triggered {len(vision_events)} veto events (expected 0)"
+print("✅ TEST 3 PASSED: 'suspicious' is audit-only, NO veto triggered")
+print("   Contract verified: Only 'tampered' triggers veto, 'suspicious' is for audit/logging only")
 
 print("\n" + "=" * 80)
 print("TEST 4: No vision_assessment provided (graceful handling)")
