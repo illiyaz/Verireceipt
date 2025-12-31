@@ -907,8 +907,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         # (Ensemble will enhance this later, after all engines complete)
         rule_label = results["rule_based"].get("label", "unknown")
         rule_score = results["rule_based"].get("score", 0.5)
-        # Vision is veto-only - it's already integrated into rule_label via V1_VISION_TAMPERED
-        # No need to check vision_verdict here
+        # Vision is veto-only - already integrated into rule_label via V1_VISION_TAMPERED
         donut_quality = results["donut"].get("data_quality", "unknown")
         layoutlm_quality = results["layoutlm"].get("data_quality", "unknown")
         
@@ -1095,13 +1094,9 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             vision_llm = (results or {}).get("vision_llm", {}) or {}
             layoutlm = (results or {}).get("layoutlm", {}) or {}
             
-            vision_verdict = vision_llm.get("verdict")
-            raw_vision_confidence = vision_llm.get("confidence", 0.0)
-            # Normalize vision confidence to [0,1] if needed
-            vision_confidence = float(raw_vision_confidence) if raw_vision_confidence is not None else None
-            if vision_confidence is not None and vision_confidence > 1.0:
-                vision_confidence = vision_confidence / 100.0
-            vision_reasoning = (vision_llm or {}).get("reasoning") or ""
+            # Vision is veto-only: only visual_integrity matters
+            visual_integrity = vision_llm.get("visual_integrity", "unknown")
+            vision_confidence = vision_llm.get("confidence", 0.0)
             
             layoutlm_status = layoutlm.get("data_quality") or layoutlm.get("status") or "unknown"
             layoutlm_confidence = layoutlm.get("confidence") or "unknown"
@@ -1134,18 +1129,9 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             
             if critical_count > 0:
                 corroboration_score -= 0.25
-                if vision_verdict == "real":
-                    corroboration_flags.append("VISION_REAL_RULES_CRITICAL")
             
-            if vision_verdict == "real" and layoutlm_extracted and not layoutlm_extracted.get("total"):
-                corroboration_flags.append("VISION_REAL_LAYOUT_MISSING_TOTAL")
-                corroboration_score -= 0.15
-            
-            if vision_verdict == "real" and rule_label == "fake" and rule_score >= 0.7:
-                corroboration_flags.append("VISION_REAL_RULES_FAKE")
-            
-            if vision_verdict == "fake" and rule_label == "real":
-                corroboration_flags.append("VISION_FAKE_RULES_REAL")
+            # Vision veto-only: no corroboration logic based on vision
+            # Vision tampering already triggers V1_VISION_TAMPERED HARD_FAIL in rules
             
             # Clamp to [0,1]
             corroboration_score = max(0.0, min(1.0, corroboration_score))
@@ -1153,7 +1139,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             corroboration_signals = {
                 "agreement_score": agreement_score,
                 "critical_count": critical_count,
-                "vision_verdict": vision_verdict,
+                "visual_integrity": visual_integrity,
                 "rule_label": rule_label,
                 "rule_score": rule_score,
                 "layoutlm_has_total": bool(layoutlm_extracted and layoutlm_extracted.get("total")),
@@ -1170,10 +1156,9 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 "engine_version": "ensemble-v0.0.1",
                 "policy_name": "ensemble",
 
-                # Vision/Layout signals
-                "vision_verdict": vision_verdict,
+                # Vision/Layout signals (vision is veto-only)
+                "visual_integrity": visual_integrity,
                 "vision_confidence": vision_confidence,
-                "vision_reasoning": vision_reasoning,
                 "layoutlm_status": layoutlm_status,
                 "layoutlm_confidence": layoutlm_confidence,
                 "layoutlm_extracted": layoutlm_extracted,
@@ -1490,16 +1475,14 @@ async def analyze_hybrid_stream(file: UploadFile = File(...)):
         update_queue.put({"event": "engine_start", "engine": "vision-llm"})
         start = time_module.time()
         try:
-            vision_results = analyze_receipt_with_vision(str(temp_path))
+            # Use veto-safe build_vision_assessment instead of analyze_receipt_with_vision
+            vision_assessment = build_vision_assessment(str(temp_path))
             elapsed = time_module.time() - start
-            auth = vision_results.get("authenticity_assessment", {})
-            fraud = vision_results.get("fraud_detection", {})
+            
             result = {
-                "verdict": auth.get("verdict", "unknown"),
-                "confidence": auth.get("confidence", 0.0),
-                "authenticity_score": auth.get("authenticity_score", 0.0),
-                "fraud_indicators": fraud.get("fraud_indicators", []),
-                "reasoning": auth.get("reasoning", ""),
+                "visual_integrity": vision_assessment.get("visual_integrity", "unknown"),
+                "confidence": vision_assessment.get("confidence", 0.0),
+                "observable_reasons": vision_assessment.get("observable_reasons", []),
                 "time_seconds": round(elapsed, 2)
             }
             update_queue.put({
@@ -1585,42 +1568,22 @@ async def analyze_hybrid_stream(file: UploadFile = File(...)):
         
         rule_label = results["rule_based"].get("label", "unknown")
         rule_score = results["rule_based"].get("score", 0.5)
-        vision_verdict = results["vision_llm"].get("verdict", "unknown")
-        vision_confidence = results["vision_llm"].get("confidence", 0.0)
         
-        # Simple hybrid logic
+        # Vision veto already applied inside rule-based engine
+        # Vision tampering triggers V1_VISION_TAMPERED HARD_FAIL → label=fake
+        # No vision-based decisions here
+        hybrid["final_label"] = rule_label
+        hybrid["confidence"] = rule_score
+        
         if rule_label == "real" and rule_score < 0.3:
-            if vision_verdict == "real" and vision_confidence > 0.7:
-                hybrid["final_label"] = "real"
-                hybrid["confidence"] = 0.95
-                hybrid["recommended_action"] = "approve"
-                hybrid["reasoning"].append("Both engines strongly indicate authentic receipt")
-            else:
-                hybrid["final_label"] = "real"
-                hybrid["confidence"] = 0.85
-                hybrid["recommended_action"] = "approve"
-                hybrid["reasoning"].append("Rule-based engine indicates real receipt")
+            hybrid["recommended_action"] = "approve"
+            hybrid["reasoning"].append("Rule-based engine indicates authentic receipt")
         elif rule_label == "fake" or rule_score > 0.7:
-            hybrid["final_label"] = "fake"
-            hybrid["confidence"] = 0.90
             hybrid["recommended_action"] = "reject"
-            hybrid["reasoning"].append("High fraud score detected")
+            hybrid["reasoning"].append("Rule-based engine detected fraud indicators")
         else:
-            if vision_verdict == "fake" and vision_confidence > 0.7:
-                hybrid["final_label"] = "fake"
-                hybrid["confidence"] = 0.85
-                hybrid["recommended_action"] = "reject"
-                hybrid["reasoning"].append("Vision model detected fraud indicators")
-            elif vision_verdict == "real" and vision_confidence > 0.8:
-                hybrid["final_label"] = "real"
-                hybrid["confidence"] = 0.80
-                hybrid["recommended_action"] = "approve"
-                hybrid["reasoning"].append("Vision model confirms authenticity")
-            else:
-                hybrid["final_label"] = "suspicious"
-                hybrid["confidence"] = 0.60
-                hybrid["recommended_action"] = "human_review"
-                hybrid["reasoning"].append("Uncertain - requires human review")
+            hybrid["recommended_action"] = "human_review"
+            hybrid["reasoning"].append("Uncertain - requires human review")
         
         results["hybrid_verdict"] = hybrid
         
