@@ -1,6 +1,8 @@
 """
 Vision LLM Feature Extraction.
 
+Vision LLM is a veto-only signal. It can only downgrade trust, never upgrade authenticity.
+
 Supports two modes:
 1. Ollama (Development): Fast prototyping with quantized models
 2. PyTorch (Production): Full-precision models for maximum accuracy
@@ -321,53 +323,63 @@ Only return the JSON, no other text."""
 
 def assess_receipt_authenticity(image_path: str, model: str = DEFAULT_VISION_MODEL) -> Dict[str, Any]:
     """
-    High-level authenticity assessment using vision model.
+    Visual integrity assessment using vision model.
     
-    This asks the model to make an overall judgment about the receipt.
+    This asks the model to ONLY report visual integrity, not overall authenticity.
     """
-    prompt = """You are an expert at detecting fake receipts. Analyze this receipt image and determine if it appears authentic or fake.
+    prompt = """You are a forensic document examiner.
 
-Consider:
-- Does it look like a real printed receipt or a digital creation?
-- Are there signs of editing or manipulation?
-- Does the layout match typical receipts from real businesses?
-- Are there any suspicious watermarks or artifacts?
-- Does the text quality look consistent?
+Analyze this receipt image and assess its VISUAL INTEGRITY ONLY.
 
-Respond in JSON format:
+Report ONLY the following in JSON:
 {
-  "verdict": "real" or "fake" or "suspicious",
+  "visual_integrity": "clean" | "suspicious" | "tampered",
   "confidence": 0.0-1.0,
-  "reasoning": "brief explanation of your assessment",
-  "red_flags": ["flag 1", "flag 2", ...],
-  "authenticity_score": 0.0-1.0 (0=definitely fake, 1=definitely real)
+  "observable_reasons": ["reason 1", "reason 2", ...]
 }
 
+Definitions:
+- "clean": No observable signs of tampering or suspicious visual artifacts.
+- "suspicious": Some visual cues suggest possible manipulation, but not definitive.
+- "tampered": Clear signs of editing, forgery, or digital alteration.
+
+Rules:
+- Only judge what you can SEE in the image.
+- List observable reasons for any suspicious or tampered finding.
+- Do NOT decide if the receipt is "real" or "authentic" overall.
+- Do NOT output any field except those in the schema above.
 Only return the JSON, no other text."""
 
     response = query_vision_model(image_path, prompt, model, temperature=0.1)
     
     data = _extract_json_object(response)
     if data is not None:
+        # Defensive normalization
+        if not isinstance(data, dict):
+            data = {}
+        data.setdefault("visual_integrity", "suspicious")
+        data.setdefault("confidence", 0.0)
+        data.setdefault("observable_reasons", [])
         return data
 
     print(f"⚠️ Vision LLM response has no JSON: {response[:200]}")
-    return {"verdict": "unknown", "confidence": 0.0, "reasoning": "Failed to parse response (no JSON found)"}
+    return {"visual_integrity": "suspicious", "confidence": 0.0, "observable_reasons": []}
 
 
-# --- Convenience wrapper for pipeline: run_vision() style verdict/confidence/reasoning ---
+# --- Convenience wrapper for pipeline: returns visual_integrity/confidence/claims/raw ---
 def run_vision_authenticity(image_path: str, model: str = DEFAULT_VISION_MODEL) -> Dict[str, Any]:
     """
-    Lightweight wrapper used by the pipeline: returns verdict/confidence/reasoning.
-    Keeps the contract stable for ensemble/main.py.
+    Wrapper used by the pipeline: returns visual_integrity/confidence/claims/raw.
+    Vision LLM is veto-only: cannot assert authenticity, only visual integrity.
     """
-    auth = assess_receipt_authenticity(image_path, model=model) or {}
+    vis = assess_receipt_authenticity(image_path, model=model) or {}
+    # Compose claims from observable_reasons for contract compatibility
+    claims = vis.get("observable_reasons", [])
     return {
-        "verdict": auth.get("verdict", "unknown"),
-        "confidence": float(auth.get("confidence", 0.0) or 0.0),
-        "reasoning": auth.get("reasoning", "") or "",
-        "red_flags": auth.get("red_flags", []) or [],
-        "raw": auth,
+        "visual_integrity": vis.get("visual_integrity", "suspicious"),
+        "confidence": float(vis.get("confidence", 0.0) or 0.0),
+        "claims": claims,
+        "raw": vis,
     }
 
 
@@ -388,7 +400,7 @@ def analyze_receipt_with_vision(
         model: Vision model to use
         extract_data: Extract structured data
         detect_fraud: Detect fraud indicators
-        assess_authenticity: Overall authenticity assessment
+        assess_authenticity: Visual integrity assessment
     
     Returns:
         Dictionary with all vision analysis results
@@ -404,7 +416,7 @@ def analyze_receipt_with_vision(
         "image_path": image_path,
         "extracted_data": None,
         "fraud_detection": None,
-        "authenticity_assessment": None,
+        "visual_integrity_assessment": None,
     }
     
     print(f"🔍 Analyzing with vision model (Ollama): {model}")
@@ -418,8 +430,8 @@ def analyze_receipt_with_vision(
         results["fraud_detection"] = detect_fraud_indicators_with_vision(image_path, model)
     
     if assess_authenticity:
-        print("   Assessing authenticity...")
-        results["authenticity_assessment"] = assess_receipt_authenticity(image_path, model)
+        print("   Assessing visual integrity...")
+        results["visual_integrity_assessment"] = assess_receipt_authenticity(image_path, model)
     
     return results
 
@@ -478,69 +490,108 @@ def compare_with_ocr_features(vision_results: Dict, ocr_features: Dict) -> Dict[
     return comparison
 
 
-def get_hybrid_verdict(
+def build_vision_assessment(image_path: str, model: str = DEFAULT_VISION_MODEL) -> Dict[str, Any]:
+    """
+    CANONICAL VISION VETO FUNCTION.
+    
+    This is the ONLY function that should be called by main.py/ensemble.py.
+    Returns a veto-safe vision assessment that can ONLY downgrade trust, never upgrade.
+    
+    Contract:
+    {
+      "visual_integrity": "clean" | "suspicious" | "tampered",
+      "confidence": 0.0-1.0,
+      "observable_reasons": [...],
+      "raw": {...}  # Full forensic data for audit
+    }
+    
+    Logic:
+    - If HARD_FAIL claims with high confidence → "tampered" (triggers veto)
+    - If suspicious indicators → "suspicious" (no veto, just audit)
+    - Otherwise → "clean" (no veto)
+    
+    Vision NEVER outputs "real" or "fake" verdicts.
+    Vision ONLY provides evidence that rules.py can use to veto.
+    """
+    print(f"🔍 Building vision assessment (veto-only): {Path(image_path).name}")
+    
+    # Run forensic fraud detection (the good part of this file)
+    fraud = detect_fraud_indicators_with_vision(image_path, model)
+    
+    # Run authenticity assessment (for audit context only, NOT for decision)
+    auth = assess_receipt_authenticity(image_path, model)
+    
+    # Extract HARD_FAIL claims (these are the veto triggers)
+    hard_fail_claims = [
+        c for c in fraud.get("claims", [])
+        if c.get("severity") == "HARD_FAIL" and float(c.get("confidence", 0.0)) >= 0.7
+    ]
+    
+    # Extract all observable reasons for audit trail
+    observable_reasons = [
+        c.get("observable_claim", "")
+        for c in fraud.get("claims", [])
+        if c.get("observable_claim")
+    ]
+    
+    # Determine visual_integrity (veto-safe)
+    if hard_fail_claims:
+        # HARD_FAIL with high confidence → tampered (triggers veto in rules.py)
+        visual_integrity = "tampered"
+        confidence = max(float(c.get("confidence", 0.0)) for c in hard_fail_claims)
+    elif fraud.get("is_suspicious"):
+        # Suspicious but not HARD_FAIL → suspicious (no veto, just audit)
+        visual_integrity = "suspicious"
+        confidence = float(fraud.get("confidence", 0.0))
+    else:
+        # No significant indicators → clean (no veto)
+        visual_integrity = "clean"
+        confidence = float(fraud.get("confidence", 0.0))
+    
+    print(f"   → visual_integrity: {visual_integrity} (confidence: {confidence:.2f})")
+    if hard_fail_claims:
+        print(f"   → HARD_FAIL claims: {len(hard_fail_claims)}")
+        for c in hard_fail_claims[:3]:
+            print(f"      • {c.get('observable_claim', 'N/A')}")
+    
+    return {
+        "visual_integrity": visual_integrity,
+        "confidence": confidence,
+        "observable_reasons": observable_reasons,
+        "raw": {
+            "fraud_detection": fraud,
+            "authenticity_assessment": auth,
+            "hard_fail_claims": hard_fail_claims,
+        },
+    }
+
+
+def get_hybrid_verdict_DEPRECATED(
     rule_based_decision: Dict,
     vision_results: Dict
 ) -> Dict[str, Any]:
     """
-    Combine rule-based and vision-based analysis for final verdict.
+    ⚠️ DEPRECATED - DO NOT USE ⚠️
     
-    Strategy:
-    1. If both agree → high confidence
-    2. If both disagree → flag for human review
-    3. Use vision as tiebreaker for suspicious cases
+    This function VIOLATES the veto-only design.
+    It allows vision to upgrade trust and override rules.
+    
+    Use build_vision_assessment() instead.
+    
+    This function is kept only for backward compatibility and will be removed.
     """
-    rule_label = rule_based_decision.get("label", "unknown")
-    rule_score = rule_based_decision.get("score", 0.5)
-    
-    vision_auth = vision_results.get("authenticity_assessment", {})
-    vision_verdict = vision_auth.get("verdict", "unknown")
-    vision_confidence = vision_auth.get("confidence", 0.0)
-    vision_score = vision_auth.get("authenticity_score", 0.5)
-    
-    # Map labels
-    label_map = {
-        "real": 0.0,
-        "suspicious": 0.5,
-        "fake": 1.0,
-        "unknown": 0.5
-    }
-    
-    rule_numeric = label_map.get(rule_label, 0.5)
-    vision_numeric = 1.0 - vision_score  # Invert (0=real, 1=fake)
-    
-    # Calculate agreement
-    agreement = 1.0 - abs(rule_numeric - vision_numeric)
-    
-    # Hybrid decision
-    if agreement > 0.7:
-        # Both agree
-        final_label = rule_label
-        final_confidence = min(1.0, (1.0 + vision_confidence) / 2)
-        reasoning = "Rule-based and vision models agree"
-    elif rule_score < 0.3 and vision_score > 0.7:
-        # Rules say real, vision says real → high confidence real
-        final_label = "real"
-        final_confidence = 0.9
-        reasoning = "Both models strongly indicate authentic receipt"
-    elif rule_score > 0.7 and vision_score < 0.3:
-        # Rules say fake, vision says fake → high confidence fake
-        final_label = "fake"
-        final_confidence = 0.9
-        reasoning = "Both models strongly indicate fraudulent receipt"
-    else:
-        # Disagreement → flag for review
-        final_label = "suspicious"
-        final_confidence = 0.5
-        reasoning = "Rule-based and vision models disagree - needs human review"
-    
+    print("⚠️ WARNING: get_hybrid_verdict() is DEPRECATED and violates veto-only design!")
+    print("   Use build_vision_assessment() instead.")
+    # This function is deprecated and should not be used.
+    # Return rule-based decision unchanged (vision does not interfere).
     return {
-        "final_label": final_label,
-        "final_confidence": final_confidence,
-        "reasoning": reasoning,
-        "agreement_score": agreement,
-        "rule_based": {"label": rule_label, "score": rule_score},
-        "vision_based": {"verdict": vision_verdict, "score": vision_score, "confidence": vision_confidence},
+        "final_label": rule_based_decision.get("label", "suspicious"),
+        "final_confidence": rule_based_decision.get("score", 0.5),
+        "reasoning": "Vision veto-only mode: rules stay primary",
+        "agreement_score": 0.0,
+        "rule_based": rule_based_decision,
+        "vision_based": {},
+        "deprecated_warning": "This function violates veto-only design. Use build_vision_assessment() instead.",
     }
 
 

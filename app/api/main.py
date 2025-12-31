@@ -33,7 +33,7 @@ except ImportError:
 
 # Import hybrid analysis engines
 try:
-    from app.pipelines.vision_llm import analyze_receipt_with_vision
+    from app.pipelines.vision_llm import build_vision_assessment
     VISION_AVAILABLE = True
 except ImportError:
     VISION_AVAILABLE = False
@@ -577,9 +577,9 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             vision_assess = None
             if not results.get("vision_llm", {}).get("error"):
                 vision_assess = {
-                    "visual_integrity": results["vision_llm"].get("verdict", "unknown"),
+                    "visual_integrity": results["vision_llm"].get("visual_integrity", "unknown"),
                     "confidence": results["vision_llm"].get("confidence", 0.0),
-                    "observable_reasons": results["vision_llm"].get("reasoning", "").split(". ") if results["vision_llm"].get("reasoning") else [],
+                    "observable_reasons": results["vision_llm"].get("observable_reasons", []),
                 }
             decision = analyze_receipt(str(temp_path), vision_assessment=vision_assess)
             decision.finalize_defaults()
@@ -681,34 +681,34 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         try:
             # Use converted image for PDFs, original file otherwise
             vision_path = image_path if is_pdf else temp_path
-            print(f"🔍 Vision LLM analyzing: {vision_path.name}")
-            vision_results = analyze_receipt_with_vision(str(vision_path))
+            print(f"🔍 Vision LLM analyzing (veto-only): {vision_path.name}")
+            
+            # Use new veto-safe function
+            vision_assessment = build_vision_assessment(str(vision_path))
             elapsed = time_module.time() - start
-            auth = vision_results.get("authenticity_assessment", {})
-            fraud = vision_results.get("fraud_detection", {})
+            
+            # Extract veto-safe fields
+            visual_integrity = vision_assessment.get("visual_integrity", "unknown")
+            confidence = vision_assessment.get("confidence", 0.0)
+            observable_reasons = vision_assessment.get("observable_reasons", [])
             
             # Check if we got valid results
-            verdict = auth.get("verdict", "unknown")
-            confidence = auth.get("confidence", 0.0)
-            reasoning = auth.get("reasoning", "")
-            
-            # If verdict is unknown and reasoning indicates parse failure, it's a network/service issue
-            if verdict == "unknown" and "Failed to parse" in reasoning:
-                print(f"⚠️ Vision LLM parse failure - likely Ollama service issue")
+            if visual_integrity == "unknown" or confidence == 0.0:
+                print(f"⚠️ Vision LLM returned no assessment - likely service issue")
                 return {
                     "error": "Vision LLM service unavailable",
-                    "verdict": "unknown",
+                    "visual_integrity": "unknown",
                     "confidence": 0.0,
-                    "reasoning": "Vision LLM service not responding (check Ollama)",
+                    "observable_reasons": [],
                     "time_seconds": round(elapsed, 2)
                 }
             
+            # Return veto-safe contract
             return {
-                "verdict": verdict,
+                "visual_integrity": visual_integrity,
                 "confidence": confidence,
-                "authenticity_score": auth.get("authenticity_score", 0.0),
-                "fraud_indicators": fraud.get("fraud_indicators", []),
-                "reasoning": reasoning,
+                "observable_reasons": observable_reasons,
+                "raw": vision_assessment.get("raw", {}),
                 "time_seconds": round(elapsed, 2)
             }
         except Exception as e:
@@ -717,9 +717,9 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             traceback.print_exc()
             return {
                 "error": str(e),
-                "verdict": "unknown",
+                "visual_integrity": "unknown",
                 "confidence": 0.0,
-                "reasoning": f"Vision LLM error: {str(e)}",
+                "observable_reasons": [],
                 "time_seconds": round(time_module.time() - start, 2)
             }
     
@@ -731,11 +731,11 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     print("SEQUENTIAL INTELLIGENCE PIPELINE")
     print("="*60)
     
-    # STEP 1: Vision LLM (first - visual fraud detection)
-    print("\n1️⃣ Running Vision LLM...")
+    # STEP 1: Vision LLM (first - visual fraud detection, veto-only)
+    print("\n1️⃣ Running Vision LLM (veto-only)...")
     results["vision_llm"] = run_vision()
     if not results["vision_llm"].get("error"):
-        print(f"   ✅ Vision: {results['vision_llm'].get('verdict')} ({results['vision_llm'].get('confidence', 0)*100:.0f}%)")
+        print(f"   ✅ Vision: {results['vision_llm'].get('visual_integrity')} (confidence: {results['vision_llm'].get('confidence', 0)*100:.0f}%)")
     else:
         print(f"   ❌ Vision failed: {results['vision_llm'].get('error')}")
     
@@ -774,9 +774,9 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     vision_assessment = None
     if not results["vision_llm"].get("error"):
         vision_assessment = {
-            "visual_integrity": results["vision_llm"].get("verdict", "unknown"),
+            "visual_integrity": results["vision_llm"].get("visual_integrity", "unknown"),
             "confidence": results["vision_llm"].get("confidence", 0.0),
-            "observable_reasons": results["vision_llm"].get("reasoning", "").split(". ") if results["vision_llm"].get("reasoning") else [],
+            "observable_reasons": results["vision_llm"].get("observable_reasons", []),
         }
     
     if extracted_total or extracted_merchant or extracted_date:
@@ -907,8 +907,8 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         # (Ensemble will enhance this later, after all engines complete)
         rule_label = results["rule_based"].get("label", "unknown")
         rule_score = results["rule_based"].get("score", 0.5)
-        vision_verdict = results["vision_llm"].get("verdict", "unknown")
-        vision_confidence = results["vision_llm"].get("confidence", 0.0)
+        # Vision is veto-only - it's already integrated into rule_label via V1_VISION_TAMPERED
+        # No need to check vision_verdict here
         donut_quality = results["donut"].get("data_quality", "unknown")
         layoutlm_quality = results["layoutlm"].get("data_quality", "unknown")
         
@@ -924,96 +924,50 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         if optional_engines["layoutlm"] and layoutlm_quality == "good":
             optional_boost += 0.05
         
-        # Combine signals from available engines
+        # Use rule-based decision (vision is veto-only, already integrated via V1_VISION_TAMPERED)
         if rule_label == "real" and rule_score < 0.3:
-            if vision_verdict == "real" and vision_confidence > 0.7:
-                hybrid["final_label"] = "real"
-                hybrid["confidence"] = min(base_confidence + optional_boost, 0.98)
-                hybrid["recommended_action"] = "approve"
-                
-                # Transparent reasoning
-                engines_count = 2 + sum(optional_engines.values())
-                hybrid["reasoning"].append(f"✅ {engines_count}/{hybrid['total_engines']} engines indicate authentic receipt")
-                hybrid["reasoning"].append(f"✅ Critical engines (Rule-Based + Vision LLM) agree: REAL")
-                
-                if optional_engines["donut"] and donut_quality == "good":
-                    hybrid["reasoning"].append("✅ DONUT validated document structure")
-                if optional_engines["layoutlm"] and layoutlm_quality == "good":
-                    hybrid["reasoning"].append("✅ LayoutLM validated document structure")
-                
-                # Show failed optional engines transparently
-                if not optional_engines["donut"]:
-                    hybrid["reasoning"].append("ℹ️ DONUT unavailable (confidence slightly lower)")
-                if not optional_engines["layoutlm"]:
-                    hybrid["reasoning"].append("ℹ️ LayoutLM unavailable (confidence slightly lower)")
-            else:
-                hybrid["final_label"] = "real"
-                hybrid["confidence"] = 0.80
-                hybrid["recommended_action"] = "approve"
-                hybrid["reasoning"].append("✅ Rule-based engine indicates real receipt")
-                hybrid["reasoning"].append("ℹ️ Vision LLM shows lower confidence")
+            hybrid["final_label"] = "real"
+            hybrid["confidence"] = min(base_confidence + optional_boost, 0.98)
+            hybrid["recommended_action"] = "approve"
+            
+            # Transparent reasoning
+            engines_count = 1 + sum(optional_engines.values())
+            hybrid["reasoning"].append(f"✅ {engines_count}/{hybrid['total_engines']} engines indicate authentic receipt")
+            hybrid["reasoning"].append(f"✅ Rule-based engine: REAL (score={rule_score:.2f})")
+            
+            if optional_engines["donut"] and donut_quality == "good":
+                hybrid["reasoning"].append("✅ DONUT validated document structure")
+            if optional_engines["layoutlm"] and layoutlm_quality == "good":
+                hybrid["reasoning"].append("✅ LayoutLM validated document structure")
+            
+            # Show failed optional engines transparently
+            if not optional_engines["donut"]:
+                hybrid["reasoning"].append("ℹ️ DONUT unavailable (confidence slightly lower)")
+            if not optional_engines["layoutlm"]:
+                hybrid["reasoning"].append("ℹ️ LayoutLM unavailable (confidence slightly lower)")
                 
         elif rule_label == "fake" or rule_score > 0.7:
-            # Rule-Based flagged as fake - but check if Vision LLM disagrees
-            if vision_verdict == "real" and vision_confidence > 0.8:
-                # Strong disagreement - Vision LLM says real with high confidence
-                # Check if DONUT/LayoutLM extracted data successfully (suggests real receipt)
-                donut_extracted = results["donut"].get("total") is not None
-                layoutlm_extracted = results["layoutlm"].get("total") is not None
-                
-                if donut_extracted or layoutlm_extracted:
-                    # Advanced models extracted data successfully - likely a false positive
-                    hybrid["final_label"] = "suspicious"
-                    hybrid["confidence"] = 0.70
-                    hybrid["recommended_action"] = "human_review"
-                    hybrid["reasoning"].append("⚠️ Conflicting signals detected")
-                    hybrid["reasoning"].append("❌ Rule-Based flagged fraud indicators")
-                    hybrid["reasoning"].append("✅ Vision LLM indicates authentic receipt")
-                    if donut_extracted:
-                        hybrid["reasoning"].append("✅ DONUT successfully extracted structured data")
-                    if layoutlm_extracted:
-                        hybrid["reasoning"].append("✅ LayoutLM successfully extracted structured data")
-                    hybrid["reasoning"].append("💡 Recommendation: Human review needed - possible OCR error in Rule-Based engine")
-                else:
-                    # No extraction data - trust Rule-Based
-                    hybrid["final_label"] = "fake"
-                    hybrid["confidence"] = 0.85
-                    hybrid["recommended_action"] = "reject"
-                    hybrid["reasoning"].append("❌ Rule-Based detected fraud indicators")
-                    hybrid["reasoning"].append("⚠️ Vision LLM disagrees but extraction engines found no data")
-            else:
-                # Vision LLM agrees or has low confidence
-                hybrid["final_label"] = "fake"
-                hybrid["confidence"] = min(0.90 + optional_boost, 0.95)
-                hybrid["recommended_action"] = "reject"
-                
-                engines_count = 2 + sum(optional_engines.values())
-                hybrid["reasoning"].append(f"❌ {engines_count}/{hybrid['total_engines']} engines indicate fraudulent receipt")
-                hybrid["reasoning"].append("❌ High fraud score detected by rule-based engine")
-                
-                if vision_verdict == "fake":
-                    hybrid["reasoning"].append("❌ Vision LLM confirms fraud indicators")
+            # Rule-Based flagged as fake (includes V1_VISION_TAMPERED if vision detected tampering)
+            hybrid["final_label"] = "fake"
+            hybrid["confidence"] = min(0.90 + optional_boost, 0.95)
+            hybrid["recommended_action"] = "reject"
+            
+            engines_count = 1 + sum(optional_engines.values())
+            hybrid["reasoning"].append(f"❌ {engines_count}/{hybrid['total_engines']} engines indicate fraudulent receipt")
+            hybrid["reasoning"].append(f"❌ Rule-based engine: FAKE (score={rule_score:.2f})")
+            
+            # Check if vision veto was triggered
+            visual_integrity = results["vision_llm"].get("visual_integrity", "unknown")
+            if visual_integrity == "tampered":
+                hybrid["reasoning"].append("🚨 Vision LLM detected clear tampering (veto triggered)")
                 
         else:
-            # Suspicious case - use vision as tiebreaker
-            if vision_verdict == "fake" and vision_confidence > 0.7:
-                hybrid["final_label"] = "fake"
-                hybrid["confidence"] = 0.85
-                hybrid["recommended_action"] = "reject"
-                hybrid["reasoning"].append("⚠️ Suspicious patterns detected")
-                hybrid["reasoning"].append("❌ Vision model detected fraud indicators")
-            elif vision_verdict == "real" and vision_confidence > 0.8:
-                hybrid["final_label"] = "real"
-                hybrid["confidence"] = 0.80
-                hybrid["recommended_action"] = "approve"
-                hybrid["reasoning"].append("✅ Vision model confirms authenticity")
-                hybrid["reasoning"].append("ℹ️ Rule-based shows moderate score")
-            else:
-                hybrid["final_label"] = "suspicious"
-                hybrid["confidence"] = 0.60
-                hybrid["recommended_action"] = "human_review"
-                hybrid["reasoning"].append("⚠️ Uncertain - requires human review")
-                hybrid["reasoning"].append("ℹ️ Mixed signals from engines")
+            # Suspicious case - defer to rule-based decision
+            hybrid["final_label"] = rule_label if rule_label in ("real", "fake", "suspicious") else "suspicious"
+            hybrid["confidence"] = 0.70
+            hybrid["recommended_action"] = "human_review"
+            hybrid["reasoning"].append(f"⚠️ Rule-based engine: {rule_label.upper()} (score={rule_score:.2f})")
+            hybrid["reasoning"].append("ℹ️ Uncertain - requires human review")
     
     results["hybrid_verdict"] = hybrid
     
