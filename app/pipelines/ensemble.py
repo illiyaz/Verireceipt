@@ -2,19 +2,20 @@
 Ensemble Intelligence System for VeriReceipt
 
 This module implements intelligent data sharing and cross-validation
-between engines to build confidence through convergence.
+between extraction engines, and produces a final decision based on the
+rule engine.
 
 Flow:
-1. Vision LLM: High-level authenticity check (visual manipulation)
-2. Advanced Extraction: DONUT/LayoutLM extract structured data
-3. Rule-Based Validation: Validate extracted data with rules
-4. Ensemble Verdict: Converge all signals with weighted confidence
+1. Advanced Extraction: DONUT/LayoutLM extract structured data
+2. Vision Assessment (veto-only): computed upstream and passed into rules
+3. Rule-Based Validation: validate extracted data with rules (primary decision)
+4. Ensemble Verdict: package rule decision + audit/reconciliation metadata
 
 Key Principles:
 - Share extracted data between engines
-- Cross-validate values (e.g., if LayoutLM says $68.89, use that in Rule-Based)
-- Weight engines by reliability for specific tasks
-- Build confidence through agreement
+- Cross-validate extracted values (e.g., if LayoutLM says $68.89, use that in Rule-Based)
+- Rules are the single source of truth for final label
+- Vision is veto-only (tampering yields a rule HARD_FAIL); ensemble never upgrades trust based on vision
 """
 
 from typing import Dict, Any, List, Tuple, Optional
@@ -38,12 +39,6 @@ class EnsembleIntelligence:
             "donut_receipt": 0.25,  # Specialized but limited training data
         }
         
-        self.authenticity_weights = {
-            "vision_llm": 0.50,     # Best for visual manipulation detection
-            "rule_based": 0.30,     # Good for structural/math validation
-            "layoutlm": 0.10,       # Confidence signal
-            "donut": 0.10,          # Data quality signal
-        }
         # Common non-merchant labels that OCR/extractors frequently confuse as merchant names
         self._MERCHANT_LABEL_BLACKLIST = {
             "invoice", "receipt", "tax invoice", "bill", "statement", "order", "total",
@@ -482,27 +477,25 @@ class EnsembleIntelligence:
             )
         )
 
-        # Step 1: Vision LLM as primary filter
-        vision_verdict = results.get("vision_llm", {}).get("verdict", "unknown")
-        raw_vision_confidence = results.get("vision_llm", {}).get("confidence", 0.0)
-        vision_confidence = self._normalize_confidence(raw_vision_confidence, default=0.0)
+        # Step 1: Capture vision assessment for audit ONLY (veto-only policy)
+        # Vision must never upgrade trust or influence the final decision here.
+        vision_assessment = (
+            (results.get("vision_assessment") or {})
+            if isinstance(results.get("vision_assessment"), dict)
+            else {}
+        )
 
-        # Audit / reconciliation trace (store it!)
         verdict["reconciliation_events"].append(
             self._new_reconciliation_event(
-                code="ENS_VISION_CONF_NORMALIZED",
-                message="Normalized Vision LLM confidence to [0,1].",
+                code="ENS_VISION_ASSESSMENT_CAPTURED",
+                message="Captured vision assessment for audit (veto-only; not used for decisioning in ensemble).",
                 evidence={
-                    "vision_verdict": vision_verdict,
-                    "raw_vision_confidence": raw_vision_confidence,
-                    "normalized_vision_confidence": vision_confidence,
+                    "visual_integrity": vision_assessment.get("visual_integrity"),
+                    "vision_confidence": self._normalize_confidence(vision_assessment.get("confidence"), default=0.0),
+                    "observable_reasons": vision_assessment.get("observable_reasons") or [],
                 },
             )
         )
-
-        vision_reasoning = results.get("vision_llm", {}).get("reasoning", "")
-        if not isinstance(vision_reasoning, str):
-            vision_reasoning = str(vision_reasoning) if vision_reasoning else ""
 
         # Step 2: Calculate agreement score
         agreement_score = self._calculate_agreement(results, converged_data)
@@ -626,8 +619,6 @@ class EnsembleIntelligence:
                         "final_label": verdict.get("final_label"),
                         "final_confidence": verdict.get("confidence"),
                         "recommended_action": verdict.get("recommended_action"),
-                        "vision_verdict": vision_verdict,
-                        "vision_confidence": vision_confidence,
                         "rule_label": rule_label,
                         "rule_score": rule_score,
                         "critical_count": critical_count,
@@ -675,7 +666,7 @@ class EnsembleIntelligence:
             lines = ["🚨 HARD FAIL: Structural inconsistencies detected"]
             for reason in hard_fail_reasons[:5]:
                 lines.append(f"   • {reason}")
-            lines.append("ℹ️ Note: Visual realism cannot override structural inconsistencies.")
+            lines.append("ℹ️ Note: Decision is rule-driven; vision is veto-only and does not upgrade trust.")
             verdict["reasoning"] = []
             seen_lines = set()
             for l in lines:
@@ -691,8 +682,6 @@ class EnsembleIntelligence:
                         "rule_score": rule_score,
                         "hard_fail_count": len(hard_fail_reasons),
                         "hard_fail_reasons_top": hard_fail_reasons[:5],
-                        "vision_verdict": vision_verdict,
-                        "vision_confidence": vision_confidence,
                         "agreement_score": agreement_score,
                     },
                 )
@@ -703,12 +692,6 @@ class EnsembleIntelligence:
         # Thresholds (tunable)
         STRONG_RULE_REJECT_SCORE = 0.85
         MODERATE_RULE_SCORE = 0.70
-
-        # Helpful flags
-        vision_is_real_strong = (vision_verdict == "real" and float(vision_confidence or 0.0) >= 0.90)
-        vision_is_real = (vision_verdict == "real" and float(vision_confidence or 0.0) >= 0.80)
-        vision_is_fake = (vision_verdict == "fake" and float(vision_confidence or 0.0) >= 0.70)
-        vision_is_low = float(vision_confidence or 0.0) < 0.50
 
         rule_fake_strong = (
             rule_label == "fake"
@@ -736,8 +719,7 @@ class EnsembleIntelligence:
             bullet_reasons = critical_reasons[:5] if critical_reasons else rule_reasons[:5]
             for reason in bullet_reasons:
                 lines.append(f"   • {reason}")
-            if vision_is_real:
-                lines.append("ℹ️ Note: Receipt may look visually authentic, but internal inconsistencies indicate fabrication.")
+            lines.append("ℹ️ Note: Decision is rule-driven; vision is veto-only and does not upgrade trust.")
             verdict["reasoning"] = []
             seen_lines = set()
             for l in lines:
@@ -752,8 +734,6 @@ class EnsembleIntelligence:
                         "rule_score": rule_score,
                         "critical_count": critical_count,
                         "critical_reasons_top": bullet_reasons[:5],
-                        "vision_verdict": vision_verdict,
-                        "vision_confidence": vision_confidence,
                     },
                 )
             )
@@ -814,8 +794,6 @@ class EnsembleIntelligence:
                 code="ENS_RULE_BASED_DECISION",
                 message="Decision based on rule engine (vision veto-only, did not interfere).",
                 evidence={
-                    "vision_verdict": vision_verdict,
-                    "vision_confidence": vision_confidence,
                     "rule_label": rule_label,
                     "rule_score": rule_score,
                     "critical_count": critical_count,
@@ -824,33 +802,8 @@ class EnsembleIntelligence:
                 },
             )
         )
-        # Final decision audit event
-        verdict["reconciliation_events"].append(
-            self._new_reconciliation_event(
-                code="ENS_FINAL_DECISION",
-                message="Final ensemble decision produced.",
-                evidence={
-                    "final_label": verdict.get("final_label"),
-                    "final_confidence": verdict.get("confidence"),
-                    "recommended_action": verdict.get("recommended_action"),
-                    "vision_verdict": vision_verdict,
-                    "vision_confidence": vision_confidence,
-                    "rule_label": rule_label,
-                    "rule_score": rule_score,
-                    "critical_count": critical_count,
-                    "agreement_score": agreement_score,
-                    "learned_rule_count": (learned_summary or {}).get("learned_rule_count"),
-                    "learned_patterns_top": (learned_summary or {}).get("patterns_top"),
-                    "learned_total_confidence_adjustment": (learned_summary or {}).get("total_confidence_adjustment"),
-                    "learned_rules_top_raw": (learned_summary or {}).get("learned_rules_top_raw"),
-                    "converged_confidence_score": (converged_data or {}).get("confidence_score"),
-                    "converged_confidence_level": (converged_data or {}).get("confidence_level"),
-                    "doc_family": doc_profile.get("doc_family"),
-                    "doc_subtype": doc_profile.get("doc_subtype"),
-                    "doc_profile_confidence": doc_profile.get("doc_profile_confidence"),
-                },
-            )
-        )
+        
+        # Emit final decision event (includes all relevant evidence)
         _emit_final_decision_event()
         return verdict
 
