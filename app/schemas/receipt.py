@@ -136,21 +136,20 @@ class ReceiptDecision:
     debug: Optional[Dict[str, Any]] = None
 
     # --- Vision / Layout extraction signals (optional) ----------------------
-    # These are *signals*, not the final ensemble decision.
-    # Populate these when available so audits can query model agreement.
-    vision_verdict: Optional[str] = None            # "real"|"fake"|"suspicious"|"unknown"
+    # Vision is veto-only: can only detect tampering, never upgrade trust.
+    # Populate these when available so audits can query vision evidence.
+    visual_integrity: Optional[str] = None          # "clean"|"suspicious"|"tampered"
     vision_confidence: Optional[float] = None       # float in [0,1]
-    vision_reasoning: Optional[str] = None          # short text (optional)
 
     layoutlm_status: Optional[str] = None           # "good"|"bad"|"error"|"n/a"|"unknown"
     layoutlm_confidence: Optional[str] = None       # "low"|"medium"|"high"|"unknown"
     layoutlm_extracted: Optional[Dict[str, Any]] = None  # e.g., {"merchant":...,"total":...,"date":...}
 
-    # --- Corroboration (vision/layout vs rules) -----------------------------
-    # Allows downstream policy/audit queries like: "vision said real but layout found no amounts".
+    # --- Corroboration (extraction vs rules) -----------------------------
+    # Cross-engine agreement signals (vision is veto-only, not part of corroboration).
     corroboration_score: Optional[float] = None     # float in [0,1] - higher means stronger cross-engine agreement
     corroboration_signals: Optional[Dict[str, Any]] = None  # structured evidence used to compute corroboration_score
-    corroboration_flags: Optional[List[str]] = None         # e.g., ["VISION_REAL_LAYOUT_MISSING_TOTAL"]
+    corroboration_flags: Optional[List[str]] = None         # e.g., ["LAYOUT_MISSING_TOTAL"]
 
     # --- Extraction confidence (normalized) ---------------------------------
     # Always prefer these two fields over any ad-hoc text_features["confidence"] usage.
