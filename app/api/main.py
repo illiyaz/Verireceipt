@@ -671,9 +671,9 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         if not VISION_AVAILABLE:
             return {
                 "error": "Vision LLM not available",
-                "verdict": "unknown",
+                "visual_integrity": "unknown",
                 "confidence": 0.0,
-                "reasoning": "Vision LLM module not available",
+                "observable_reasons": [],
                 "time_seconds": 0
             }
         
