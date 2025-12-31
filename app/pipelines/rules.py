@@ -4,7 +4,7 @@
 
 import logging
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import re
 
 from app.pipelines.features import build_features
@@ -1773,7 +1773,11 @@ def _apply_learned_rules(
     return float(non_suppressed_adjustment)
 
 
-def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) -> ReceiptDecision:
+def _score_and_explain(
+    features: ReceiptFeatures,
+    apply_learned: bool = True,
+    vision_assessment: Optional[Dict[str, Any]] = None,
+) -> ReceiptDecision:
     score = 0.0
     reasons: List[str] = []
     minor_notes: List[str] = []
@@ -1798,6 +1802,44 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
             reason_text=reason_text,
             confidence_factor=conf_factor,
         )
+
+    # ---------------------------------------------------------------------------
+    # Vision veto (veto-only): if vision detects tampering, mark HARD_FAIL.
+    # Vision can never *increase* trust; it only provides a downgrade/veto signal.
+    # ---------------------------------------------------------------------------
+    try:
+        va = vision_assessment or {}
+        vi = str(va.get("visual_integrity") or "").strip().lower()
+        vconf = va.get("confidence")
+        try:
+            vconf_f = float(vconf) if vconf is not None else 0.0
+        except Exception:
+            vconf_f = 0.0
+
+        # Accept alternate key names for backward compatibility
+        if not vi and isinstance(va.get("raw"), dict):
+            vi = str(va["raw"].get("visual_integrity") or "").strip().lower()
+
+        if vi == "tampered":
+            emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="V1_VISION_TAMPERED",
+                severity="HARD_FAIL",
+                weight=0.50,  # weight irrelevant for label; HARD_FAIL drives label=fake
+                message="Vision detected clear tampering",
+                evidence={
+                    "visual_integrity": "tampered",
+                    "confidence": vconf_f,
+                    "observable_reasons": va.get("observable_reasons")
+                    or va.get("claims")
+                    or (va.get("raw") or {}).get("observable_reasons")
+                    or [],
+                },
+                reason_text="🚨 Vision detected clear tampering (veto)",
+            )
+    except Exception as e:
+        logger.warning(f"Vision veto evaluation failed: {e}")
 
     source_type = ff.get("source_type")
 
@@ -2347,6 +2389,7 @@ def _score_and_explain(features: ReceiptFeatures, apply_learned: bool = True) ->
         engine_version=ENGINE_VERSION,
         debug={
             "doc_profile": geo_profile_debug,
+            "vision_assessment": vision_assessment or {},
         },
     )
 
@@ -2360,7 +2403,8 @@ def analyze_receipt(
     extracted_total: str = None,
     extracted_merchant: str = None,
     extracted_date: str = None,
-    apply_learned: bool = True
+    apply_learned: bool = True,
+    vision_assessment: Optional[Dict[str, Any]] = None,
 ) -> ReceiptDecision:
     """
     Main entry point for receipt analysis.
@@ -2371,6 +2415,7 @@ def analyze_receipt(
         extracted_merchant: Optional pre-extracted merchant from other engines
         extracted_date: Optional pre-extracted date from other engines
         apply_learned: Whether to apply learned rules from feedback
+        vision_assessment: Optional vision veto payload from vision_llm (e.g., {"visual_integrity": "clean|suspicious|tampered", "confidence": 0..1, "observable_reasons": [...]})
         
     Returns:
         ReceiptDecision with label, score, reasons, and audit events
@@ -2394,5 +2439,5 @@ def analyze_receipt(
         features.text_features["date_extracted"] = extracted_date
     
     # 4. Run rule-based analysis
-    return _score_and_explain(features, apply_learned=apply_learned)
+    return _score_and_explain(features, apply_learned=apply_learned, vision_assessment=vision_assessment)
     

@@ -573,7 +573,15 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     def run_rule_based():
         start = time_module.time()
         try:
-            decision = analyze_receipt(str(temp_path))
+            # Pass vision assessment if available
+            vision_assess = None
+            if not results.get("vision_llm", {}).get("error"):
+                vision_assess = {
+                    "visual_integrity": results["vision_llm"].get("verdict", "unknown"),
+                    "confidence": results["vision_llm"].get("confidence", 0.0),
+                    "observable_reasons": results["vision_llm"].get("reasoning", "").split(". ") if results["vision_llm"].get("reasoning") else [],
+                }
+            decision = analyze_receipt(str(temp_path), vision_assessment=vision_assess)
             decision.finalize_defaults()
             elapsed = time_module.time() - start
 
@@ -762,6 +770,15 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     extracted_merchant = results["layoutlm"].get("merchant") if not results["layoutlm"].get("error") else None
     extracted_date = results["layoutlm"].get("date") if not results["layoutlm"].get("error") else None
     
+    # Extract vision assessment for veto-only signal
+    vision_assessment = None
+    if not results["vision_llm"].get("error"):
+        vision_assessment = {
+            "visual_integrity": results["vision_llm"].get("verdict", "unknown"),
+            "confidence": results["vision_llm"].get("confidence", 0.0),
+            "observable_reasons": results["vision_llm"].get("reasoning", "").split(". ") if results["vision_llm"].get("reasoning") else [],
+        }
+    
     if extracted_total or extracted_merchant or extracted_date:
         print(f"   📊 Using extracted data: Total={extracted_total}, Merchant={extracted_merchant}")
         # Format total properly
@@ -776,7 +793,8 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 str(temp_path),
                 extracted_total=extracted_total,
                 extracted_merchant=extracted_merchant,
-                extracted_date=extracted_date
+                extracted_date=extracted_date,
+                vision_assessment=vision_assessment
             )
             # Preserve full decision payload for ensemble/audit
             try:
