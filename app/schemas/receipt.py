@@ -233,6 +233,10 @@ class ReceiptDecision:
         if d.get("missing_field_gate") is None:
             d["missing_field_gate"] = None
 
+        # Ensure legacy events is always an empty list when unused
+        if d.get("events") is None:
+            d["events"] = []
+
         # Ensure nested dataclasses remain JSON-friendly
         d["audit_events"] = [
             e.to_dict() if hasattr(e, "to_dict") else e
