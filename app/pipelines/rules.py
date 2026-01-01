@@ -1,7 +1,5 @@
 # app/pipelines/rules.py
 
-# app/pipelines/rules.py
-
 import logging
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Union
@@ -58,20 +56,20 @@ def _emit_event(
         cf_used = max(0.60, min(1.00, cf))
         applied_w = raw_w * cf_used
 
+    # Copy evidence upfront to avoid mutating caller's dict
+    base_evidence = dict(evidence or {})
+    base_evidence.setdefault("confidence_factor", cf_used)
+    base_evidence.setdefault("raw_weight", raw_w)
+    base_evidence.setdefault("applied_weight", applied_w)
+
     ev = RuleEvent(
         rule_id=rule_id,
         severity=sev,
         weight=applied_w,
         raw_weight=raw_w,
         message=str(message or ""),
-        evidence=evidence or {},
+        evidence=base_evidence,
     )
-
-    # copy evidence and attach audit fields
-    ev.evidence = dict(ev.evidence or {})
-    ev.evidence.setdefault("confidence_factor", cf_used)
-    ev.evidence.setdefault("raw_weight", raw_w)
-    ev.evidence.setdefault("applied_weight", applied_w)
     events.append(ev)
 
     # Keep backward compatibility for UI: append text reasons with tags when requested
@@ -106,24 +104,53 @@ def _confidence_factor_from_features(
     """
     Returns a multiplicative factor in [0.6, 1.0] to scale *soft* rule weights.
     We DO NOT down-weight HARD_FAIL rules.
+    
+    Priority order:
+    1. extraction_confidence_score (canonical 0-1 field)
+    2. extraction_confidence_level (canonical "low"/"medium"/"high")
+    3. tf["confidence"] (legacy field)
+    4. Default to 0.70
     """
-    c = tf.get("confidence")
-
     conf: Optional[float] = None
-    if isinstance(c, (int, float)):
+    
+    # Priority 1: Use canonical extraction_confidence_score if available
+    ext_score = tf.get("extraction_confidence_score")
+    if ext_score is not None and isinstance(ext_score, (int, float)):
         try:
-            conf = float(c)
+            conf = float(ext_score)
         except Exception:
-            conf = None
-    elif isinstance(c, str):
-        cl = c.strip().lower()
-        if cl in ("high", "h"):
-            conf = 0.90
-        elif cl in ("medium", "med", "m"):
-            conf = 0.70
-        elif cl in ("low", "l"):
-            conf = 0.45
-
+            pass
+    
+    # Priority 2: Use canonical extraction_confidence_level if available
+    if conf is None:
+        ext_level = tf.get("extraction_confidence_level")
+        if ext_level and isinstance(ext_level, str):
+            el = ext_level.strip().lower()
+            if el == "high":
+                conf = 0.90
+            elif el == "medium":
+                conf = 0.70
+            elif el == "low":
+                conf = 0.45
+    
+    # Priority 3: Fall back to legacy tf["confidence"]
+    if conf is None:
+        c = tf.get("confidence")
+        if isinstance(c, (int, float)):
+            try:
+                conf = float(c)
+            except Exception:
+                pass
+        elif isinstance(c, str):
+            cl = c.strip().lower()
+            if cl in ("high", "h"):
+                conf = 0.90
+            elif cl in ("medium", "med", "m"):
+                conf = 0.70
+            elif cl in ("low", "l"):
+                conf = 0.45
+    
+    # Priority 4: Default
     if conf is None:
         conf = 0.70
 
@@ -386,24 +413,18 @@ def _looks_like_gstin(text: str) -> bool:
     """Indian GSTIN: 15 chars: 2 digits + 10 PAN chars + 1 + Z + 1.
     Example: 27AAPFU0939F1ZV
     """
-    import re
-
     t = (text or "").upper()
     return bool(re.search(r"\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b", t))
 
 
 def _looks_like_pan(text: str) -> bool:
     """Indian PAN: 10 chars: 5 letters + 4 digits + 1 letter."""
-    import re
-
     t = (text or "").upper()
     return bool(re.search(r"\b[A-Z]{5}\d{4}[A-Z]\b", t))
 
 
 def _looks_like_ein(text: str) -> bool:
     """US EIN: 2 digits hyphen 7 digits (e.g., 12-3456789)."""
-    import re
-
     t = (text or "")
     return bool(re.search(r"\b\d{2}-\d{7}\b", t))
 
@@ -478,8 +499,6 @@ def _detect_us_state_hint(text: str) -> bool:
 
 def _detect_india_hint(text: str) -> bool:
     """Lightweight India signal: state names, PIN (6 digits), +91, INR."""
-    import re
-
     t = (text or "").lower()
     if "+91" in t or "india" in t or " inr" in t or "₹" in t:
         return True
@@ -515,7 +534,6 @@ def _detect_canada_hint(text: str) -> bool:
     Lightweight Canada signal: looks for province names, cities, tax terms, +1 with Canadian context,
     or Canadian postal codes (e.g., M5V 2T6).
     """
-    import re
     t = (text or "").lower()
     # Province/city/region hints
     canada_hints = [
@@ -557,7 +575,6 @@ def _normalize_text_for_geo(text: str) -> str:
 
 def _detect_uk_hint(text: str) -> bool:
     """Lightweight UK signal: UK country/city terms, VAT, UK postcodes, +44."""
-    import re
     t = (text or "").lower()
     if "+44" in t or "united kingdom" in t or "uk" in t or "london" in t or "england" in t or "scotland" in t:
         return True
@@ -571,7 +588,6 @@ def _detect_uk_hint(text: str) -> bool:
 
 def _detect_eu_hint(text: str) -> bool:
     """Lightweight EU signal: EUR, VAT, common EU country/city names, EU VAT ID-like patterns."""
-    import re
     t = (text or "").lower()
     eu_hints = [
         "europe", "eu ", "germany", "berlin", "france", "paris", "spain", "madrid", "italy", "rome",
@@ -592,7 +608,6 @@ def _detect_eu_hint(text: str) -> bool:
 
 def _detect_sg_hint(text: str) -> bool:
     """Lightweight Singapore signal: SG/ Singapore, +65, GST (SG), postal codes (6 digits)."""
-    import re
     t = (text or "").lower()
     if "singapore" in t or " sg " in _normalize_text_for_geo(t) or "+65" in t:
         return True
@@ -607,7 +622,6 @@ def _detect_sg_hint(text: str) -> bool:
 
 def _detect_au_hint(text: str) -> bool:
     """Lightweight Australia signal: Australia, AU, +61, states, GST (AU), ABN."""
-    import re
     t = (text or "").lower()
     if "australia" in t or "+61" in t:
         return True
@@ -676,7 +690,6 @@ def _detect_jordan_hint(text: str) -> bool:
 
 def _detect_nz_hint(text: str) -> bool:
     """Lightweight New Zealand signal: New Zealand, NZ, +64, GST (NZ), IRD, cities."""
-    import re
     t = (text or "").lower()
     if "new zealand" in t or "+64" in t:
         return True
@@ -710,7 +723,6 @@ def _detect_nz_hint(text: str) -> bool:
 # -------------------- East Asia geo detectors --------------------
 def _detect_jp_hint(text: str) -> bool:
     """Lightweight Japan signal: Japan, JP, +81, common cities, JPY/¥, consumption tax."""
-    import re
     t = (text or "").lower()
     if "japan" in t or "+81" in t:
         return True
