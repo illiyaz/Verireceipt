@@ -197,26 +197,54 @@ class ReceiptDecision:
     events: Optional[List[Dict[str, Any]]] = None
 
     def finalize_defaults(self) -> None:
-        """Fill decision_id/created_at (and audit event ids/timestamps) if missing."""
+        """Fill decision_id/created_at and normalize internal invariants."""
+
+        # --- Identity / timestamps ---
         if not self.decision_id:
             self.decision_id = str(uuid.uuid4())
         if not self.created_at:
             self.created_at = datetime.now(timezone.utc).isoformat()
 
-        # Finalize nested audit events for persistence
-        if self.audit_events:
-            for e in self.audit_events:
-                if hasattr(e, "finalize_defaults"):
-                    e.finalize_defaults()
-        # Learned rule audits are plain dataclasses; nothing to finalize, but keep for symmetry
+        # --- Normalize list fields (never None) ---
+        if self.reasons is None:
+            self.reasons = []
+
+        if self.minor_notes is None:
+            self.minor_notes = []
+
+        if self.events is None:
+            self.events = []
+
+        if self.audit_events is None:
+            self.audit_events = []
+
         if self.learned_rule_audits is None:
             self.learned_rule_audits = []
-        if self.layoutlm_extracted is None:
-            self.layoutlm_extracted = None
-        if self.corroboration_signals is None:
-            self.corroboration_signals = None
+
         if self.corroboration_flags is None:
             self.corroboration_flags = []
+
+        # --- Normalize optional dict payloads ---
+        # These are allowed to be None, but must never be "missing"
+        if self.debug is None:
+            self.debug = None
+
+        if self.missing_field_gate is None:
+            self.missing_field_gate = None
+
+        if self.corroboration_signals is None:
+            self.corroboration_signals = None
+
+        if self.layoutlm_extracted is None:
+            self.layoutlm_extracted = None
+
+        if self.input_fingerprint is None:
+            self.input_fingerprint = None
+
+        # --- Finalize nested audit events ---
+        for e in self.audit_events:
+            if hasattr(e, "finalize_defaults"):
+                e.finalize_defaults()
 
     def add_audit_event(self, event: AuditEvent) -> None:
         """Append an AuditEvent to the decision (auto-filling ids/timestamps)."""
@@ -228,37 +256,28 @@ class ReceiptDecision:
         """Append a LearnedRuleAudit to the decision."""
         self.learned_rule_audits.append(audit)
 
+    def set_missing_field_gate(self, enabled: bool, evidence: Optional[Dict[str, Any]] = None) -> None:
+        """Set missing-field penalty gate and its structured evidence."""
+        self.missing_fields_enabled = bool(enabled)
+        self.missing_field_gate = evidence or None
+
     def to_dict(self) -> Dict[str, Any]:
-        """Return a JSON-serializable dict for persistence."""
+        """Return a JSON-serializable dict for persistence.
+        
+        Note: finalize_defaults() enforces all invariants (lists are lists, etc.).
+        This method only handles serialization of nested dataclasses.
+        """
         self.finalize_defaults()
         d = asdict(self)
 
-        # Defensive: ensure gate evidence is JSON-friendly
-        if d.get("missing_field_gate") is None:
-            d["missing_field_gate"] = None
-
-        # Ensure legacy events is always an empty list when unused
-        if d.get("events") is None:
-            d["events"] = []
-
-        # Ensure nested dataclasses remain JSON-friendly
+        # Serialize nested dataclasses to dicts
         d["audit_events"] = [
             e.to_dict() if hasattr(e, "to_dict") else e
-            for e in (self.audit_events or [])
+            for e in self.audit_events
         ]
         d["learned_rule_audits"] = [
             a.to_dict() if hasattr(a, "to_dict") else a
-            for a in (self.learned_rule_audits or [])
+            for a in self.learned_rule_audits
         ]
-        
-        # Ensure audit trails are always lists for consumers
-        if d.get("audit_events") is None:
-            d["audit_events"] = []
-        if d.get("learned_rule_audits") is None:
-            d["learned_rule_audits"] = []
-        
-        # Normalize minor_notes to a list for API consumers
-        if d.get("minor_notes") is None:
-            d["minor_notes"] = []
-        
+
         return d
