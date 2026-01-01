@@ -48,6 +48,46 @@ Complete redesign of vision LLM integration to enforce strict veto-only behavior
 
 ### Added
 
+#### Rules Engine Improvements (13 Critical Fixes)
+Complete overhaul of `app/pipelines/rules.py` for robustness, accuracy, and maintainability.
+
+**Currency Detection Hardening:**
+- Fixed duplicate `_currency_hint()` definitions (renamed to `_currency_hint_base()`)
+- Hardened short currency prefix detection (rm, rp) with regex word boundaries
+- Added case-sensitive HK$ check to prevent false negatives
+- Prevents false positives: "frm", "term", "property", "grp"
+
+**Travel/Hospitality Softener:**
+- Check travel context upfront (before emission)
+- Reduce weights at emission time (not after):
+  - Currency mismatch: 0.30 → 0.15 for travel
+  - Tax mismatch: 0.18 → 0.10 for travel
+- Downgrade severity: CRITICAL → WARNING for travel
+- Apply to BOTH currency AND tax mismatches
+- Prevents aggressive false positives on cross-border receipts
+
+**Confidence-Based Rule Scaling:**
+- Updated `_confidence_factor_from_features()` priority order:
+  1. `extraction_confidence_score` (canonical 0-1 field)
+  2. `extraction_confidence_level` (canonical "low"/"medium"/"high")
+  3. `tf["confidence"]` (legacy field)
+  4. Default to 0.70
+- Matches `ReceiptDecision` schema preferences
+- More accurate confidence-based rule scaling
+
+**Evidence Mutation Prevention:**
+- Copy evidence dict upfront in `_emit_event()`
+- Changed: `base_evidence = evidence or {}` → `base_evidence = dict(evidence or {})`
+- Prevents accidental mutation of caller's dict
+- Eliminates subtle mutation bugs
+
+**Code Quality:**
+- Removed 12 redundant `import re` statements from helper functions
+- Removed duplicate header comment
+- Replaced 7 `print()` statements with `logger.debug()`
+- Removed unused `_detect_sea_hint()` function
+- Fixed `_detect_document_type()` docstring to match behavior
+
 #### Vision Veto System
 - **Canonical Function:** `build_vision_assessment()` (lines 493-595 in `vision_llm.py`)
 - **Veto Event:** `V1_VISION_TAMPERED` with severity `HARD_FAIL`
@@ -184,6 +224,8 @@ python tests/test_vision_veto_golden.py  # Functional validation
 - **Consistent Behavior:** Single entry point, single contract
 - **Auditable:** Clear evidence trail for all vision decisions
 - **Safe:** No probabilistic influence on approvals
+- **Robust Currency Detection:** Regex word boundaries prevent false positives
+- **Evidence Safety:** No mutation bugs from shared dict references
 
 #### 🔒 Security
 - **Veto-Only:** Vision can only detect tampering, never approve
@@ -196,6 +238,13 @@ python tests/test_vision_veto_golden.py  # Functional validation
 - **Structured Events:** `V1_VISION_TAMPERED` with evidence
 - **Observable Reasons:** Human-readable tampering indicators
 - **Debug Info:** Complete vision output for investigation
+- **Production Logging:** logger.debug() instead of print() spam
+
+#### 🌍 Global Coverage
+- **Travel-Friendly:** Cross-border receipts get WARNING not CRITICAL
+- **Currency Accuracy:** Hardened detection for MYR, IDR, HKD
+- **Confidence Priority:** Uses canonical extraction_confidence_score first
+- **Geo Softening:** Legitimate travel receipts less likely rejected
 
 ### Mental Model
 
