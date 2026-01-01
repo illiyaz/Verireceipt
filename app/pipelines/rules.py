@@ -1670,8 +1670,22 @@ def _is_critical_reason(reason: str) -> bool:
 # Learned Rules Mini-Engine
 # ---------------------------------------------------------------------------
 
-def _learned_rule_dedupe_key(raw: str) -> str:
-    """Stable dedupe key for learned rule triggers."""
+def _learned_rule_dedupe_key(raw: str, parsed: Optional[Dict[str, Any]] = None) -> str:
+    """Stable dedupe key for learned rule triggers.
+    
+    Uses semantic key (pattern + missing list) for better deduplication.
+    Falls back to normalized raw string if parsing unavailable.
+    """
+    if parsed:
+        pattern = parsed.get("pattern", "unknown")
+        missing = parsed.get("missing", [])
+        if missing:
+            # Semantic key: pattern + sorted missing list
+            missing_key = tuple(sorted(missing)) if isinstance(missing, list) else ()
+            return f"{pattern}:{missing_key}"
+        return pattern
+    
+    # Fallback: normalized raw string
     s = (raw or "").strip().lower()
     s = re.sub(r"\s+", " ", s)  # collapse whitespace
     return s
@@ -1684,6 +1698,7 @@ def _parse_learned_rule(raw: str) -> Dict[str, Any]:
         "pattern": "unknown",
         "times_seen": None,
         "confidence_adjustment": 0.0,
+        "missing": [],
     }
 
     m = re.search(r"pattern detected:\s*([a-zA-Z0-9_\-]+)", raw or "", flags=re.IGNORECASE)
@@ -1703,6 +1718,14 @@ def _parse_learned_rule(raw: str) -> Dict[str, Any]:
             out["confidence_adjustment"] = float(m3.group(1))
         except Exception:
             out["confidence_adjustment"] = 0.0
+    
+    # Parse missing elements list for better deduplication
+    if "missing critical elements:" in (raw or "").lower():
+        # Extract comma-separated list after "Missing critical elements:"
+        m4 = re.search(r"Missing critical elements:\s*([^.]+)", raw or "", flags=re.IGNORECASE)
+        if m4:
+            missing_str = m4.group(1).strip()
+            out["missing"] = [x.strip() for x in missing_str.split(",") if x.strip()]
 
     return out
 
@@ -1732,26 +1755,46 @@ def _apply_learned_rules(
     seen = set()
     for rule in (triggered_rules or []):
         raw = str(rule or "")
-        key = _learned_rule_dedupe_key(raw)
+        parsed = _parse_learned_rule(raw)
+        
+        # Semantic deduplication using pattern + missing list
+        key = _learned_rule_dedupe_key(raw, parsed)
         if not key or key in seen:
             continue
         seen.add(key)
 
-        parsed = _parse_learned_rule(raw)
         pattern = parsed.get("pattern") or "unknown"
         conf_adj = float(parsed.get("confidence_adjustment") or 0.0)
 
         is_missing_elements = ("missing_elements" in raw.lower()) or (str(pattern).lower() == "missing_elements")
         suppressed = bool(is_missing_elements and (not missing_fields_enabled))
 
-        if not suppressed:
-            non_suppressed_adjustment += conf_adj
-
-        # User-facing reasons: mark suppressed explicitly
+        # HARD STOP: If missing_elements is gated, emit audit-only event and continue
         if suppressed:
             reasons.append(f"ℹ️ [INFO] Learned Rule (suppressed): {raw}")
-        else:
-            reasons.append(f"[INFO] 🎓 Learned Rule: {raw}")
+            _emit_event(
+                events=events,
+                reasons=None,
+                rule_id="LR_LEARNED_PATTERN_SUPPRESSED",
+                severity="INFO",
+                weight=0.0,
+                message="Learned missing-elements rule suppressed by gate",
+                evidence={
+                    "pattern": pattern,
+                    "times_seen": parsed.get("times_seen"),
+                    "raw": raw,
+                    "confidence_adjustment": conf_adj,
+                    "suppressed": True,
+                    "applied_to_score": False,
+                    "missing_fields_enabled": missing_fields_enabled,
+                },
+                confidence_factor=1.0,
+            )
+            continue  # CRITICAL: Skip score mutation
+        
+        # Not suppressed - apply to score
+        non_suppressed_adjustment += conf_adj
+        reasons.append(f"[INFO] 🎓 Learned Rule: {raw}")
 
         gating = {
             "doc_family": doc_profile.get("family") if isinstance(doc_profile, dict) else None,
@@ -1759,24 +1802,24 @@ def _apply_learned_rules(
             "doc_profile_confidence": dp_conf,
             "optional_subtype": optional_subtype,
             "missing_fields_enabled": missing_fields_enabled,
-            "suppressed": suppressed,
+            "suppressed": False,
         }
 
-        # Use standard emitter
+        # Emit scoring event (not suppressed)
         _emit_event(
             events=events,
             reasons=None,
             rule_id="LR_LEARNED_PATTERN",
             severity="INFO",
-            weight=0.0,
-            message=f"Learned rule triggered{' (suppressed by missing-field gate)' if suppressed else ''}",
+            weight=0.0,  # Learned rules don't use weight system, they adjust score directly
+            message="Learned rule triggered",
             evidence={
                 "pattern": pattern,
                 "times_seen": parsed.get("times_seen"),
                 "raw": raw,
                 "confidence_adjustment": conf_adj,
-                "suppressed": suppressed,
-                "applied_to_score": (not suppressed),
+                "suppressed": False,
+                "applied_to_score": True,
                 "gating": gating,
             },
             confidence_factor=1.0,
