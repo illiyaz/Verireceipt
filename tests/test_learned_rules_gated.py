@@ -74,22 +74,22 @@ def test_missing_elements_gated_no_score():
                 "GATE_MISSING_FIELDS event not found. Missing-field gate not activated."
             )
             
-            # Verify suppressed learned rule event exists
-            suppressed_events = [
-                e for e in (decision.events or [])
-                if e.get("rule_id") == "LR_LEARNED_PATTERN_SUPPRESSED"
-            ]
-            
             # Check if any learned rules were triggered
             learned_events = [
                 e for e in (decision.events or [])
-                if e.get("rule_id") in ("LR_LEARNED_PATTERN", "LR_LEARNED_PATTERN_SUPPRESSED")
+                if e.get("rule_id") == "LR_LEARNED_PATTERN"
             ]
             
             if learned_events:
+                # Find suppressed learned rule events (suppressed=True in evidence)
+                suppressed_events = [
+                    e for e in learned_events
+                    if e.get("evidence", {}).get("suppressed") is True
+                ]
+                
                 # If learned rules were triggered, verify suppressed ones exist
                 assert len(suppressed_events) > 0, (
-                    "Learned rules triggered but no LR_LEARNED_PATTERN_SUPPRESSED events found. "
+                    "Learned rules triggered but no suppressed events found. "
                     "Missing_elements rules may not be properly suppressed."
                 )
                 
@@ -105,9 +105,9 @@ def test_missing_elements_gated_no_score():
             
             # Verify no non-suppressed missing_elements learned rules
             non_suppressed_missing = [
-                e for e in (decision.events or [])
-                if e.get("rule_id") == "LR_LEARNED_PATTERN"
-                and "missing_elements" in str(e.get("evidence", {}).get("pattern", "")).lower()
+                e for e in learned_events
+                if "missing_elements" in str(e.get("evidence", {}).get("pattern", "")).lower()
+                and e.get("evidence", {}).get("suppressed") is not True
             ]
             assert len(non_suppressed_missing) == 0, (
                 f"Found {len(non_suppressed_missing)} non-suppressed missing_elements learned rules. "

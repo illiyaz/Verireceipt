@@ -1741,95 +1741,136 @@ def _apply_learned_rules(
     dp_conf: float,
     optional_subtype: bool,
 ) -> float:
-    """
-    Apply learned-rule adjustments safely.
+    """Apply learned-rule adjustments safely.
 
     Guarantees:
-    - Dedupe duplicate triggers.
+    - Dedupe duplicate triggers (semantic-first; raw fallback).
     - Suppress `missing_elements` when missing-field gate is OFF.
     - Only non-suppressed adjustments affect score.
     - Soft-gating factors are applied exactly once.
+    - Adjustment is clamped to a sane range to avoid runaway scores.
     """
+
+    def _safe_float(v: Any, default: float = 0.0) -> float:
+        try:
+            if v is None:
+                return float(default)
+            f = float(v)
+            if f != f:  # NaN
+                return float(default)
+            if f == float("inf") or f == float("-inf"):
+                return float(default)
+            return f
+        except Exception:
+            return float(default)
+
+    def _semantic_key(parsed: Dict[str, Any], raw: str) -> str:
+        """Prefer a semantic dedupe key; fall back to a normalized raw string."""
+        try:
+            pat = str(parsed.get("pattern") or "").strip().lower()
+            missing = parsed.get("missing") or parsed.get("missing_fields") or []
+            if isinstance(missing, str):
+                missing = [missing]
+            if isinstance(missing, list):
+                missing_norm = tuple(sorted({str(x).strip().lower() for x in missing if str(x).strip()}))
+            else:
+                missing_norm = tuple()
+            if pat or missing_norm:
+                return f"{pat}|{missing_norm}"
+        except Exception:
+            pass
+        # Raw fallback (collapse whitespace)
+        r = " ".join(str(raw or "").strip().lower().split())
+        return r
+
     non_suppressed_adjustment = 0.0
 
-    seen = set()
+    seen: set = set()
     for rule in (triggered_rules or []):
         raw = str(rule or "")
-        parsed = _parse_learned_rule(raw)
-        
-        # Semantic deduplication using pattern + missing list
-        key = _learned_rule_dedupe_key(raw, parsed)
+
+        # Parse once; never let parsing break the main engine.
+        try:
+            parsed = _parse_learned_rule(raw)
+            if not isinstance(parsed, dict):
+                parsed = {}
+        except Exception:
+            parsed = {}
+
+        pattern = parsed.get("pattern") or "unknown"
+        conf_adj = _safe_float(parsed.get("confidence_adjustment"), default=0.0)
+
+        # Dedupe: semantic-first
+        key = _semantic_key(parsed, raw)
         if not key or key in seen:
             continue
         seen.add(key)
 
-        pattern = parsed.get("pattern") or "unknown"
-        conf_adj = float(parsed.get("confidence_adjustment") or 0.0)
+        # Identify missing-elements style learned rules
+        is_missing_elements = (
+            "missing_elements" in str(raw).lower()
+            or str(pattern).strip().lower() == "missing_elements"
+        )
 
-        is_missing_elements = ("missing_elements" in raw.lower()) or (str(pattern).lower() == "missing_elements")
+        # Suppress when missing-field gate is OFF (audit-only)
         suppressed = bool(is_missing_elements and (not missing_fields_enabled))
 
-        # HARD STOP: If missing_elements is gated, emit audit-only event and continue
+        # Clamp per-rule adjustment to avoid runaway behavior from noisy feedback.
+        # (You can widen this later, but this is safe for early production.)
+        conf_adj = max(-0.50, min(0.50, float(conf_adj)))
+
+        if not suppressed:
+            non_suppressed_adjustment += float(conf_adj)
+
+        # User-facing reasons: mark suppressed explicitly
         if suppressed:
             reasons.append(f"ℹ️ [INFO] Learned Rule (suppressed): {raw}")
-            _emit_event(
-                events=events,
-                reasons=None,
-                rule_id="LR_LEARNED_PATTERN_SUPPRESSED",
-                severity="INFO",
-                weight=0.0,
-                message="Learned missing-elements rule suppressed by gate",
-                evidence={
-                    "pattern": pattern,
-                    "times_seen": parsed.get("times_seen"),
-                    "raw": raw,
-                    "confidence_adjustment": conf_adj,
-                    "suppressed": True,
-                    "applied_to_score": False,
-                    "missing_fields_enabled": missing_fields_enabled,
-                },
-                confidence_factor=1.0,
-            )
-            continue  # CRITICAL: Skip score mutation
-        
-        # Not suppressed - apply to score
-        non_suppressed_adjustment += conf_adj
-        reasons.append(f"[INFO] 🎓 Learned Rule: {raw}")
+        else:
+            reasons.append(f"[INFO] 🎓 Learned Rule: {raw}")
 
         gating = {
             "doc_family": doc_profile.get("family") if isinstance(doc_profile, dict) else None,
             "doc_subtype": doc_profile.get("subtype") if isinstance(doc_profile, dict) else None,
-            "doc_profile_confidence": dp_conf,
-            "optional_subtype": optional_subtype,
-            "missing_fields_enabled": missing_fields_enabled,
-            "suppressed": False,
+            "doc_profile_confidence": _safe_float(dp_conf, default=0.0),
+            "optional_subtype": bool(optional_subtype),
+            "missing_fields_enabled": bool(missing_fields_enabled),
+            "suppressed": bool(suppressed),
         }
 
-        # Emit scoring event (not suppressed)
+        # Audit-only event (never contributes to score directly)
         _emit_event(
             events=events,
             reasons=None,
             rule_id="LR_LEARNED_PATTERN",
             severity="INFO",
-            weight=0.0,  # Learned rules don't use weight system, they adjust score directly
-            message="Learned rule triggered",
+            weight=0.0,
+            message=(
+                "Learned rule triggered (suppressed by missing-field gate)"
+                if suppressed
+                else "Learned rule triggered"
+            ),
             evidence={
                 "pattern": pattern,
                 "times_seen": parsed.get("times_seen"),
+                "missing": parsed.get("missing") or parsed.get("missing_fields"),
                 "raw": raw,
                 "confidence_adjustment": conf_adj,
-                "suppressed": False,
-                "applied_to_score": True,
+                "suppressed": suppressed,
+                "applied_to_score": (not suppressed),
                 "gating": gating,
             },
             confidence_factor=1.0,
         )
 
-    # Apply soft-gating exactly once
-    if dp_conf < 0.55:
+    # Apply soft-gating exactly once (document confidence + subtype optionality)
+    dp_conf_f = _safe_float(dp_conf, default=0.0)
+    if dp_conf_f < 0.55:
         non_suppressed_adjustment *= 0.65
     if optional_subtype:
         non_suppressed_adjustment *= 0.60
+
+    # Final clamp on total adjustment to avoid score spikes
+    non_suppressed_adjustment = max(-1.0, min(1.0, float(non_suppressed_adjustment)))
 
     return float(non_suppressed_adjustment)
 
