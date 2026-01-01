@@ -411,6 +411,15 @@ async def batch_analyze_endpoint(files: List[UploadFile] = File(..., description
             processing_time_ms = (time.time() - file_start) * 1000
             analysis_ref = store.save_analysis(str(tmp_path), decision)
             
+            # Serialize audit events to dicts (safe for API response)
+            audit_events_dicts = [e.to_dict() if hasattr(e, "to_dict") else e for e in (decision.audit_events or [])]
+            
+            # Generate formatted audit report for human review (best-effort)
+            try:
+                audit_report = format_audit_for_human_review(decision.to_dict())
+            except Exception as e:
+                audit_report = f"Error generating audit report: {str(e)}"
+            
             results.append(AnalyzeResponse(
                 label=decision.label,
                 score=decision.score,
@@ -419,6 +428,23 @@ async def batch_analyze_endpoint(files: List[UploadFile] = File(..., description
                 processing_time_ms=round(processing_time_ms, 2),
                 receipt_ref=None,
                 analysis_ref=analysis_ref,
+                
+                # Enriched decision metadata (all optional on AnalyzeResponse)
+                rule_version=getattr(decision, "rule_version", None),
+                policy_version=getattr(decision, "policy_version", None),
+                policy_name=getattr(decision, "policy_name", None),
+                engine_version=getattr(decision, "engine_version", None),
+                decision_id=getattr(decision, "decision_id", None),
+                created_at=getattr(decision, "created_at", None),
+                
+                extraction_confidence_score=getattr(decision, "extraction_confidence_score", None),
+                extraction_confidence_level=getattr(decision, "extraction_confidence_level", None),
+                
+                normalized_total=getattr(decision, "normalized_total", None),
+                currency=getattr(decision, "currency", None),
+                
+                audit_events=audit_events_dicts,
+                audit_report=audit_report,
             ))
         except Exception:
             # Skip failed files but continue processing
@@ -1353,12 +1379,70 @@ async def analyze_hybrid_stream(file: UploadFile = File(...)):
             decision = analyze_receipt(str(temp_path))
             decision.finalize_defaults()
             elapsed = time_module.time() - start
+            
+            # Best-effort full decision payload for downstream consumers
+            try:
+                decision_dict = decision.to_dict() if hasattr(decision, "to_dict") else {}
+            except Exception:
+                decision_dict = {}
+            
+            # Serialize audit events to dicts
+            audit_events_dicts = [
+                e.to_dict() if hasattr(e, "to_dict") else e
+                for e in (getattr(decision, "audit_events", None) or [])
+            ]
+            
+            # Generate formatted audit report for human review (best-effort)
+            try:
+                audit_report = format_audit_for_human_review(decision_dict or {})
+            except Exception as e:
+                audit_report = f"Error generating audit report: {str(e)}"
+            
             result = {
                 "label": decision.label,
                 "score": decision.score,
                 "reasons": decision.reasons,
                 "minor_notes": decision.minor_notes,
-                "time_seconds": round(elapsed, 2)
+                "time_seconds": round(elapsed, 2),
+                
+                # Version / provenance
+                "rule_version": getattr(decision, "rule_version", None),
+                "policy_version": getattr(decision, "policy_version", None),
+                "policy_name": getattr(decision, "policy_name", None),
+                "engine_version": getattr(decision, "engine_version", None),
+                "decision_id": getattr(decision, "decision_id", None),
+                "created_at": getattr(decision, "created_at", None),
+                
+                # Confidence + money
+                "extraction_confidence_score": getattr(decision, "extraction_confidence_score", None),
+                "extraction_confidence_level": getattr(decision, "extraction_confidence_level", None),
+                "normalized_total": getattr(decision, "normalized_total", None),
+                "currency": getattr(decision, "currency", None),
+                
+                # Audit trails
+                "audit_events": audit_events_dicts,
+                "learned_rule_audits": [
+                    a.to_dict() if hasattr(a, "to_dict") else a
+                    for a in (getattr(decision, "learned_rule_audits", None) or [])
+                ],
+                "audit_report": audit_report,
+                
+                # Legacy / compatibility
+                "events": (decision_dict.get("events") or decision_dict.get("rule_events") or []),
+                
+                # Missing-field gate + tags
+                "missing_fields_enabled": getattr(decision, "missing_fields_enabled", None),
+                "missing_field_gate": getattr(decision, "missing_field_gate", None),
+                
+                "geo_country_guess": getattr(decision, "geo_country_guess", None),
+                "geo_confidence": getattr(decision, "geo_confidence", None),
+                "lang_guess": getattr(decision, "lang_guess", None),
+                "lang_confidence": getattr(decision, "lang_confidence", None),
+                "doc_family": getattr(decision, "doc_family", None),
+                "doc_subtype": getattr(decision, "doc_subtype", None),
+                "doc_profile_confidence": getattr(decision, "doc_profile_confidence", None),
+                
+                "debug": decision_dict.get("debug") or {},
             }
             update_queue.put({
                 "event": "engine_complete",

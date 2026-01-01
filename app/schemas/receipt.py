@@ -72,6 +72,11 @@ class AuditEvent:
     message: str = ""
     evidence: Dict[str, Any] = field(default_factory=dict)
 
+    # Optional human-grade explanation fields (backward compatible)
+    title: Optional[str] = None               # short headline for UI
+    why: Optional[str] = None                 # human-grade explanation
+    next_step: Optional[str] = None           # suggested follow-up (optional)
+
     def finalize_defaults(self) -> None:
         """Fill event_id/ts if not already set."""
         if not self.event_id:
@@ -245,4 +250,15 @@ class ReceiptDecision:
             a.to_dict() if hasattr(a, "to_dict") else a
             for a in (self.learned_rule_audits or [])
         ]
+        
+        # Ensure audit trails are always lists for consumers
+        if d.get("audit_events") is None:
+            d["audit_events"] = []
+        if d.get("learned_rule_audits") is None:
+            d["learned_rule_audits"] = []
+        
+        # Normalize minor_notes to a list for API consumers
+        if d.get("minor_notes") is None:
+            d["minor_notes"] = []
+        
         return d
