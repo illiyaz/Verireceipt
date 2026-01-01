@@ -27,11 +27,20 @@ Businesses lose millions annually due to:
 ## ✨ Key Features
 
 ### 🤖 **5-Engine Hybrid Analysis**
-- **Rule-Based Engine** - 34+ fraud detection rules with geo-awareness
-- **Vision LLM** (Ollama/PyTorch) - Visual authenticity assessment
+- **Rule-Based Engine** - 34+ fraud detection rules with geo-awareness (PRIMARY DECISION)
+- **Vision LLM** (Ollama/PyTorch) - **Veto-only tampering detection** (can only reject, never approve)
 - **LayoutLM** - Multimodal document understanding and field extraction
 - **DONUT** - Document understanding transformer
 - **Donut-Receipt** - Specialized receipt parsing
+
+**Vision Veto-Only Design:**
+```
+Vision is a sensor, not a judge.
+It can pull the emergency brake, but never press the accelerator.
+```
+- ✅ `tampered` → HARD_FAIL (receipt rejected)
+- ✅ `suspicious` → audit only (rules decide)
+- ✅ `clean` → no effect (rules decide)
 
 ### 🌍 **Global Geo-Aware Validation**
 - **24 regions/countries** supported (US, CA, IN, UK, EU, AU, SG, MY, TH, ID, PH, JP, CN, HK, TW, KR, NZ, UAE, SA, OM, QA, KW, BH, JO)

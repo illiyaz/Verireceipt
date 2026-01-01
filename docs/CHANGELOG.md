@@ -7,6 +7,224 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-01-01
+
+### 🚨 BREAKING CHANGES - Vision Veto-Only Design
+
+#### Vision System Refactor
+Complete redesign of vision LLM integration to enforce strict veto-only behavior.
+
+**Core Changes:**
+- **Vision can only veto (reject), never approve**
+- **Single canonical function:** `build_vision_assessment()`
+- **New contract:** `{visual_integrity, confidence, observable_reasons}`
+- **Removed:** `vision_verdict`, `vision_reasoning`, `authenticity_assessment`
+
+#### Field Changes
+
+| Old Field (Removed) | New Field | Type Change |
+|---------------------|-----------|-------------|
+| `vision_verdict` | `visual_integrity` | "real"/"fake" → "clean"/"suspicious"/"tampered" |
+| `vision_reasoning` | N/A | Not exposed (use audit trail) |
+| `authenticity_assessment` | N/A | Internal only |
+| `authenticity_score` | N/A | No blending |
+
+#### Behavioral Changes
+
+**Vision Output Interpretation:**
+- `"clean"` → No effect on decision (rules decide)
+- `"suspicious"` → Audit only (rules decide)
+- `"tampered"` → HARD_FAIL veto (receipt rejected)
+
+**Corroboration Changes:**
+- Vision NO LONGER part of corroboration scoring
+- Removed all `VISION_REAL_*` and `VISION_FAKE_*` flags
+- Only rules + extraction quality affect corroboration
+
+**Streaming Endpoint:**
+- Updated `/analyze/hybrid/stream` to use `build_vision_assessment()`
+- Removed vision-based hybrid decisions
+- Vision veto applied in rule-based engine only
+
+### Added
+
+#### Vision Veto System
+- **Canonical Function:** `build_vision_assessment()` (lines 493-595 in `vision_llm.py`)
+- **Veto Event:** `V1_VISION_TAMPERED` with severity `HARD_FAIL`
+- **Observable Reasons:** Structured evidence for tampering detection
+- **Audit Trail:** Full vision assessment stored in debug for transparency
+
+#### Comprehensive Enforcement Testing
+- **`tests/test_veto_enforcement.py`:** Scans all 91 Python files
+- **5 Critical Checks:**
+  1. No `vision_verdict` anywhere
+  2. No `authenticity_assessment` in production
+  3. No vision corroboration flags
+  4. No vision upgrade language
+  5. Schema fields veto-safe
+- **Automated Protection:** Fails CI/CD if violations found
+
+#### Golden Tests
+- **`tests/test_vision_veto_golden.py`:** 3 critical scenarios
+  1. CLEAN → rules decide (no interference)
+  2. SUSPICIOUS → rules decide (audit-only)
+  3. TAMPERED → HARD_FAIL (veto triggers)
+
+#### Documentation
+- **`docs/VISION_VETO_DESIGN.md`:** Complete design rationale and implementation
+- **`docs/API_DOCUMENTATION.md`:** Updated API docs with new fields
+- **`docs/MIGRATION_GUIDE.md`:** Step-by-step migration from old system
+- **`REAL_RECEIPT_TESTING_GUIDE.md`:** Real-world testing methodology
+
+### Changed
+
+#### Schema Updates (`app/schemas/receipt.py`)
+- **Added:** `visual_integrity: Optional[str]` - "clean"|"suspicious"|"tampered"
+- **Removed:** `vision_verdict: Optional[str]`
+- **Removed:** `vision_reasoning: Optional[str]`
+- **Updated:** Corroboration comments (vision not part of corroboration)
+
+#### API Endpoints (`app/api/main.py`)
+- **`/analyze/hybrid`:** Uses `build_vision_assessment()`, veto-safe response
+- **`/analyze/hybrid/stream`:** Streaming endpoint fixed to be veto-safe
+- **Error Fallbacks:** All use veto-safe fields
+
+#### Ensemble Intelligence (`app/pipelines/ensemble.py`)
+- **Vision Capture:** Audit-only, no decisioning
+- **Removed:** Vision weights and blending logic
+- **Removed:** Vision-based reconciliation events
+- **Updated:** Module docstring to reflect veto-only design
+
+#### Rules Engine (`app/pipelines/rules.py`)
+- **Vision Veto Integration:** Checks `visual_integrity == "tampered"`
+- **HARD_FAIL Event:** Emits `V1_VISION_TAMPERED` with observable reasons
+- **No Trust Upgrading:** Vision cannot influence "real" decisions
+
+### Removed
+
+#### Deprecated Functions
+- ❌ `analyze_receipt_with_vision()` - use `build_vision_assessment()`
+- ❌ `get_hybrid_verdict()` - violated veto-only design
+- ❌ `run_vision_authenticity()` - probabilistic blending
+
+#### Deprecated Fields
+- ❌ `vision_verdict` - replaced with `visual_integrity`
+- ❌ `vision_reasoning` - not exposed in responses
+- ❌ `authenticity_assessment` - internal structure only
+- ❌ `authenticity_score` - no blending weights
+
+#### Corroboration Flags
+- ❌ `VISION_REAL_RULES_CRITICAL`
+- ❌ `VISION_REAL_LAYOUT_MISSING_TOTAL`
+- ❌ `VISION_REAL_RULES_FAKE`
+- ❌ `VISION_FAKE_RULES_REAL`
+
+### Fixed
+
+#### Critical Design Violations
+- **Trust Upgrading:** Vision can no longer say "real" or approve receipts
+- **Probabilistic Blending:** Removed all vision score averaging
+- **Inconsistent Decisions:** Single entry point ensures consistency
+- **Corroboration Influence:** Vision removed from corroboration logic
+- **Streaming Inconsistency:** Streaming and non-streaming now identical
+
+#### Code Quality
+- **Repo-Wide Scan:** Enforcement test catches violations in all files
+- **No Blind Spots:** Scans all 91 Python files (not just 4 hardcoded)
+- **No Bypasses:** Removed broad docstring skip that could hide violations
+- **Schema Safety:** Dataclass enforces veto-safe fields
+
+### Migration Guide
+
+**For API Consumers:**
+```python
+# Before
+if response["vision_verdict"] == "real":
+    approve()
+
+# After
+if response["visual_integrity"] == "clean":
+    # Vision found no issues, but rules still decide
+    pass
+```
+
+**For Developers:**
+```python
+# Before
+from app.pipelines.vision_llm import analyze_receipt_with_vision
+vision_results = analyze_receipt_with_vision(image_path)
+verdict = vision_results["authenticity_assessment"]["verdict"]
+
+# After
+from app.pipelines.vision_llm import build_vision_assessment
+vision_assessment = build_vision_assessment(image_path)
+visual_integrity = vision_assessment["visual_integrity"]
+```
+
+See `docs/MIGRATION_GUIDE.md` for complete migration instructions.
+
+### Testing
+
+**All Tests Passing:**
+- ✅ Enforcement tests: 5/5 (scans 91 files)
+- ✅ Golden tests: 3/3 (clean/suspicious/tampered)
+- ✅ Geo enrichment: 14/14
+- ✅ Vision veto (unit): 5/5
+
+**Run Tests:**
+```bash
+python tests/test_veto_enforcement.py  # Comprehensive enforcement
+python tests/test_vision_veto_golden.py  # Functional validation
+```
+
+### Benefits
+
+#### 🎯 Design Integrity
+- **No False Approvals:** Vision cannot upgrade trust
+- **Consistent Behavior:** Single entry point, single contract
+- **Auditable:** Clear evidence trail for all vision decisions
+- **Safe:** No probabilistic influence on approvals
+
+#### 🔒 Security
+- **Veto-Only:** Vision can only detect tampering, never approve
+- **HARD_FAIL:** Tampering triggers immediate rejection
+- **Observable Evidence:** Specific reasons for tampering detection
+- **No Bypasses:** Automated enforcement prevents violations
+
+#### 📊 Observability
+- **Audit Trail:** Full vision assessment in debug
+- **Structured Events:** `V1_VISION_TAMPERED` with evidence
+- **Observable Reasons:** Human-readable tampering indicators
+- **Debug Info:** Complete vision output for investigation
+
+### Mental Model
+
+```
+Vision is a sensor, not a judge.
+It can pull the emergency brake, but never press the accelerator.
+```
+
+**Allowed:**
+- ✅ `tampered` → HARD_FAIL → fake (veto)
+- ✅ `suspicious` → audit only (no effect)
+- ✅ `clean` → no effect (rules decide)
+
+**Forbidden:**
+- ❌ No "real" or "fake" verdicts
+- ❌ No trust upgrading
+- ❌ No decision blending
+- ❌ No corroboration influence
+
+---
+
+**Commit:** `6673c2b` - fix: Comprehensive veto-only enforcement - fix schema and add robust tests  
+**Date:** 2026-01-01  
+**Contributors:** VeriReceipt Team
+
+---
+
+## [0.9.0] - 2024-12-26
+
 ### Added
 
 #### Confidence-Aware Rule Weighting System
