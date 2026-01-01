@@ -824,14 +824,6 @@ def _is_travel_or_hospitality(text: str) -> bool:
         "airport", "terminal", "gate"
     ])
 
-def _detect_sea_hint(text: str) -> bool:
-    t = (text or "").lower()
-    return any(k in t for k in [
-        "singapore", "malaysia", "thailand", "indonesia", "philippines",
-        "kuala lumpur", "bangkok", "jakarta", "manila",
-        "+65", "+60", "+66", "+62", "+63"
-    ])
-
 # A simple, data-driven matrix. Add/adjust rows as we expand geo coverage.
 # NOTE: This is *heuristic* and should bias to REVIEW (CRITICAL) rather than hard-fail.
 GEO_RULE_MATRIX = {
@@ -1021,7 +1013,7 @@ def _currency_hint_extended(text: str) -> Optional[str]:
         return "VND"
     if _has_token("cny") or _has_token("rmb") or " yuan" in tl or "renminbi" in tl or "￥" in t:
         return "CNY"
-    if _has_token("hkd") or "hk$" in tl:
+    if _has_token("hkd") or "hk$" in tl or "HK$" in t:
         return "HKD"
     if _has_token("twd") or "nt$" in tl:
         return "TWD"
@@ -1029,11 +1021,11 @@ def _currency_hint_extended(text: str) -> Optional[str]:
     # --- Southeast Asia ---
     if _has_token("sgd") or "s$" in t or "singapore dollar" in tl:
         return "SGD"
-    if _has_token("myr") or "ringgit" in tl or ("rm" in tl and not _has_token("arm")):
+    if _has_token("myr") or "ringgit" in tl or re.search(r'\brm\b', tl):
         return "MYR"
     if _has_token("thb") or "฿" in t or "baht" in tl:
         return "THB"
-    if _has_token("idr") or "rupiah" in tl or ("rp" in tl and not _has_token("grp")):
+    if _has_token("idr") or "rupiah" in tl or re.search(r'\brp\b', tl):
         return "IDR"
     if _has_token("php") or "₱" in t:
         return "PHP"
@@ -1064,8 +1056,8 @@ def _currency_hint_extended(text: str) -> Optional[str]:
     if "$" in t:
         return "USD"
 
-    # Fall back to v1 hinting
-    return _currency_hint(text)
+    # Fall back to base hinting
+    return _currency_hint_base(text)
 
 
 def _geo_currency_tax_consistency(
@@ -1129,15 +1121,22 @@ def _geo_currency_tax_consistency(
     expected_currencies = cfg.get("currencies", set())
     expected_taxes = cfg.get("tax_regimes", set())
 
+    # Check for travel/hospitality context upfront
+    is_travel = tier == "STRICT" and _is_travel_or_hospitality(blob)
+    
     # -------------------- Currency mismatch --------------------
     currency_mismatch = bool(currency and expected_currencies and (currency not in expected_currencies))
     if currency_mismatch:
+        # Reduce weight for travel/hospitality cross-border receipts
+        currency_weight = 0.15 if is_travel else 0.30
+        currency_severity = "WARNING" if is_travel else "CRITICAL"
+        
         score_delta += _emit_event(
             events=events,
             reasons=reasons,
             rule_id="GEO_CURRENCY_MISMATCH",
-            severity="CRITICAL",
-            weight=0.30,
+            severity=currency_severity,
+            weight=currency_weight,
             message="Currency does not match implied region",
             evidence={
                 "region": region,
@@ -1145,6 +1144,7 @@ def _geo_currency_tax_consistency(
                 "expected_currencies": sorted(list(expected_currencies)),
                 "geo_candidates": geos,
                 "tier": tier,
+                "travel_softened": is_travel,
             },
             reason_text=(
                 "💵🌍 Currency–Geography Consistency Issue:\n"
@@ -1157,26 +1157,31 @@ def _geo_currency_tax_consistency(
 
     # -------------------- Tax mismatch --------------------
     if tax and expected_taxes and (tax not in expected_taxes):
+        # Reduce weight for travel/hospitality cross-border receipts
+        tax_weight = 0.10 if is_travel else 0.18
+        tax_severity = "WARNING" if is_travel else "CRITICAL"
+        
         score_delta += _emit_event(
             events=events,
             reasons=reasons,
             rule_id="GEO_TAX_MISMATCH",
-            severity="CRITICAL",
-            weight=0.18,
+            severity=tax_severity,
+            weight=tax_weight,
             message="Tax regime terminology does not match implied region",
             evidence={
                 "region": region,
                 "tax_detected": tax,
                 "expected_taxes": sorted(list(expected_taxes)),
                 "tier": tier,
+                "travel_softened": is_travel,
             },
         )
 
-    # STRICT tier softening for travel/hospitality cross-border receipts
-    if tier == "STRICT" and currency_mismatch and _is_travel_or_hospitality(blob):
+    # Emit travel softener info event if applicable
+    if is_travel and (currency_mismatch or (tax and expected_taxes and (tax not in expected_taxes))):
         minor_notes.append(
-            "✈️ Travel/hospitality context detected. Currency–geo mismatch may be legitimate (cross-border). "
-            "Downgrading severity to REVIEW and reducing penalty."
+            "✈️ Travel/hospitality context detected. Geo mismatches may be legitimate (cross-border). "
+            "Severity downgraded to WARNING and penalties reduced."
         )
         _emit_event(
             events=events,
@@ -1184,10 +1189,9 @@ def _geo_currency_tax_consistency(
             rule_id="GEO_TRAVEL_SOFTENER",
             severity="INFO",
             weight=0.0,
-            message="Travel/hospitality context detected; reduced geo/currency mismatch penalty",
+            message="Travel/hospitality context detected; reduced geo mismatch penalties",
             evidence={"region": region, "currency_detected": currency, "tier": tier},
         )
-        score_delta = max(0.0, score_delta - 0.15)
 
     # -------------------- Merchant–currency plausibility --------------------
     mc_flags = _merchant_currency_plausibility_flags(merchant, currency, blob)
@@ -1241,18 +1245,19 @@ def _geo_currency_tax_consistency(
 # -----------------------------------------------------------------------------
 # Document type detection helper
 # -----------------------------------------------------------------------------
-def _currency_hint(text: str) -> Optional[str]:
-    """Return best-effort currency hint based on symbols/keywords.
+def _currency_hint_base(text: str) -> Optional[str]:
+    """Base currency hint detection (fallback for _currency_hint_extended).
 
     IMPORTANT:
     - `$` is ambiguous (USD, CAD, AUD, SGD, etc.) and MUST be handled last.
     - Prefer explicit currency codes/symbols first.
+    - This is called by _currency_hint_extended() as a fallback.
     """
     t = (text or "")
     tl = t.lower()
 
     def _has_token(s: str) -> bool:
-        return f" {s} " in f" {tl} "
+        return f" {s.lower()} " in f" {tl} "
 
     # --- INR ---
     if "₹" in t or _has_token("inr") or "rupees" in tl or "rs." in tl or _has_token("rs"):
@@ -1295,11 +1300,11 @@ def _currency_hint(text: str) -> Optional[str]:
     # --- Southeast Asia ---
     if _has_token("sgd") or "s$" in t or "singapore dollar" in tl:
         return "SGD"
-    if _has_token("myr") or "ringgit" in tl:
+    if _has_token("myr") or "ringgit" in tl or re.search(r'\brm\b', tl):
         return "MYR"
     if _has_token("thb") or "฿" in t or "baht" in tl:
         return "THB"
-    if _has_token("idr") or "rupiah" in tl or ("rp" in tl and not _has_token("grp")):
+    if _has_token("idr") or "rupiah" in tl or re.search(r'\brp\b', tl):
         return "IDR"
     if _has_token("php") or "₱" in t:
         return "PHP"
@@ -1324,11 +1329,12 @@ def _detect_document_type(text: str) -> str:
       - tax_invoice
       - order_confirmation
       - statement
-      - unknown
+      - ambiguous (when mixed signals or no clear match)
 
     Notes:
     - Many fakes mix labels (e.g., "INVOICE" in header but styled like a receipt).
     - We only use this as a *consistency* signal; it's not a sole hard-fail.
+    - "ambiguous" is returned for both mixed signals and no matches.
     """
     t = (text or "").lower()
 
@@ -1923,15 +1929,15 @@ def _score_and_explain(
     # Compute missing-field gate once (early)
     missing_fields_enabled = _missing_field_penalties_enabled(tf, doc_profile=doc_profile)
     
-    # DEBUG: ALWAYS print to console (not just logger)
-    print(f"\n🔍 GATE CHECK:")
-    print(f"   geo_country: {tf.get('geo_country_guess')} (conf: {tf.get('geo_confidence')})")
-    print(f"   doc_subtype: {tf.get('doc_subtype_guess')} (conf: {tf.get('doc_profile_confidence')})")
-    print(f"   missing_fields_enabled: {missing_fields_enabled}")
-    print(f"   Total events before gate: {len(events)}")
+    # Debug logging (not printed to console in production)
+    logger.debug("\n🔍 GATE CHECK:")
+    logger.debug(f"   geo_country: {tf.get('geo_country_guess')} (conf: {tf.get('geo_confidence')})")
+    logger.debug(f"   doc_subtype: {tf.get('doc_subtype_guess')} (conf: {tf.get('doc_profile_confidence')})")
+    logger.debug(f"   missing_fields_enabled: {missing_fields_enabled}")
+    logger.debug(f"   Total events before gate: {len(events)}")
     
     if not missing_fields_enabled:
-        print(f"   ✅ GATE ACTIVE - emitting GATE_MISSING_FIELDS event")
+        logger.debug("   ✅ GATE ACTIVE - emitting GATE_MISSING_FIELDS event")
         _emit_missing_field_gate_event(
             events=events,
             reasons=reasons,
@@ -1939,9 +1945,9 @@ def _score_and_explain(
             doc_profile=doc_profile,
             message="Missing-field penalties disabled: geo/doc profile confidence too low (UNKNOWN geo or MISC/UNKNOWN subtype).",
         )
-        print(f"   Total events after gate emission: {len(events)}")
+        logger.debug(f"   Total events after gate emission: {len(events)}")
     else:
-        print(f"   ❌ GATE INACTIVE - penalties ENABLED\n")
+        logger.debug("   ❌ GATE INACTIVE - penalties ENABLED\n")
 
     # If upstream extractors (LayoutLM / DONUT / ensemble) already provided a total,
     # do NOT flag "No Total Line" purely based on missing TOTAL keyword/line.
