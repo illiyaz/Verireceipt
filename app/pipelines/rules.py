@@ -8,6 +8,12 @@ import re
 from app.pipelines.features import build_features
 from app.pipelines.ingest import ingest_and_ocr
 from app.schemas.receipt import ReceiptDecision, ReceiptFeatures, ReceiptInput ,LearnedRuleAudit
+from app.geo.db import (
+    query_geo_profile,
+    query_vat_rules,
+    query_currency_countries,
+    query_doc_expectations,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -1072,6 +1078,67 @@ def _currency_hint_extended(text: str) -> Optional[str]:
     return _currency_hint_base(text)
 
 
+def _get_geo_config_from_db(country_code: str) -> Dict[str, Any]:
+    """
+    Query geo profile and VAT rules from DB for a country.
+    
+    Returns a config dict compatible with legacy GEO_RULE_MATRIX format:
+    {
+        "currencies": set of currency codes,
+        "tax_regimes": set of tax regime names,
+        "tier": "STRICT" or "RELAXED",
+        "db_source": True,
+        "geo_profile": {...},
+        "vat_rules": [...]
+    }
+    """
+    try:
+        # Query geo profile
+        geo_profile = query_geo_profile(country_code)
+        if not geo_profile:
+            return {"currencies": set(), "tax_regimes": set(), "tier": "RELAXED", "db_source": False}
+        
+        # Query VAT rules
+        vat_rules = query_vat_rules(country_code)
+        
+        # Extract currencies from geo profile
+        currencies = set()
+        if geo_profile.get("primary_currency"):
+            currencies.add(geo_profile["primary_currency"])
+        if geo_profile.get("secondary_currencies"):
+            # secondary_currencies might be JSON string or list
+            sec_curr = geo_profile["secondary_currencies"]
+            if isinstance(sec_curr, str):
+                import json
+                try:
+                    sec_curr = json.loads(sec_curr)
+                except Exception:
+                    sec_curr = []
+            if isinstance(sec_curr, list):
+                currencies.update(sec_curr)
+        
+        # Extract tax regimes from VAT rules
+        tax_regimes = set()
+        for rule in vat_rules:
+            if rule.get("tax_name"):
+                tax_regimes.add(rule["tax_name"])
+        
+        # Determine tier from geo profile
+        tier = geo_profile.get("enforcement_tier", "RELAXED").upper()
+        
+        return {
+            "currencies": currencies,
+            "tax_regimes": tax_regimes,
+            "tier": tier,
+            "db_source": True,
+            "geo_profile": geo_profile,
+            "vat_rules": vat_rules,
+        }
+    except Exception as e:
+        logger.warning(f"Failed to query geo config from DB for {country_code}: {e}")
+        return {"currencies": set(), "tax_regimes": set(), "tier": "RELAXED", "db_source": False}
+
+
 def _geo_currency_tax_consistency(
     text: str,
     merchant: Optional[str],
@@ -1079,7 +1146,7 @@ def _geo_currency_tax_consistency(
     minor_notes: List[str],
     events: List[RuleEvent],
 ) -> float:
-    """Apply GeoRuleMatrix consistency checks.
+    """Apply geo/currency/tax consistency checks using DB-backed rules.
 
     Returns incremental score to add.
     """
@@ -1127,9 +1194,16 @@ def _geo_currency_tax_consistency(
         return score_delta
 
     region = geos[0]
-    cfg = GEO_RULE_MATRIX.get(region, {})
+    
+    # Query DB for geo config (replaces hardcoded GEO_RULE_MATRIX)
+    cfg = _get_geo_config_from_db(region)
+    
+    # Fallback to legacy matrix if DB query failed
+    if not cfg.get("db_source"):
+        cfg = GEO_RULE_MATRIX.get(region, {})
+        cfg["db_source"] = False
+    
     tier = cfg.get("tier", "RELAXED")
-
     expected_currencies = cfg.get("currencies", set())
     expected_taxes = cfg.get("tax_regimes", set())
 
@@ -1149,7 +1223,7 @@ def _geo_currency_tax_consistency(
             rule_id="GEO_CURRENCY_MISMATCH",
             severity=currency_severity,
             weight=currency_weight,
-            message="Currency does not match implied region",
+            message="Currency does not match implied region (DB-backed)",
             evidence={
                 "region": region,
                 "currency_detected": currency,
@@ -1157,12 +1231,15 @@ def _geo_currency_tax_consistency(
                 "geo_candidates": geos,
                 "tier": tier,
                 "travel_softened": is_travel,
+                "db_source": cfg.get("db_source", False),
+                "geo_profile_id": cfg.get("geo_profile", {}).get("id") if cfg.get("geo_profile") else None,
             },
             reason_text=(
                 "💵🌍 Currency–Geography Consistency Issue:\n"
                 f"   • Implied region: {region}\n"
                 f"   • Detected currency: {currency}\n"
                 f"   • Expected currencies: {sorted(list(expected_currencies))}\n"
+                f"   • Source: {'Database' if cfg.get('db_source') else 'Legacy matrix'}\n"
                 "Mismatches like this are common in fabricated or edited receipts."
             ),
         )
@@ -1173,19 +1250,31 @@ def _geo_currency_tax_consistency(
         tax_weight = 0.10 if is_travel else 0.18
         tax_severity = "WARNING" if is_travel else "CRITICAL"
         
+        # Get VAT rule details for evidence
+        vat_rule_details = []
+        if cfg.get("vat_rules"):
+            for rule in cfg["vat_rules"]:
+                vat_rule_details.append({
+                    "tax_name": rule.get("tax_name"),
+                    "rate": rule.get("rate"),
+                    "description": rule.get("description"),
+                })
+        
         score_delta += _emit_event(
             events=events,
             reasons=reasons,
             rule_id="GEO_TAX_MISMATCH",
             severity=tax_severity,
             weight=tax_weight,
-            message="Tax regime terminology does not match implied region",
+            message="Tax regime terminology does not match implied region (DB-backed)",
             evidence={
                 "region": region,
                 "tax_detected": tax,
                 "expected_taxes": sorted(list(expected_taxes)),
                 "tier": tier,
                 "travel_softened": is_travel,
+                "db_source": cfg.get("db_source", False),
+                "vat_rules": vat_rule_details if vat_rule_details else None,
             },
         )
 
