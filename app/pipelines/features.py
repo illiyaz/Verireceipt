@@ -10,6 +10,7 @@ from app.pipelines.geo_detection import detect_geo_and_profile
 from app.pipelines.lang import LangPackLoader, ScriptDetector, LangPackRouter, TextNormalizer
 from app.pipelines.document_intent import resolve_document_intent, IntentSource
 from app.pipelines.domain_validation import infer_domain_from_domainpacks, validate_domain_pack
+from app.address.validate import validate_address
 
 logger = logging.getLogger(__name__)
 
@@ -1441,6 +1442,9 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     # Merchant candidate (needed for bias calculation)
     merchant_candidate = _guess_merchant_line(lines)
     
+    # Address validation (geo-agnostic, structure-based)
+    address_profile = validate_address(full_text)
+    
     # Safety clamp: never treat low-confidence subtype as truth
     try:
         conf = float(doc_subtype_confidence) if doc_subtype_confidence is not None else 0.0
@@ -1477,6 +1481,11 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         # Defensive fix: Add final geo data from detect_geo_and_profile
         "geo_country": geo_profile.get("geo_country_guess"),
         "geo_confidence": geo_profile.get("geo_confidence"),
+        # Address validation (gated by doc_profile_confidence)
+        "has_address": (
+            address_profile["address_classification"] in {"PLAUSIBLE_ADDRESS", "STRONG_ADDRESS"}
+            if conf >= 0.55 else None
+        ),
     }
 
     # --- File & metadata features -------------------------------------------
@@ -1697,6 +1706,8 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         "geo_country_guess": geo_profile.get("geo_country_guess"),
         "geo_confidence": geo_profile.get("geo_confidence"),
         "geo_evidence": geo_profile.get("geo_evidence"),
+        # NEW: Address validation (geo-agnostic, structure-based)
+        "address_profile": address_profile,
         # NEW: Language pack routing information
         **lang_pack_info,
     }
