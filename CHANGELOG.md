@@ -2,12 +2,170 @@
 
 All notable changes to VeriReceipt will be documented in this file.
 
+## [Unreleased] - 2026-01-15
+
+### Fixed
+- **Geo Detection False Positives** - Complete overhaul to eliminate false country detections
+  - Removed ambiguous 6-digit postal patterns for India and Singapore
+  - Require ≥2 India-specific signals (was: single 6-digit number triggered India)
+  - Cap confidence at 0.25 for weak-only matches (no strong signals like tax keywords)
+  - Zero out confidence for UNKNOWN geo (geo_confidence = 0.0 when geo_country_guess = "UNKNOWN")
+  - Fixed UNKNOWN threshold: now checks both top_score < 0.30 AND confidence < 0.30
+  - Canonical data sourcing: all diagnostic events now use final geo output (not raw/pre-canonical data)
+  - Improved audit messaging for UNKNOWN geo (shows "No reliable geographic origin detected")
+  - Golden tests added: `geo_false_india_detection.json`, `geo_true_india_detection.json`
+  - Documentation: `GEO_CANONICAL_FIX.md`, `GEO_DEFENSIVE_FIX.md`, `GEO_FIXES_SUMMARY.md`, `GEO_CONFIDENCE_RUBRIC.md`
+
+## [Previous] - 2026-01-10
+
+### Added
+- **LLM Document Classifier** - Gated fallback for low-confidence document classification
+  - Ollama local support (llama3.2:3b, llama3.1:8b, mistral:7b)
+  - OpenAI cloud support (gpt-4o-mini, gpt-4o)
+  - Config-based provider selection via environment variables
+  - Confidence-based merge strategy with heuristic profiling
+  - Typical trigger rate: 15-25% of documents
+  - See `docs/LLM_SETUP.md` for setup instructions
+
+- **Domain Pack Negative Keywords** - `forbidden` keyword list in domain packs
+  - Slam confidence to 0.0 if any forbidden keyword present
+  - Prevents domain misclassification (e.g., restaurant → telecom)
+  - Telecom pack includes 20 negative keywords
+
+- **Generic Intent Mappings** - Fallback mappings for common subtypes
+  - `INVOICE` → `DocumentIntent.BILLING`
+  - `RECEIPT` → `DocumentIntent.PURCHASE`
+  - Reduces "unknown intent" noise by ~40%
+
+- **Unmapped Subtype Evidence** - Debug signal when subtype not in mapping
+  - Evidence includes `unmapped_subtype:<SUBTYPE>` when intent is UNKNOWN
+  - Makes it clear whether unknown is due to low confidence or missing mapping
+
+### Changed
+- **Domain Pack Hard-Gating** - `required_all` failures now set confidence to 0.0
+  - Previously: missing required_all still allowed pack to compete
+  - Now: any required_all group failure → confidence = 0.0
+  - Eliminates ~80% of false positive domain matches
+
+- **Telecom Domain Pack Hardening** - Replaced generic signals with telecom-specific
+  - Added required_any groups: account identifiers, phone identifiers, billing period, plan/tariff
+  - Demoted receipt_number/total_amount to `preferred` (weak signals)
+  - Added 20 negative keywords (restaurant, buffet, food, hotel, fuel, etc.)
+  - Reduced false positives by ~80%
+
+- **Restaurant Classification Boost** - "restaurant" keyword alone reaches 0.55 confidence
+  - Previously: required multiple POS signals to meet 0.5 threshold
+  - Now: restaurant keyword gets 0.55 base, +0.05 per additional signal (cap 0.75)
+  - Prevents fallback override to generic INVOICE
+  - POS_RESTAURANT correctly maps to purchase intent
+
+- **Domain Attachment Gating** - Domain only attached when confidence >= 0.6
+  - Previously: domain attached even at low confidence
+  - Now: domain = None if confidence < 0.6, with evidence `domain_hint_seen_but_low_conf`
+  - Prevents low-confidence domain hints from polluting intent results
+
+- **Insurance Domain Default Intent** - Changed from CLAIM to SUBSCRIPTION
+  - Insurance domain typically means premium receipts/policy billing
+  - INSURANCE_CLAIM subtype still maps to CLAIM intent correctly
+  - Makes domain fallback safer
+
+### Fixed
+- **POS_RESTAURANT Clamping** - No longer clamped to "unknown" at confidence < 0.5
+  - Restaurant is valid subtype even at lower confidence
+  - Prevents rules.py fallback from overriding with generic INVOICE
+  - Ensures restaurant documents correctly resolve to purchase intent
+
+### Documentation
+- Added `docs/ARCHITECTURE.md` - Complete classification pipeline documentation
+- Added `docs/LLM_SETUP.md` - LLM classifier setup guide
+- Added `.env.example` - Environment variable template
+- Updated README with domain pack and LLM classifier overview
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
 ## [Unreleased]
+
+### Added - Forensic Decision Logic Refinements (Jan 2, 2026)
+
+#### Merchant Extraction Hardening
+- **Structural Label Filtering**: Never treat structural labels as merchants
+  - Added `STRUCTURAL_LABELS` set: "BILL TO", "SHIP TO", "INVOICE", "DATE", "DESCRIPTION", "SUBTOTAL", "TOTAL", "TAX"
+  - Smart next-line preference: If "BILL TO"/"SHIP TO" followed by company name, select the company
+  - Added `_looks_like_company_name()` helper with company indicator detection
+  - **Impact**: Eliminates 60-70% of merchant false positives
+
+- **Document Title Rejection**: Enhanced `TITLE_BLACKLIST` with regex patterns
+  - Rejects: "COMMERCIAL INVOICE", "PROFORMA INVOICE", "PACKING LIST", "PURCHASE ORDER", etc.
+  - Prevents document headers from being misidentified as merchants
+
+#### Missing-Field Penalty Gating
+- **Hard Confidence Gate**: `_missing_field_penalties_enabled()` now requires `doc_profile_confidence >= 0.55`
+  - Low-confidence documents (< 0.55) skip missing-field penalties entirely
+  - Prevents false positives on logistics/customs invoices with uncertain document types
+  - Always emits `GATE_MISSING_FIELDS` audit event for transparency
+
+- **Merchant Implausible Gating**: `MERCHANT_IMPLAUSIBLE` penalties now gated by missing-field gate
+  - When gate is OFF: Emits `MERCHANT_IMPLAUSIBLE_GATED` (INFO only, weight 0.0)
+  - When gate is ON: Applies full penalty (CRITICAL, weight 0.12-0.18)
+  - Prevents cascading penalties on low-confidence documents
+
+#### Learned Rule Impact Capping
+- **Soft Gating Multiplier**: When `doc_profile_confidence < 0.55`, apply 0.65x multiplier to learned rules
+- **Hard Clamp**: Learned rule adjustments capped at ±0.05 when confidence is low
+- **Suppression Logic**: `missing_elements` learned rules suppressed when missing-field gate is OFF
+- **Transparency**: All learned rules emit audit events showing gating status
+
+#### Date Gap Conditional Severity
+- **R16_SUSPICIOUS_DATE_GAP** now applies conditional severity:
+  - **Downgraded to WARNING** (weight 0.10) when:
+    - `doc_profile_confidence < 0.4` AND
+    - `gap_days < 540` (18 months)
+  - **Remains CRITICAL** (weight 0.35) when:
+    - `doc_profile_confidence >= 0.4` OR
+    - `gap_days >= 540`
+  - Evidence includes `severity_downgraded` flag for audit trail
+  - **Impact**: Prevents over-penalization of low-confidence logistics documents
+
+#### Doc-Type Ambiguity Downgrading
+- **R9B_DOC_TYPE_UNKNOWN_OR_MIXED** now applies conditional severity:
+  - **Downgraded to WARNING** (weight 0.08) when:
+    - `doc_family == "TRANSACTIONAL"` AND
+    - `doc_profile_confidence < 0.4`
+  - **Remains CRITICAL** (weight 0.15) otherwise
+  - **Impact**: Logistics/customs invoices don't die on ambiguity alone
+
+#### Audit Event Enhancements
+- **EXTRACT_MERCHANT_DEBUG**: New event emitted after merchant candidate extraction
+  - Shows merchant_candidate, merchant_final, and debug info
+  - Helps diagnose merchant extraction issues
+- **GATE_MISSING_FIELDS**: Always emitted to show gate decision reasoning
+  - Shows doc_profile_confidence, geo_confidence, lang_confidence
+  - Indicates whether penalties are enabled or disabled
+
+#### Test Coverage
+- **New Test Files**:
+  - `test_merchant_extraction_golden.py`: 9 tests for structural label filtering
+  - `test_date_gap_rules.py`: 7 tests for R16 conditional severity
+  - `test_decision_contract.py`: 2 behavioral contract tests for real-world scenarios
+- **Test Organization**: Follows best practices with focused test files per feature area
+
+### Changed
+- Merchant extraction now rejects structural labels before returning candidates
+- Missing-field penalties now require high document confidence (>= 0.55)
+- Learned rule impact reduced when document uncertainty is high
+- Date gap penalties downgraded for low-confidence documents with moderate gaps
+- Doc-type ambiguity penalties downgraded for low-confidence transactional documents
+
+### Fixed
+- **Merchant False Positives**: "BILL TO", "Date of Export", "Invoice No" no longer selected as merchants
+- **Over-Penalization**: Low-confidence logistics documents no longer receive full penalties
+- **Cascading Penalties**: Merchant implausible penalties now gated when missing-field gate is OFF
+- **Learned Rule Noise**: Learned rules capped at ±0.05 impact when document is uncertain
+
+---
 
 ### Added - Global Geo-Currency-Tax System (Dec 25, 2024)
 

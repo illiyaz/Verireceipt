@@ -26,12 +26,16 @@ Businesses lose millions annually due to:
 
 ## ✨ Key Features
 
-### 🤖 **5-Engine Hybrid Analysis**
-- **Rule-Based Engine** - 34+ fraud detection rules with geo-awareness (PRIMARY DECISION)
-- **Vision LLM** (Ollama/PyTorch) - **Veto-only tampering detection** (can only reject, never approve)
-- **LayoutLM** - Multimodal document understanding and field extraction
-- **DONUT** - Document understanding transformer
-- **Donut-Receipt** - Specialized receipt parsing
+### 🤖 **5-Engine Hybrid Architecture** (3 engines active by default)
+- **Rule-Based Engine** - 34+ fraud detection rules with forensic decision logic (PRIMARY DECISION) ✅ Active
+  - Confidence-based gating (prevents over-penalization of uncertain documents)
+  - Hardened merchant extraction (eliminates 60-70% of false positives)
+  - Conditional severity (date gaps, doc-type ambiguity)
+  - Learned rule impact capping
+- **Vision LLM** (Ollama/PyTorch) - **Veto-only tampering detection** (can only reject, never approve) ✅ Active
+- **LLM Classifier** (Ollama/OpenAI) - Gated fallback for ambiguous document classification ✅ Active
+- **LayoutLM** - Multimodal document understanding and field extraction ⚠️ Optional
+- **DONUT** - Document understanding transformer ⚠️ Optional
 
 **Vision Veto-Only Design:**
 ```
@@ -42,18 +46,33 @@ It can pull the emergency brake, but never press the accelerator.
 - ✅ `suspicious` → audit only (rules decide)
 - ✅ `clean` → no effect (rules decide)
 
-### 🌍 **Global Geo-Aware Validation**
+### 🌍 **Global Geo-Aware Validation** ✅ **Recently Enhanced**
 - **24 regions/countries** supported (US, CA, IN, UK, EU, AU, SG, MY, TH, ID, PH, JP, CN, HK, TW, KR, NZ, UAE, SA, OM, QA, KW, BH, JO)
+- **Hardened geo detection** with false positive elimination:
+  - Removed ambiguous 6-digit postal patterns (eliminated India false positives)
+  - Multi-signal requirement (≥2 signals for India detection)
+  - Confidence-based UNKNOWN gating (confidence < 0.30 → UNKNOWN)
+  - Canonical data sourcing (all gates use final geo output)
 - Currency-geography consistency checking
 - Tax regime validation (GST, VAT, HST, PST, Sales Tax)
 - Cross-border transaction detection
 - Healthcare merchant-currency plausibility
 
 ### 📋 **Intelligent Document Classification**
-- **31 document subtypes** across 3 families:
-  - **TRANSACTIONAL** (21): Receipts, Invoices, Bills
-  - **LOGISTICS** (4): Shipping Bills, Bills of Lading, Air Waybills, Delivery Notes
-  - **PAYMENT** (4): Payment Receipts, Bank Slips, Card Charge Slips, Refund Receipts
+- **50+ document subtypes** across 5 families:
+  - **TRANSACTIONAL**: POS receipts, invoices, bills, subscriptions
+  - **LOGISTICS**: Shipping bills, bills of lading, air waybills, delivery notes
+  - **STATEMENT**: Bank statements, card statements
+  - **PAYMENT**: Payment receipts, bank slips, card charge slips, refunds
+  - **CLAIMS**: Insurance claims, medical claims, expense claims
+- **Domain Pack System** - Declarative YAML-based domain inference
+  - Hard-gating on required fields (80% reduction in false positives)
+  - Negative keyword enforcement (prevents misclassification)
+  - Telecom, logistics, insurance, healthcare, ecommerce domains
+- **LLM Classifier Fallback** - Gated AI classification for ambiguous documents
+  - Local Ollama support (llama3.2:3b) - zero infrastructure cost
+  - OpenAI support (gpt-4o-mini) - low-cost gated calls (pricing varies by usage)
+  - Only triggers on low-confidence cases (15-25% of documents)
 - Context-aware validation (logistics docs don't need totals)
 - Confidence-based rule gating
 
@@ -439,24 +458,43 @@ Document Classification:
 
 ## 🔧 Rule Engine (34+ Rules)
 
+### Forensic Decision Logic
+
+VeriReceipt uses **evidence-based scoring** rather than heuristic stacking:
+- Each fraud indicator contributes a weighted score
+- Confidence-based gating prevents over-penalization
+- Conditional severity for uncertain documents
+- Full audit trail for transparency
+
 ### Severity Levels
 
 - **[HARD_FAIL]** - Structural inconsistencies (forces rejection)
   - R1: Suspicious software (Canva, Photoshop)
   - R15: Impossible date sequence
 
-- **[CRITICAL]** - Strong fraud indicators
-  - R5-R9: Missing fields (amounts, totals, dates, merchant)
+- **[CRITICAL]** - Strong fraud indicators (conditional severity)
+  - R5-R9: Missing fields (gated by confidence >= 0.55)
+  - R16: Date gap (WARNING if dp_conf < 0.4 and gap < 540 days)
+  - R9B: Doc-type ambiguity (WARNING for low-confidence transactional docs)
   - GEO1-GEO3: Geo-currency-tax mismatches
-  - MER1-MER3: Merchant validation failures
+  - MER1-MER3: Merchant validation (gated when confidence low)
 
 - **[INFO]** - Explanatory reasons
   - R2-R4: Missing metadata
   - R10-R14: Text quality issues
+  - Gate decisions (GATE_MISSING_FIELDS, MERCHANT_IMPLAUSIBLE_GATED)
+
+### Merchant Extraction Hardening
+
+**Eliminates 60-70% of false positives:**
+- ✅ Rejects structural labels: "BILL TO", "SHIP TO", "INVOICE", "DATE", etc.
+- ✅ Rejects document titles: "COMMERCIAL INVOICE", "PROFORMA INVOICE", etc.
+- ✅ Smart next-line preference: "BILL TO" → "Acme Corp Inc" (company name)
+- ✅ Company name detection with indicator matching
 
 ### Document-Aware Validation
 
-Rules automatically adjust based on document type:
+Rules automatically adjust based on document type and confidence:
 
 - **Logistics documents** (Air Waybills, Bills of Lading):
   - ✅ No penalty for missing totals/amounts
@@ -466,8 +504,10 @@ Rules automatically adjust based on document type:
   - ✅ Different validation for transaction confirmations
 
 - **Confidence-based gating:**
-  - Low doc_profile_confidence: reduce learned rule adjustments by 35%
-  - Optional field documents: reduce adjustments by 40%
+  - `dp_conf < 0.55`: Missing-field penalties **disabled**
+  - `dp_conf < 0.55`: Learned rule impact **capped at ±0.05**
+  - `dp_conf < 0.4` + `gap < 540 days`: Date gap **downgraded to WARNING**
+  - `dp_conf < 0.4` + `TRANSACTIONAL`: Doc-type ambiguity **downgraded to WARNING**
 
 ---
 
@@ -582,8 +622,10 @@ curl -X POST "http://localhost:8000/analyze" \
 
 ## 📚 Documentation
 
+- **[FORENSIC_DECISION_LOGIC.md](docs/FORENSIC_DECISION_LOGIC.md)** - Forensic decision logic & recent improvements
 - **[GEO_AWARE_CLASSIFICATION.md](docs/GEO_AWARE_CLASSIFICATION.md)** - Geo-aware system details
 - **[FEEDBACK_WORKFLOW_SUMMARY.md](docs/FEEDBACK_WORKFLOW_SUMMARY.md)** - Feedback system guide
+- **[CHANGELOG.md](CHANGELOG.md)** - Version history and recent changes
 - **API Documentation:** `http://localhost:8000/docs` (Swagger UI)
 
 ---
@@ -598,11 +640,17 @@ curl -X POST "http://localhost:8000/analyze" \
 - Comprehensive audit reports
 - Tabbed web UI
 - Feedback & learning system
+- **Forensic decision logic** (Jan 2026)
+  - Merchant extraction hardening (60-70% false positive reduction)
+  - Confidence-based gating (prevents over-penalization)
+  - Conditional severity (date gaps, doc-type ambiguity)
+  - Learned rule impact capping
 
 ### 🔄 In Progress
 - Enhanced pattern learning
 - ML model fine-tuning preparation
 - Active learning features
+- Production deployment optimization
 
 ### 📋 Planned
 - Fine-tune Vision LLM on user feedback

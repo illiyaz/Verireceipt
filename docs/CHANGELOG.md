@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### Geo Detection False Positives (2026-01-15)
+Complete overhaul to eliminate false country detections and ensure canonical data sourcing.
+
+**Key Fixes:**
+- **Removed Ambiguous Postal Patterns:** 6-digit patterns for India/Singapore removed from database
+- **Multi-Signal Requirement:** India detection now requires ≥2 signals (was: single 6-digit number)
+- **Weak Match Confidence Cap:** Weak-only matches capped at 0.25 confidence
+- **UNKNOWN Confidence Zeroing:** geo_confidence = 0.0 when geo_country_guess = "UNKNOWN"
+- **Fixed UNKNOWN Threshold:** Now checks both top_score < 0.30 AND confidence < 0.30
+- **Canonical Data Sourcing:** All diagnostic events use final geo output (not raw/pre-canonical)
+- **Improved Audit Messaging:** Clear "No reliable geographic origin detected" for UNKNOWN geo
+
+**Files Modified:**
+- `app/geo/bootstrap.py` - Removed 6-digit postal patterns
+- `app/geo/infer.py` - Fixed UNKNOWN threshold, zeroed confidence
+- `app/pipelines/geo_detection.py` - Removed ambiguous patterns, capped weak confidence
+- `app/pipelines/rules.py` - Required ≥2 India signals, prioritized canonical geo
+- `app/pipelines/features.py` - Populated doc_profile with canonical geo
+- `app/utils/audit_formatter.py` - Improved UNKNOWN geo messaging
+
+**Golden Tests:**
+- `tests/golden/geo_false_india_detection.json` - Prevent false India detection
+- `tests/golden/geo_true_india_detection.json` - Ensure genuine India receipts detected
+
+**Documentation:**
+- `GEO_CANONICAL_FIX.md` - Canonical data sourcing fix
+- `GEO_DEFENSIVE_FIX.md` - Defensive data improvements
+- `GEO_FIXES_SUMMARY.md` - Complete fix summary
+- `GEO_CONFIDENCE_RUBRIC.md` - Scoring rubric and examples
+
+### Added
+
+#### DB-Backed Geo/VAT Logic (2026-01-01)
+Complete refactoring of geo/currency/tax validation to use database-backed rules instead of hardcoded values.
+
+**Core Changes:**
+- **Database Integration:** All geo/VAT rules now queried from `geo.sqlite` database
+- **No Hardcoded Rates:** VAT rates, currencies, and tax regimes come from DB tables
+- **Human-Grade Explanations:** Every mismatch references specific DB sources
+- **Full Traceability:** Geo profile IDs and VAT rule details in all evidence
+
+**New Database Queries:**
+- `query_geo_profile(country_code)` - Fetch country configuration
+- `query_vat_rules(country_code)` - Fetch VAT/GST rules with rates
+- `query_currency_countries(currency)` - Fetch countries for currency
+- `query_doc_expectations(...)` - Fetch document expectations by geo
+
+**Function Changes:**
+- `_get_geo_config_from_db()` - Returns raw DB facts (no legacy shaping)
+- `_geo_currency_tax_consistency()` - Applies DB logic at rule site
+- Added `skip_geo_validation` flag for cross-border/no-geo cases
+- Added `geo_penalty_applied` tracking for travel softener
+
+**Evidence Enhancements:**
+- Currency mismatch includes: `country_name`, `geo_profile_id`, `db_source`
+- VAT mismatch includes: `vat_rules` array with rates and descriptions
+- All events clearly indicate DB vs legacy matrix source
+
+**Example Output:**
+```
+💱 Currency mismatch:
+• Country detected: Germany (DE)
+• Receipt currency: USD
+• Typical currencies: EUR
+• Source: Database (geo profile #42)
+This inconsistency is uncommon in genuine receipts.
+
+🧾 Tax regime mismatch:
+• Country: Germany (DE)
+• Tax shown: GST
+• Expected tax types: VAT
+• Source: Database (3 VAT rule(s))
+Such mismatches commonly indicate fabricated receipts.
+```
+
+**Benefits:**
+- ✅ Add new countries via DB, not code deployment
+- ✅ Update VAT rates via DB, not code changes
+- ✅ Regional variations handled in database
+- ✅ Full audit trail with DB source attribution
+- ✅ Graceful fallback to legacy matrix if DB unavailable
+
+**Database Tables:**
+- `geo_profiles` - Country configurations with currencies and enforcement tiers
+- `vat_rules` - VAT/GST rules with rates and descriptions
+- `currency_country_map` - Currency-to-country mappings
+- `doc_expectations_by_geo` - Document expectations by geography
+
 ## [1.0.0] - 2026-01-01
 
 ### 🚨 BREAKING CHANGES - Vision Veto-Only Design
