@@ -1,0 +1,78 @@
+{
+  "test_id": "geo_true_india_detection",
+  "description": "Test that genuine India receipts with ≥2 India signals are correctly detected",
+  "category": "geo_detection",
+  "priority": "high",
+  "created": "2026-01-15",
+  "input": {
+    "text": "Sharma Electronics\nMG Road, Bangalore, Karnataka 560001\nGSTIN: 29ABCDE1234F1Z5\nPhone: +91-9876543210\n\nTax Invoice\nDate: 15-Aug-2024\nInvoice #: INV-2024-001\n\nItems:\nLaptop Computer       ₹45,000.00\nWireless Mouse        ₹1,200.00\nKeyboard              ₹2,500.00\n\nSubtotal:            ₹48,700.00\nCGST (9%):           ₹4,383.00\nSGST (9%):           ₹4,383.00\nTotal:               ₹57,466.00\n\nPayment: Cash\nThank you for shopping with us!",
+    "lines": [
+      "Sharma Electronics",
+      "MG Road, Bangalore, Karnataka 560001",
+      "GSTIN: 29ABCDE1234F1Z5",
+      "Phone: +91-9876543210",
+      "",
+      "Tax Invoice",
+      "Date: 15-Aug-2024",
+      "Invoice #: INV-2024-001",
+      "",
+      "Items:",
+      "Laptop Computer       ₹45,000.00",
+      "Wireless Mouse        ₹1,200.00",
+      "Keyboard              ₹2,500.00",
+      "",
+      "Subtotal:            ₹48,700.00",
+      "CGST (9%):           ₹4,383.00",
+      "SGST (9%):           ₹4,383.00",
+      "Total:               ₹57,466.00",
+      "",
+      "Payment: Cash",
+      "Thank you for shopping with us!"
+    ]
+  },
+  "expected": {
+    "geo_country_guess": "IN",
+    "geo_confidence_min": 0.50,
+    "india_signals": [
+      "GSTIN (tax keyword)",
+      "+91 (phone code)",
+      "₹ (currency)",
+      "Karnataka (state)",
+      "Bangalore (city)",
+      "560001 (PIN with context)",
+      "CGST/SGST (tax keywords)"
+    ],
+    "india_signals_count_min": 5,
+    "reasoning": [
+      "Multiple strong India signals present",
+      "GSTIN is India-specific tax identifier",
+      "+91 is India country code",
+      "₹ (Rupee) is India currency",
+      "Karnataka is Indian state",
+      "CGST/SGST are India-specific GST components",
+      "Should easily meet ≥2 signal threshold"
+    ]
+  },
+  "assertions": {
+    "geo_country_guess": {
+      "operator": "equals",
+      "value": "IN",
+      "message": "Should correctly detect India with multiple strong signals"
+    },
+    "geo_confidence": {
+      "operator": "greater_than_or_equal",
+      "value": 0.50,
+      "message": "Geo confidence should be at least MODERATE (≥0.50)"
+    },
+    "india_signals_count": {
+      "operator": "greater_than_or_equal",
+      "value": 5,
+      "message": "Should have at least 5 India-specific signals"
+    }
+  },
+  "tags": ["geo_detection", "true_positive", "india", "strong_signals", "regression_test"],
+  "related_issues": [
+    "Ensure true India receipts still detected after fixes",
+    "Validate ≥2 signal requirement doesn't break genuine cases"
+  ]
+}

@@ -68,14 +68,90 @@ def bootstrap_geo_db():
         CREATE INDEX idx_terms_kind ON terms(kind)
     """)
     
+    # Create geo_profiles table
+    cursor.execute("""
+        CREATE TABLE geo_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            country_code TEXT NOT NULL,
+            country_name TEXT,
+            primary_currency TEXT,
+            secondary_currencies TEXT,
+            enforcement_tier TEXT,
+            region TEXT,
+            effective_from TEXT,
+            effective_to TEXT
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX idx_geo_profiles_country ON geo_profiles(country_code)
+    """)
+    
+    # Create vat_rules table
+    cursor.execute("""
+        CREATE TABLE vat_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            country_code TEXT NOT NULL,
+            tax_name TEXT NOT NULL,
+            rate REAL,
+            description TEXT,
+            effective_from TEXT,
+            effective_to TEXT
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX idx_vat_rules_country ON vat_rules(country_code)
+    """)
+    
+    # Create currency_country_map table
+    cursor.execute("""
+        CREATE TABLE currency_country_map (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            currency TEXT NOT NULL,
+            country_code TEXT NOT NULL,
+            is_primary BOOLEAN,
+            weight REAL,
+            effective_from TEXT,
+            effective_to TEXT
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX idx_currency_country_map_currency ON currency_country_map(currency)
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX idx_currency_country_map_country ON currency_country_map(country_code)
+    """)
+    
+    # Create doc_expectations_by_geo table
+    cursor.execute("""
+        CREATE TABLE doc_expectations_by_geo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            geo_scope TEXT NOT NULL,
+            geo_code TEXT NOT NULL,
+            doc_family TEXT NOT NULL,
+            doc_subtype TEXT NOT NULL,
+            expectations TEXT,
+            effective_from TEXT,
+            effective_to TEXT
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX idx_doc_expectations_geo ON doc_expectations_by_geo(geo_scope, geo_code)
+    """)
+    
     # Seed postal patterns
+    # NOTE: Removed standalone \b\d{6}\b for IN and SG - too ambiguous (overlaps with reference numbers, dates, etc.)
     postal_patterns = [
-        ("IN", r"\b\d{6}\b", 0.50, "India 6-digit PIN code"),
+        # ("IN", r"\b\d{6}\b", 0.50, "India 6-digit PIN code"),  # REMOVED - Fix #1
         ("US", r"\b\d{5}(?:-\d{4})?\b", 0.25, "US ZIP code (5 or 9 digit)"),
         ("DE", r"\b\d{5}\b", 0.25, "Germany 5-digit postal code"),
         ("UK", r"\b[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2}\b", 0.50, "UK postcode"),
         ("CA", r"\b[A-Z]\d[A-Z]\s?\d[A-Z]\d\b", 0.50, "Canada postal code"),
-        ("SG", r"\b\d{6}\b", 0.30, "Singapore 6-digit postal code"),
+        # ("SG", r"\b\d{6}\b", 0.30, "Singapore 6-digit postal code"),  # REMOVED - Fix #1
         ("AU", r"\b\d{4}\b", 0.30, "Australia 4-digit postcode"),
         ("AE", r"\b\d{5}\b", 0.20, "UAE postal code (weak signal)"),
     ]
@@ -99,6 +175,27 @@ def bootstrap_geo_db():
         VALUES (?, ?, ?, ?, ?)
     """, terms)
     
+    # Seed geo_profiles
+    geo_profiles = _get_geo_profiles()
+    cursor.executemany("""
+        INSERT INTO geo_profiles (country_code, country_name, primary_currency, secondary_currencies, enforcement_tier, region, effective_from, effective_to)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, geo_profiles)
+    
+    # Seed vat_rules
+    vat_rules = _get_vat_rules()
+    cursor.executemany("""
+        INSERT INTO vat_rules (country_code, tax_name, rate, description, effective_from, effective_to)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, vat_rules)
+    
+    # Seed currency_country_map
+    currency_map = _get_currency_country_map()
+    cursor.executemany("""
+        INSERT INTO currency_country_map (currency, country_code, is_primary, weight, effective_from, effective_to)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, currency_map)
+    
     conn.commit()
     conn.close()
     
@@ -106,6 +203,9 @@ def bootstrap_geo_db():
     print(f"   - {len(postal_patterns)} postal patterns")
     print(f"   - {len(cities)} cities")
     print(f"   - {len(terms)} terms")
+    print(f"   - {len(geo_profiles)} geo profiles")
+    print(f"   - {len(vat_rules)} VAT rules")
+    print(f"   - {len(currency_map)} currency mappings")
 
 def _get_seed_cities() -> List[Tuple]:
     """Get seed city data (country, name_norm, display_name, admin1, alt_names, pop_rank)."""
@@ -220,6 +320,164 @@ def _get_seed_cities() -> List[Tuple]:
         ("AU", "newcastle", "Newcastle", "New South Wales", "", 93),
         ("AU", "wollongong", "Wollongong", "New South Wales", "", 92),
         ("AU", "hobart", "Hobart", "Tasmania", "", 91),
+    ]
+
+def _get_geo_profiles() -> List[Tuple]:
+    """Get geo profile data (country_code, country_name, primary_currency, secondary_currencies, enforcement_tier, region, effective_from, effective_to)."""
+    return [
+        # India
+        ("IN", "India", "INR", None, "STRICT", "APAC", "2020-01-01", None),
+        
+        # United States
+        ("US", "United States", "USD", None, "STRICT", "AMERICAS", "2020-01-01", None),
+        
+        # Major EU Countries (80% coverage)
+        ("DE", "Germany", "EUR", None, "STRICT", "EU", "2020-01-01", None),
+        ("FR", "France", "EUR", None, "STRICT", "EU", "2020-01-01", None),
+        ("IT", "Italy", "EUR", None, "STRICT", "EU", "2020-01-01", None),
+        ("ES", "Spain", "EUR", None, "STRICT", "EU", "2020-01-01", None),
+        ("NL", "Netherlands", "EUR", None, "STRICT", "EU", "2020-01-01", None),
+        ("BE", "Belgium", "EUR", None, "STRICT", "EU", "2020-01-01", None),
+        ("AT", "Austria", "EUR", None, "STRICT", "EU", "2020-01-01", None),
+        ("PT", "Portugal", "EUR", None, "STRICT", "EU", "2020-01-01", None),
+        ("IE", "Ireland", "EUR", None, "STRICT", "EU", "2020-01-01", None),
+        ("FI", "Finland", "EUR", None, "STRICT", "EU", "2020-01-01", None),
+        ("GR", "Greece", "EUR", None, "STRICT", "EU", "2020-01-01", None),
+        
+        # UK (non-EU but important)
+        ("UK", "United Kingdom", "GBP", None, "STRICT", "EU", "2020-01-01", None),
+        
+        # Other important countries
+        ("CA", "Canada", "CAD", None, "STRICT", "AMERICAS", "2020-01-01", None),
+        ("AU", "Australia", "AUD", None, "RELAXED", "APAC", "2020-01-01", None),
+        ("SG", "Singapore", "SGD", None, "RELAXED", "APAC", "2020-01-01", None),
+        ("AE", "United Arab Emirates", "AED", None, "STRICT", "MENA", "2020-01-01", None),
+    ]
+
+def _get_vat_rules() -> List[Tuple]:
+    """Get VAT rule data (country_code, tax_name, rate, description, effective_from, effective_to)."""
+    return [
+        # India - GST
+        ("IN", "GST", 0.18, "Standard GST rate in India", "2020-01-01", None),
+        ("IN", "GST", 0.12, "Reduced GST rate in India", "2020-01-01", None),
+        ("IN", "GST", 0.05, "Lower GST rate in India", "2020-01-01", None),
+        ("IN", "CGST", 0.09, "Central GST (half of 18% standard)", "2020-01-01", None),
+        ("IN", "SGST", 0.09, "State GST (half of 18% standard)", "2020-01-01", None),
+        
+        # United States - Sales Tax (varies by state, these are examples)
+        ("US", "SALES_TAX", 0.0725, "California sales tax (example)", "2020-01-01", None),
+        ("US", "SALES_TAX", 0.0625, "Texas sales tax (example)", "2020-01-01", None),
+        ("US", "SALES_TAX", 0.08875, "New York City sales tax (example)", "2020-01-01", None),
+        
+        # Germany - VAT
+        ("DE", "VAT", 0.19, "Standard VAT rate in Germany", "2020-01-01", None),
+        ("DE", "VAT", 0.07, "Reduced VAT rate in Germany", "2020-01-01", None),
+        
+        # France - VAT
+        ("FR", "VAT", 0.20, "Standard VAT rate in France", "2020-01-01", None),
+        ("FR", "VAT", 0.10, "Intermediate VAT rate in France", "2020-01-01", None),
+        ("FR", "VAT", 0.055, "Reduced VAT rate in France", "2020-01-01", None),
+        
+        # Italy - VAT
+        ("IT", "VAT", 0.22, "Standard VAT rate in Italy", "2020-01-01", None),
+        ("IT", "VAT", 0.10, "Reduced VAT rate in Italy", "2020-01-01", None),
+        ("IT", "VAT", 0.04, "Super-reduced VAT rate in Italy", "2020-01-01", None),
+        
+        # Spain - VAT
+        ("ES", "VAT", 0.21, "Standard VAT rate in Spain", "2020-01-01", None),
+        ("ES", "VAT", 0.10, "Reduced VAT rate in Spain", "2020-01-01", None),
+        ("ES", "VAT", 0.04, "Super-reduced VAT rate in Spain", "2020-01-01", None),
+        
+        # Netherlands - VAT
+        ("NL", "VAT", 0.21, "Standard VAT rate in Netherlands", "2020-01-01", None),
+        ("NL", "VAT", 0.09, "Reduced VAT rate in Netherlands", "2020-01-01", None),
+        
+        # Belgium - VAT
+        ("BE", "VAT", 0.21, "Standard VAT rate in Belgium", "2020-01-01", None),
+        ("BE", "VAT", 0.12, "Intermediate VAT rate in Belgium", "2020-01-01", None),
+        ("BE", "VAT", 0.06, "Reduced VAT rate in Belgium", "2020-01-01", None),
+        
+        # Austria - VAT
+        ("AT", "VAT", 0.20, "Standard VAT rate in Austria", "2020-01-01", None),
+        ("AT", "VAT", 0.10, "Reduced VAT rate in Austria", "2020-01-01", None),
+        
+        # Portugal - VAT
+        ("PT", "VAT", 0.23, "Standard VAT rate in Portugal", "2020-01-01", None),
+        ("PT", "VAT", 0.13, "Intermediate VAT rate in Portugal", "2020-01-01", None),
+        ("PT", "VAT", 0.06, "Reduced VAT rate in Portugal", "2020-01-01", None),
+        
+        # Ireland - VAT
+        ("IE", "VAT", 0.23, "Standard VAT rate in Ireland", "2020-01-01", None),
+        ("IE", "VAT", 0.135, "Reduced VAT rate in Ireland", "2020-01-01", None),
+        ("IE", "VAT", 0.09, "Second reduced VAT rate in Ireland", "2020-01-01", None),
+        
+        # Finland - VAT
+        ("FI", "VAT", 0.24, "Standard VAT rate in Finland", "2020-01-01", None),
+        ("FI", "VAT", 0.14, "Intermediate VAT rate in Finland", "2020-01-01", None),
+        ("FI", "VAT", 0.10, "Reduced VAT rate in Finland", "2020-01-01", None),
+        
+        # Greece - VAT
+        ("GR", "VAT", 0.24, "Standard VAT rate in Greece", "2020-01-01", None),
+        ("GR", "VAT", 0.13, "Reduced VAT rate in Greece", "2020-01-01", None),
+        ("GR", "VAT", 0.06, "Super-reduced VAT rate in Greece", "2020-01-01", None),
+        
+        # United Kingdom - VAT
+        ("UK", "VAT", 0.20, "Standard VAT rate in UK", "2020-01-01", None),
+        ("UK", "VAT", 0.05, "Reduced VAT rate in UK", "2020-01-01", None),
+        
+        # Canada - GST/HST/PST
+        ("CA", "GST", 0.05, "Federal GST in Canada", "2020-01-01", None),
+        ("CA", "HST", 0.13, "Harmonized Sales Tax (Ontario)", "2020-01-01", None),
+        ("CA", "HST", 0.15, "Harmonized Sales Tax (Atlantic provinces)", "2020-01-01", None),
+        ("CA", "PST", 0.07, "Provincial Sales Tax (BC)", "2020-01-01", None),
+        
+        # Australia - GST
+        ("AU", "GST", 0.10, "Goods and Services Tax in Australia", "2020-01-01", None),
+        
+        # Singapore - GST
+        ("SG", "GST", 0.08, "Goods and Services Tax in Singapore (current)", "2023-01-01", None),
+        ("SG", "GST", 0.09, "Goods and Services Tax in Singapore (2024)", "2024-01-01", None),
+        
+        # UAE - VAT
+        ("AE", "VAT", 0.05, "Value Added Tax in UAE", "2020-01-01", None),
+    ]
+
+def _get_currency_country_map() -> List[Tuple]:
+    """Get currency-country mapping data (currency, country_code, is_primary, weight, effective_from, effective_to)."""
+    return [
+        # INR - India
+        ("INR", "IN", True, 1.0, "2020-01-01", None),
+        
+        # USD - United States
+        ("USD", "US", True, 1.0, "2020-01-01", None),
+        
+        # EUR - Eurozone countries
+        ("EUR", "DE", True, 1.0, "2020-01-01", None),
+        ("EUR", "FR", True, 1.0, "2020-01-01", None),
+        ("EUR", "IT", True, 1.0, "2020-01-01", None),
+        ("EUR", "ES", True, 1.0, "2020-01-01", None),
+        ("EUR", "NL", True, 1.0, "2020-01-01", None),
+        ("EUR", "BE", True, 1.0, "2020-01-01", None),
+        ("EUR", "AT", True, 1.0, "2020-01-01", None),
+        ("EUR", "PT", True, 1.0, "2020-01-01", None),
+        ("EUR", "IE", True, 1.0, "2020-01-01", None),
+        ("EUR", "FI", True, 1.0, "2020-01-01", None),
+        ("EUR", "GR", True, 1.0, "2020-01-01", None),
+        
+        # GBP - United Kingdom
+        ("GBP", "UK", True, 1.0, "2020-01-01", None),
+        
+        # CAD - Canada
+        ("CAD", "CA", True, 1.0, "2020-01-01", None),
+        
+        # AUD - Australia
+        ("AUD", "AU", True, 1.0, "2020-01-01", None),
+        
+        # SGD - Singapore
+        ("SGD", "SG", True, 1.0, "2020-01-01", None),
+        
+        # AED - UAE
+        ("AED", "AE", True, 1.0, "2020-01-01", None),
     ]
 
 def _get_seed_terms() -> List[Tuple]:

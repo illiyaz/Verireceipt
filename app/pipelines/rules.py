@@ -2,9 +2,21 @@
 
 import logging
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
+from datetime import datetime
 import re
 
+from app.pipelines.rule_family_matrix import (
+    is_rule_allowed_for_family,
+    get_allowed_families_for_rule,
+    get_execution_mode,
+    ExecutionMode,
+)
+from app.pipelines.template_quality_signals import (
+    detect_keyword_typos,
+    detect_spacing_anomaly,
+    detect_date_format_anomaly,
+)
 from app.pipelines.features import build_features
 from app.pipelines.ingest import ingest_and_ocr
 from app.schemas.receipt import ReceiptDecision, ReceiptFeatures, ReceiptInput ,LearnedRuleAudit
@@ -175,9 +187,11 @@ def _confidence_factor_from_features(
     # Geo-aware softening:
     # UNKNOWN (low confidence) geo should NOT automatically imply a suspicious receipt.
     # We soften *soft* rule weights (never HARD_FAIL) when geo detection is weak.
+    # Defensive fix: Source from doc_profile first if available
     try:
-        geo_country = str(tf.get("geo_country_guess") or "UNKNOWN").upper().strip()
-        geo_conf = tf.get("geo_confidence")
+        dp = doc_profile or {}
+        geo_country = str(dp.get("geo_country") or tf.get("geo_country_guess") or "UNKNOWN").upper().strip()
+        geo_conf = dp.get("geo_confidence") or tf.get("geo_confidence")
         geo_conf_f = float(geo_conf) if geo_conf is not None else 0.0
     except Exception:
         geo_country = "UNKNOWN"
@@ -288,7 +302,7 @@ def _get_doc_profile(tf: Dict[str, Any], doc_type_hint: Optional[str] = None) ->
         conf_f = 0.0
 
     # Backward-compatible fallback from older doc_type_hint
-    if subtype == "UNKNOWN" and doc_type_hint:
+    if str(subtype).strip().lower() == "unknown" and doc_type_hint:
         dth = str(doc_type_hint).lower().strip()
         if dth in ("receipt", "tax_invoice", "invoice"):
             family = "TRANSACTIONAL"
@@ -301,6 +315,7 @@ def _get_doc_profile(tf: Dict[str, Any], doc_type_hint: Optional[str] = None) ->
         "confidence": max(0.0, min(1.0, conf_f)),
         "evidence": tf.get("doc_profile_evidence") or [],
         # Geo-aware tags (may be UNKNOWN / None)
+        # Note: This is legacy fallback; prefer doc_profile from detect_geo_and_profile
         "geo_country": str(tf.get("geo_country_guess") or "UNKNOWN"),
         "geo_confidence": tf.get("geo_confidence"),
         "lang": tf.get("lang_guess"),
@@ -314,8 +329,10 @@ def _get_doc_profile(tf: Dict[str, Any], doc_type_hint: Optional[str] = None) ->
 def _geo_unknown_low(tf: Dict[str, Any], doc_profile: Optional[Dict[str, Any]] = None) -> bool:
     """True when geo detection is too weak to treat missing-field expectations as fraud."""
     try:
-        geo_country = str(tf.get("geo_country_guess") or (doc_profile or {}).get("geo_country") or "UNKNOWN").upper().strip()
-        geo_conf = tf.get("geo_confidence")
+        # Defensive fix: Source from doc_profile first (final geo_detection output)
+        dp = doc_profile or {}
+        geo_country = str(dp.get("geo_country") or tf.get("geo_country_guess") or "UNKNOWN").upper().strip()
+        geo_conf = dp.get("geo_confidence") or tf.get("geo_confidence")
         geo_conf_f = float(geo_conf) if geo_conf is not None else 0.0
     except Exception:
         geo_country = "UNKNOWN"
@@ -337,31 +354,64 @@ def _doc_misc_low(tf: Dict[str, Any], doc_profile: Optional[Dict[str, Any]] = No
     return subtype in ("MISC", "UNKNOWN") and dp_conf_f < 0.55
 
 
-def _missing_field_penalties_enabled(tf: Dict[str, Any], doc_profile: Optional[Dict[str, Any]] = None) -> bool:
-    """Whether to apply penalties for missing transactional fields (merchant/phone/address/total/date/etc.).
-
-    Design:
-    - If geo is UNKNOWN with low confidence, do NOT treat missing fields as fraud.
-    - If doc subtype is MISC/UNKNOWN with low confidence, do NOT treat missing fields as fraud.
+def _missing_field_penalties_enabled(
+    tf: Dict[str, Any],
+    doc_profile: Optional[Dict[str, Any]] = None,
+) -> bool:
     """
+    Missing-field penalties are ONLY allowed when we are confident
+    this is a transactional receipt/invoice.
+    """
+
+    dp = doc_profile or {}
+
+    try:
+        dp_conf = tf.get("doc_profile_confidence") or dp.get("confidence")
+        dp_conf = float(dp_conf)
+    except Exception:
+        dp_conf = 0.0
+
+    # 🚨 Hard gate: low confidence = NO missing-field penalties
+    if dp_conf < 0.55:
+        return False
+
+    # Existing safety gates
     if _geo_unknown_low(tf, doc_profile=doc_profile):
         return False
+
     if _doc_misc_low(tf, doc_profile=doc_profile):
         return False
+
     return True
 
 
 def _missing_field_gate_evidence(tf: Dict[str, Any], doc_profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Common evidence for audit when missing-field penalties are gated off."""
     dp = doc_profile or {}
+    # Defensive fix: Source geo data from final doc_profile (geo_detection output) first, not legacy tf
     return {
-        "geo_country_guess": tf.get("geo_country_guess") or dp.get("geo_country"),
-        "geo_confidence": tf.get("geo_confidence") or dp.get("geo_confidence"),
-        "doc_subtype_guess": tf.get("doc_subtype_guess") or dp.get("subtype"),
-        "doc_profile_confidence": tf.get("doc_profile_confidence") or dp.get("confidence"),
-        "lang_guess": tf.get("lang_guess") or dp.get("lang"),
-        "lang_confidence": tf.get("lang_confidence") or dp.get("lang_confidence"),
+        "geo_country_guess": dp.get("geo_country") or tf.get("geo_country_guess"),
+        "geo_confidence": dp.get("geo_confidence") or tf.get("geo_confidence"),
+        "doc_subtype_guess": dp.get("subtype") or tf.get("doc_subtype_guess"),
+        "doc_profile_confidence": dp.get("confidence") or tf.get("doc_profile_confidence"),
+        "lang_guess": dp.get("lang") or tf.get("lang_guess"),
+        "lang_confidence": dp.get("lang_confidence") or tf.get("lang_confidence"),
     }
+
+
+def _get_document_intent(tf: Dict[str, Any]) -> Tuple[Optional[str], float]:
+    """Best-effort extraction of (intent, confidence) from text_features."""
+    try:
+        di = tf.get("document_intent")
+        if not isinstance(di, dict):
+            return (None, 0.0)
+        intent = di.get("intent")
+        conf = di.get("confidence")
+        intent_s = str(intent).strip().lower() if intent is not None else None
+        conf_f = float(conf) if conf is not None else 0.0
+        return (intent_s, conf_f)
+    except Exception:
+        return (None, 0.0)
 
 
 def _emit_missing_field_gate_event(
@@ -389,7 +439,19 @@ def _emit_missing_field_gate_event(
     )
 
 
-def _expects_total_line(doc_profile: Dict[str, Any]) -> bool:
+def _expects_total_line(tf: Dict[str, Any], doc_profile: Dict[str, Any]) -> bool:
+    intent, intent_conf = _get_document_intent(tf)
+    if intent and intent_conf >= 0.55:
+        # Strict expectations only for intents where a TOTAL line is meaningful.
+        # Keep transport/claims conservative to avoid false positives.
+        return intent in {
+            "purchase",
+            "billing",
+            "subscription",
+            "proof_of_payment",
+            "reimbursement",
+        }
+
     subtype = (doc_profile.get("subtype") or "UNKNOWN").upper()
     # If we are not confident about the subtype, do not be strict
     if float(doc_profile.get("confidence") or 0.0) < 0.55:
@@ -397,14 +459,41 @@ def _expects_total_line(doc_profile: Dict[str, Any]) -> bool:
     return subtype not in _DOC_SUBTYPES_TOTAL_OPTIONAL
 
 
-def _expects_amounts(doc_profile: Dict[str, Any]) -> bool:
+def _expects_amounts(tf: Dict[str, Any], doc_profile: Dict[str, Any]) -> bool:
+    intent, intent_conf = _get_document_intent(tf)
+    if intent and intent_conf >= 0.55:
+        # Amounts are expected for most transactional/billing-related intents.
+        # Transport/claims stay conservative.
+        return intent in {
+            "purchase",
+            "billing",
+            "subscription",
+            "proof_of_payment",
+            "reimbursement",
+            "statement",
+        }
+
     subtype = (doc_profile.get("subtype") or "UNKNOWN").upper()
     if float(doc_profile.get("confidence") or 0.0) < 0.55:
         return False
     return subtype not in _DOC_SUBTYPES_AMOUNTS_OPTIONAL
 
 
-def _expects_date(doc_profile: Dict[str, Any]) -> bool:
+def _expects_date(tf: Dict[str, Any], doc_profile: Dict[str, Any]) -> bool:
+    intent, intent_conf = _get_document_intent(tf)
+    if intent and intent_conf >= 0.55:
+        # Dates are generally expected for transactional/billing/statement docs.
+        # Keep claims conservative.
+        return intent in {
+            "purchase",
+            "billing",
+            "subscription",
+            "proof_of_payment",
+            "reimbursement",
+            "statement",
+            "transport",
+        }
+
     subtype = (doc_profile.get("subtype") or "UNKNOWN").upper()
     if float(doc_profile.get("confidence") or 0.0) < 0.55:
         return False
@@ -504,12 +593,29 @@ def _detect_us_state_hint(text: str) -> bool:
 
 
 def _detect_india_hint(text: str) -> bool:
-    """Lightweight India signal: state names, PIN (6 digits), +91, INR."""
+    """Lightweight India signal: state names, PIN (6 digits), +91, INR.
+    
+    IMPORTANT: Requires ≥2 India signals to avoid false positives.
+    6-digit PIN alone is NOT sufficient (overlaps with China, Singapore, etc.).
+    """
     t = (text or "").lower()
-    if "+91" in t or "india" in t or " inr" in t or "₹" in t:
-        return True
-    if re.search(r"\b\d{6}\b", t):  # PIN
-        return True
+    
+    # Count India-specific signals
+    india_signals = 0
+    
+    # Strong signals
+    if "+91" in t:
+        india_signals += 1
+    if "india" in t:
+        india_signals += 1
+    if " inr" in t or "₹" in t:
+        india_signals += 1
+    
+    # 6-digit PIN only counts if we have India context
+    has_pin = bool(re.search(r"\b\d{6}\b", t))
+    if has_pin and any(k in t for k in ["india", "+91", "inr", "₹"]):
+        india_signals += 1
+    # Indian states and cities
     states = [
         "andhra pradesh",
         "telangana",
@@ -524,17 +630,28 @@ def _detect_india_hint(text: str) -> bool:
         "bihar",
         "jharkhand",
         "west bengal",
-        "odisha",
         "punjab",
         "haryana",
         "delhi",
-        "assam",
-        "goa",
+        "mumbai",
+        "bangalore",
+        "hyderabad",
+        "chennai",
+        "kolkata",
     ]
-    return any(s in t for s in states)
-# -----------------------------------------------------------------------------
-# Canada geography detection helper
-# -----------------------------------------------------------------------------
+    for state in states:
+        if state in t:
+            india_signals += 1
+            break  # Only count once
+    
+    # GST/GSTIN is a strong India signal
+    if "gst" in t or "gstin" in t:
+        india_signals += 1
+    
+    # Require at least 2 India signals
+    return india_signals >= 2
+
+
 def _detect_canada_hint(text: str) -> bool:
     """
     Lightweight Canada signal: looks for province names, cities, tax terms, +1 with Canadian context,
@@ -1080,63 +1197,40 @@ def _currency_hint_extended(text: str) -> Optional[str]:
 
 def _get_geo_config_from_db(country_code: str) -> Dict[str, Any]:
     """
-    Query geo profile and VAT rules from DB for a country.
+    Fetch geo + VAT knowledge from DB.
+    Returns raw DB-backed facts (no legacy shaping).
     
-    Returns a config dict compatible with legacy GEO_RULE_MATRIX format:
+    Returns:
     {
-        "currencies": set of currency codes,
-        "tax_regimes": set of tax regime names,
-        "tier": "STRICT" or "RELAXED",
-        "db_source": True,
-        "geo_profile": {...},
-        "vat_rules": [...]
+        "db_source": True/False,
+        "geo_profile": {...} or None,
+        "vat_rules": [...] or []
     }
     """
     try:
-        # Query geo profile
         geo_profile = query_geo_profile(country_code)
+        vat_rules = query_vat_rules(country_code) or []
+
         if not geo_profile:
-            return {"currencies": set(), "tax_regimes": set(), "tier": "RELAXED", "db_source": False}
-        
-        # Query VAT rules
-        vat_rules = query_vat_rules(country_code)
-        
-        # Extract currencies from geo profile
-        currencies = set()
-        if geo_profile.get("primary_currency"):
-            currencies.add(geo_profile["primary_currency"])
-        if geo_profile.get("secondary_currencies"):
-            # secondary_currencies might be JSON string or list
-            sec_curr = geo_profile["secondary_currencies"]
-            if isinstance(sec_curr, str):
-                import json
-                try:
-                    sec_curr = json.loads(sec_curr)
-                except Exception:
-                    sec_curr = []
-            if isinstance(sec_curr, list):
-                currencies.update(sec_curr)
-        
-        # Extract tax regimes from VAT rules
-        tax_regimes = set()
-        for rule in vat_rules:
-            if rule.get("tax_name"):
-                tax_regimes.add(rule["tax_name"])
-        
-        # Determine tier from geo profile
-        tier = geo_profile.get("enforcement_tier", "RELAXED").upper()
-        
+            return {
+                "db_source": False,
+                "geo_profile": None,
+                "vat_rules": [],
+            }
+
         return {
-            "currencies": currencies,
-            "tax_regimes": tax_regimes,
-            "tier": tier,
             "db_source": True,
             "geo_profile": geo_profile,
             "vat_rules": vat_rules,
         }
+
     except Exception as e:
-        logger.warning(f"Failed to query geo config from DB for {country_code}: {e}")
-        return {"currencies": set(), "tax_regimes": set(), "tier": "RELAXED", "db_source": False}
+        logger.warning(f"Geo DB lookup failed for {country_code}: {e}")
+        return {
+            "db_source": False,
+            "geo_profile": None,
+            "vat_rules": [],
+        }
 
 
 def _geo_currency_tax_consistency(
@@ -1145,20 +1239,31 @@ def _geo_currency_tax_consistency(
     reasons: List[str],
     minor_notes: List[str],
     events: List[RuleEvent],
+    features: Optional[Dict] = None,
 ) -> float:
     """Apply geo/currency/tax consistency checks using DB-backed rules.
 
     Returns incremental score to add.
     """
     score_delta = 0.0
+    # Track if geo-related penalty (currency/tax mismatch) was applied
+    geo_penalty_applied = False
 
+    # Extract needed values from features
     blob = text or ""
+    geos = features.get("geo_guesses", []) if features else []
+    currency = features.get("currency_guess") if features else None
+    tax = features.get("tax_regime_guess") if features else None
     currency = _currency_hint_extended(blob)
     tax = _tax_regime_hint(blob)
     geos = _detect_geo_candidates(blob)
 
+    # Control flag: skip geo validation for cross-border or no-geo
+    skip_geo_validation = False
+
     # If multiple geos detected, treat as cross-border (no penalty)
     if len(geos) >= 2:
+        skip_geo_validation = True
         minor_notes.append(
             "🌎 Cross-border indicators detected: multiple region hints were found ("
             + ", ".join(geos)
@@ -1173,10 +1278,10 @@ def _geo_currency_tax_consistency(
             message="Multiple region hints detected; treating as cross-border (no geo penalty)",
             evidence={"geo_candidates": geos, "currency_detected": currency, "tax_detected": tax},
         )
-        return score_delta
 
     # No geo detected → can't validate; keep as a minor note (no penalty)
     if len(geos) == 0:
+        skip_geo_validation = True
         if currency or tax:
             minor_notes.append(
                 f"🌍 Geo consistency could not be validated (no strong region hints). "
@@ -1191,108 +1296,223 @@ def _geo_currency_tax_consistency(
                 message="Geo consistency not validated (no strong region hints)",
                 evidence={"currency_detected": currency, "tax_detected": tax},
             )
-        return score_delta
 
-    region = geos[0]
-    
-    # Query DB for geo config (replaces hardcoded GEO_RULE_MATRIX)
-    cfg = _get_geo_config_from_db(region)
-    
-    # Fallback to legacy matrix if DB query failed
-    if not cfg.get("db_source"):
-        cfg = GEO_RULE_MATRIX.get(region, {})
-        cfg["db_source"] = False
-    
-    tier = cfg.get("tier", "RELAXED")
-    expected_currencies = cfg.get("currencies", set())
-    expected_taxes = cfg.get("tax_regimes", set())
-
-    # Check for travel/hospitality context upfront
-    is_travel = tier == "STRICT" and _is_travel_or_hospitality(blob)
-    
-    # -------------------- Currency mismatch --------------------
-    currency_mismatch = bool(currency and expected_currencies and (currency not in expected_currencies))
-    if currency_mismatch:
-        # Reduce weight for travel/hospitality cross-border receipts
-        currency_weight = 0.15 if is_travel else 0.30
-        currency_severity = "WARNING" if is_travel else "CRITICAL"
+    # Only perform geo validation if not skipped
+    if not skip_geo_validation:
+        country = geos[0]
+        # Query DB for geo config
+        cfg = _get_geo_config_from_db(country)
+        geo = cfg.get("geo_profile")
+        vat_rules = cfg.get("vat_rules", [])
         
-        score_delta += _emit_event(
-            events=events,
-            reasons=reasons,
-            rule_id="GEO_CURRENCY_MISMATCH",
-            severity=currency_severity,
-            weight=currency_weight,
-            message="Currency does not match implied region (DB-backed)",
-            evidence={
-                "region": region,
-                "currency_detected": currency,
-                "expected_currencies": sorted(list(expected_currencies)),
-                "geo_candidates": geos,
-                "tier": tier,
-                "travel_softened": is_travel,
-                "db_source": cfg.get("db_source", False),
-                "geo_profile_id": cfg.get("geo_profile", {}).get("id") if cfg.get("geo_profile") else None,
-            },
-            reason_text=(
-                "💵🌍 Currency–Geography Consistency Issue:\n"
-                f"   • Implied region: {region}\n"
-                f"   • Detected currency: {currency}\n"
-                f"   • Expected currencies: {sorted(list(expected_currencies))}\n"
-                f"   • Source: {'Database' if cfg.get('db_source') else 'Legacy matrix'}\n"
-                "Mismatches like this are common in fabricated or edited receipts."
-            ),
-        )
+        # Get geo confidence from features
+        geo_confidence = features.get("geo_confidence", 0.0) if features else 0.0
 
-    # -------------------- Tax mismatch --------------------
-    if tax and expected_taxes and (tax not in expected_taxes):
-        # Reduce weight for travel/hospitality cross-border receipts
-        tax_weight = 0.10 if is_travel else 0.18
-        tax_severity = "WARNING" if is_travel else "CRITICAL"
-        
-        # Get VAT rule details for evidence
-        vat_rule_details = []
-        if cfg.get("vat_rules"):
-            for rule in cfg["vat_rules"]:
-                vat_rule_details.append({
-                    "tax_name": rule.get("tax_name"),
-                    "rate": rule.get("rate"),
-                    "description": rule.get("description"),
-                })
-        
-        score_delta += _emit_event(
-            events=events,
-            reasons=reasons,
-            rule_id="GEO_TAX_MISMATCH",
-            severity=tax_severity,
-            weight=tax_weight,
-            message="Tax regime terminology does not match implied region (DB-backed)",
-            evidence={
-                "region": region,
-                "tax_detected": tax,
-                "expected_taxes": sorted(list(expected_taxes)),
-                "tier": tier,
-                "travel_softened": is_travel,
-                "db_source": cfg.get("db_source", False),
-                "vat_rules": vat_rule_details if vat_rule_details else None,
-            },
-        )
+        # Fallback to legacy matrix if DB query failed
+        if not cfg.get("db_source"):
+            legacy_cfg = GEO_RULE_MATRIX.get(country, {})
+            tier = legacy_cfg.get("tier", "RELAXED")
+            expected_currencies = legacy_cfg.get("currencies", set())
+            expected_taxes = legacy_cfg.get("tax_regimes", set())
+            is_travel = tier == "STRICT" and _is_travel_or_hospitality(blob)
 
-    # Emit travel softener info event if applicable
-    if is_travel and (currency_mismatch or (tax and expected_taxes and (tax not in expected_taxes))):
-        minor_notes.append(
-            "✈️ Travel/hospitality context detected. Geo mismatches may be legitimate (cross-border). "
-            "Severity downgraded to WARNING and penalties reduced."
-        )
-        _emit_event(
-            events=events,
-            reasons=None,
-            rule_id="GEO_TRAVEL_SOFTENER",
-            severity="INFO",
-            weight=0.0,
-            message="Travel/hospitality context detected; reduced geo mismatch penalties",
-            evidence={"region": region, "currency_detected": currency, "tier": tier},
-        )
+            # Legacy currency mismatch
+            if currency and expected_currencies and (currency not in expected_currencies):
+                # Gate: only CRITICAL if geo confidence is high
+                if geo_confidence < 0.6:
+                    currency_weight = 0.0
+                    currency_severity = "INFO"
+                else:
+                    currency_weight = 0.15 if is_travel else 0.30
+                    currency_severity = "WARNING" if is_travel else "CRITICAL"
+                score_delta += _emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="GEO_CURRENCY_MISMATCH",
+                    severity=currency_severity,
+                    weight=currency_weight,
+                    message="Currency does not match implied region (legacy matrix)",
+                    evidence={
+                        "country": country,
+                        "currency_detected": currency,
+                        "expected_currencies": sorted(list(expected_currencies)),
+                        "db_source": False,
+                        "geo_confidence": geo_confidence,
+                        "gated": geo_confidence < 0.6,
+                    },
+                    reason_text=(
+                        f"💵 Currency mismatch:\n"
+                        f"• Country: {country}\n"
+                        f"• Receipt currency: {currency}\n"
+                        f"• Expected: {sorted(list(expected_currencies))}\n"
+                        "This inconsistency is uncommon in genuine receipts."
+                    ),
+                )
+                geo_penalty_applied = True
+
+            # Legacy tax mismatch
+            if tax and expected_taxes and (tax not in expected_taxes):
+                tax_weight = 0.10 if is_travel else 0.18
+                tax_severity = "WARNING" if is_travel else "CRITICAL"
+                score_delta += _emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="GEO_TAX_MISMATCH",
+                    severity=tax_severity,
+                    weight=tax_weight,
+                    message="Tax regime does not match implied region (legacy matrix)",
+                    evidence={
+                        "country": country,
+                        "tax_detected": tax,
+                        "expected_taxes": sorted(list(expected_taxes)),
+                        "db_source": False,
+                    },
+                )
+                geo_penalty_applied = True
+
+            # Travel softener applies only if geo penalty applied
+            if is_travel and geo_penalty_applied:
+                minor_notes.append(
+                    "✈️ Travel/hospitality context detected. Geo mismatches may be legitimate (cross-border). "
+                    "Severity downgraded to WARNING and penalties reduced."
+                )
+                _emit_event(
+                    events=events,
+                    reasons=None,
+                    rule_id="GEO_TRAVEL_SOFTENER",
+                    severity="INFO",
+                    weight=0.0,
+                    message="Travel/hospitality context detected; reduced geo mismatch penalties",
+                    evidence={"country": country, "currency_detected": currency, "tier": tier},
+                )
+        else:
+            # -------------------- DB-backed logic --------------------
+            # Extract expected currencies from geo profile
+            expected_currencies = set()
+            if geo:
+                if geo.get("primary_currency"):
+                    expected_currencies.add(geo["primary_currency"])
+                if geo.get("secondary_currencies"):
+                    sec_curr = geo["secondary_currencies"]
+                    if isinstance(sec_curr, str):
+                        import json
+                        try:
+                            sec_curr = json.loads(sec_curr)
+                        except Exception:
+                            sec_curr = []
+                    if isinstance(sec_curr, list):
+                        expected_currencies.update(filter(None, sec_curr))
+
+            # Check for travel/hospitality context
+            tier = geo.get("enforcement_tier", "RELAXED").upper() if geo else "RELAXED"
+            is_travel = tier == "STRICT" and _is_travel_or_hospitality(blob)
+
+            # -------------------- Currency mismatch (DB-backed) --------------------
+            if currency and expected_currencies and currency not in expected_currencies:
+                # Gate: only CRITICAL if geo confidence is high
+                if geo_confidence < 0.6:
+                    currency_weight = 0.0
+                    currency_severity = "INFO"
+                else:
+                    currency_weight = 0.15 if is_travel else 0.25
+                    currency_severity = "WARNING" if is_travel else "CRITICAL"
+
+                country_name = geo.get("country_name", country) if geo else country
+
+                score_delta += _emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="GEO_CURRENCY_MISMATCH",
+                    severity=currency_severity,
+                    weight=currency_weight,
+                    message="Currency inconsistent with country profile (DB-backed)",
+                    evidence={
+                        "country": country,
+                        "country_name": country_name,
+                        "currency_detected": currency,
+                        "expected_currencies": sorted(expected_currencies),
+                        "geo_profile_id": geo.get("id") if geo else None,
+                        "geo_confidence": geo_confidence,
+                        "gated": geo_confidence < 0.6,
+                        "db_source": True,
+                        "travel_softened": is_travel,
+                    },
+                    reason_text=(
+                        f"💱 Currency mismatch:\n"
+                        f"• Country detected: {country_name} ({country})\n"
+                        f"• Receipt currency: {currency}\n"
+                        f"• Typical currencies: {', '.join(sorted(expected_currencies))}\n"
+                        f"• Source: Database (geo profile #{geo.get('id') if geo else 'N/A'})\n"
+                        "This inconsistency is uncommon in genuine receipts."
+                    ),
+                )
+                geo_penalty_applied = True
+
+            # -------------------- VAT/Tax mismatch (DB-backed) --------------------
+            if vat_rules and tax:
+                # Extract expected tax names from VAT rules
+                expected_tax_names = set()
+                for rule in vat_rules:
+                    if rule.get("tax_name"):
+                        expected_tax_names.add(rule["tax_name"])
+
+                if expected_tax_names and tax not in expected_tax_names:
+                    tax_weight = 0.10 if is_travel else 0.18
+                    tax_severity = "WARNING" if is_travel else "CRITICAL"
+
+                    country_name = geo.get("country_name", country) if geo else country
+
+                    # Build VAT rule summary for evidence
+                    vat_summary = []
+                    for rule in vat_rules:
+                        vat_summary.append({
+                            "tax_name": rule.get("tax_name"),
+                            "rate": rule.get("rate"),
+                            "description": rule.get("description"),
+                        })
+
+                    score_delta += _emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="GEO_TAX_MISMATCH",
+                        severity=tax_severity,
+                        weight=tax_weight,
+                        message="Tax regime inconsistent with country VAT rules (DB-backed)",
+                        evidence={
+                            "country": country,
+                            "country_name": country_name,
+                            "tax_detected": tax,
+                            "expected_tax_names": sorted(expected_tax_names),
+                            "vat_rules": vat_summary,
+                            "db_source": True,
+                            "travel_softened": is_travel,
+                        },
+                        reason_text=(
+                            f"🧾 Tax regime mismatch:\n"
+                            f"• Country: {country_name} ({country})\n"
+                            f"• Tax shown: {tax}\n"
+                            f"• Expected tax types: {', '.join(sorted(expected_tax_names))}\n"
+                            f"• Source: Database ({len(vat_rules)} VAT rule(s))\n"
+                            "Such mismatches commonly indicate fabricated receipts."
+                        ),
+                    )
+                    geo_penalty_applied = True
+
+            # Travel softener applies only if geo penalty applied
+            if is_travel and geo_penalty_applied:
+                minor_notes.append(
+                    "✈️ Travel/hospitality context detected. Geo mismatches may be legitimate (cross-border). "
+                    "Severity downgraded to WARNING and penalties reduced."
+                )
+                _emit_event(
+                    events=events,
+                    reasons=None,
+                    rule_id="GEO_TRAVEL_SOFTENER",
+                    severity="INFO",
+                    weight=0.0,
+                    message="Travel/hospitality context detected; reduced geo mismatch penalties",
+                    evidence={"country": country, "currency_detected": currency, "tier": tier},
+                )
 
     # -------------------- Merchant–currency plausibility --------------------
     mc_flags = _merchant_currency_plausibility_flags(merchant, currency, blob)
@@ -1633,34 +1853,47 @@ def _format_merchant_issue_reason(merchant: str, issues: List[str]) -> str:
 
 from datetime import datetime
 from typing import Optional
+import re
 
 def _parse_date_best_effort(date_str: Optional[str]):
     """
     Parse a date string from OCR/LLM into `datetime.date`.
+    
+    LOCALE-AWARE: For ambiguous formats like DD/MM/YY, tries DD/MM/YY before MM/DD/YY
+    to handle international receipts (India, EU, etc.)
 
-    Receipt dates come in many formats (YYYY-MM-DD, DD/MM/YY, YYYY/MM/DD, etc.).
-    If we can't parse a date that *looks present*, that's suspicious.
     Returns:
-      - datetime.date on success
-      - None on failure
+        datetime.date or None
     """
     if not date_str:
         return None
 
     s = str(date_str).strip()
 
-    fmts = [
-        "%Y-%m-%d",  # 2024-08-15
-        "%Y/%m/%d",  # 2024/08/15
-        "%d/%m/%Y",  # 15/08/2024
-        "%d-%m-%Y",  # 15-08-2024
-        "%m/%d/%Y",  # 08/15/2024
-        "%m-%d-%Y",  # 08-15-2024
-        "%y/%m/%d",  # 24/08/15 (YY/MM/DD)
-        "%d/%m/%y",  # 15/08/24
-        "%d-%m-%y",  # 15-08-24
-        "%m/%d/%y",  # 08/15/24
-    ]
+    # Extract date pattern from text (handles "Date: 13/06/23" or "13/06/23 10:30")
+    date_match = re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', s)
+    if date_match:
+        date_part = date_match.group(0)
+        
+        # LOCALE-AWARE: Try DD/MM first (international) before MM/DD (US-only)
+        # Try DD/MM/YYYY first (international)
+        for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y"]:
+            try:
+                parsed = datetime.strptime(date_part, fmt).date()
+                # Sanity check: reject if year is in future or before 1990
+                if 1990 <= parsed.year <= datetime.now().year + 1:
+                    return parsed
+            except Exception:
+                pass
+        
+        # Fallback to MM/DD if DD/MM failed (US format)
+        for fmt in ["%m/%d/%Y", "%m-%d-%Y", "%m/%d/%y", "%m-%d-%y"]:
+            try:
+                parsed = datetime.strptime(date_part, fmt).date()
+                if 1990 <= parsed.year <= datetime.now().year + 1:
+                    return parsed
+            except Exception:
+                pass
 
     # Try full string, first token, last token (handles "Date: 2024/08/15 10:22")
     candidates = [s]
@@ -1669,11 +1902,27 @@ def _parse_date_best_effort(date_str: Optional[str]):
         candidates.append(parts[0])
         candidates.append(parts[-1])
 
+    # Other common formats (YYYY-MM-DD, YYYY/MM/DD, etc.)
+    fmts = [
+        "%Y-%m-%d",  # 2024-08-15
+        "%Y/%m/%d",  # 2024/08/15
+        "%d/%m/%Y",  # 15/08/2024 (international)
+        "%d-%m-%Y",  # 15-08-2024
+        "%m/%d/%Y",  # 08/15/2024 (US)
+        "%m-%d-%Y",  # 08-15-2024
+        "%y/%m/%d",  # 24/08/15 (YY/MM/DD)
+        "%d/%m/%y",  # 15/08/24 (international)
+        "%d-%m-%y",  # 15-08-24
+        "%m/%d/%y",  # 08/15/24 (US)
+    ]
+    
     for cand in candidates:
         c = cand.strip().strip(",;|")
         for fmt in fmts:
             try:
-                return datetime.strptime(c, fmt).date()
+                parsed = datetime.strptime(c, fmt).date()
+                if 1990 <= parsed.year <= datetime.now().year + 1:
+                    return parsed
             except Exception:
                 pass
 
@@ -1830,14 +2079,21 @@ def _apply_learned_rules(
     dp_conf: float,
     optional_subtype: bool,
 ) -> float:
-    """Apply learned-rule adjustments safely.
+    """Apply learned-rule adjustments safely with doc-profile gating.
 
     Guarantees:
     - Dedupe duplicate triggers (semantic-first; raw fallback).
     - Suppress `missing_elements` when missing-field gate is OFF.
+    - Gate learned patterns via DocumentProfile.disabled_rules (like R7/R16).
+    - Cap total learned contribution via DocumentProfile.max_learned_contribution.
     - Only non-suppressed adjustments affect score.
     - Soft-gating factors are applied exactly once.
     - Adjustment is clamped to a sane range to avoid runaway scores.
+    
+    Pattern to Rule ID Mapping:
+    - spacing_anomaly → LR_SPACING_ANOMALY
+    - missing_elements → LR_MISSING_ELEMENTS
+    - invalid_address → LR_INVALID_ADDRESS
     """
 
     def _safe_float(v: Any, default: float = 0.0) -> float:
@@ -1872,7 +2128,28 @@ def _apply_learned_rules(
         r = " ".join(str(raw or "").strip().lower().split())
         return r
 
+    # Pattern to Rule ID mapping for doc-profile gating
+    PATTERN_TO_RULE_ID = {
+        "spacing_anomaly": "LR_SPACING_ANOMALY",
+        "missing_elements": "LR_MISSING_ELEMENTS",
+        "invalid_address": "LR_INVALID_ADDRESS",
+    }
+    
+    # FUTURE ENHANCEMENT: Corroboration logic
+    # For higher confidence, require multiple signals:
+    # - spacing_anomaly only counts if 2+ learned patterns fire
+    # - OR if metadata anomaly (R1_SUSPICIOUS_SOFTWARE) + layout anomaly both exist
+    # This prevents single noisy learned patterns from dominating the verdict.
+    # Implementation: Track pattern_count, check for corroborating rules in events list.
+    
+    # Get DocumentProfile object for gating
+    from app.pipelines.doc_profiles import get_profile_for_doc_class, should_apply_rule
+    doc_class = tf.get("doc_class", "UNKNOWN")
+    profile_obj = get_profile_for_doc_class(doc_class)
+    
+    # Track total learned contribution for capping
     non_suppressed_adjustment = 0.0
+    total_learned_contribution = 0.0
 
     seen: set = set()
     for rule in (triggered_rules or []):
@@ -1895,20 +2172,91 @@ def _apply_learned_rules(
             continue
         seen.add(key)
 
-        # Identify missing-elements style learned rules
-        is_missing_elements = (
-            "missing_elements" in str(raw).lower()
-            or str(pattern).strip().lower() == "missing_elements"
+        # Identify missing-fields-dependent learned rules
+        raw_l = str(raw).lower()
+        pat_l = str(pattern).strip().lower()
+
+        is_missing_fields_dependent = (
+            ("missing_elements" in raw_l) or (pat_l == "missing_elements")
+            or ("invalid_address" in raw_l) or (pat_l == "invalid_address")
         )
 
+        # DOC-PROFILE GATING: Check if this learned pattern is disabled for this doc type
+        learned_rule_id = PATTERN_TO_RULE_ID.get(pat_l)
+        profile_gated = False
+        if learned_rule_id and not should_apply_rule(profile_obj, learned_rule_id):
+            profile_gated = True
+            logger.info(f"Learned pattern '{pat_l}' suppressed by doc-profile gating for {doc_class}")
+        
         # Suppress when missing-field gate is OFF (audit-only)
-        suppressed = bool(is_missing_elements and (not missing_fields_enabled))
+        suppressed = bool(is_missing_fields_dependent and (not missing_fields_enabled)) or profile_gated
+        
+        # POS-SPECIFIC SUPPRESSION: Don't penalize missing optional fields
+        # If POS receipt has core fields (total/merchant/currency), suppress missing_elements
+        if not suppressed and pat_l == "missing_elements":
+            doc_subtype = doc_profile.get("subtype") if isinstance(doc_profile, dict) else None
+            is_pos = doc_subtype and str(doc_subtype).upper().startswith("POS_")
+            
+            if is_pos:
+                # Check if core POS fields present
+                has_total = bool(tf.get("total_amount"))
+                has_merchant = bool(tf.get("merchant_candidate"))
+                has_currency = bool(tf.get("currency_symbols") or tf.get("has_currency"))
+                has_line_items = bool(tf.get("has_line_items"))
+                
+                # Suppress if core transaction evidence exists
+                core_fields_present = (has_total or has_line_items) and has_merchant and has_currency
+                if core_fields_present:
+                    suppressed = True
+
+        # POS-SPECIFIC SUPPRESSION: Don't penalize invalid_address for POS receipts
+        if not suppressed and pat_l == "invalid_address":
+            doc_subtype = doc_profile.get("subtype", "").upper()
+            is_pos = doc_subtype.startswith("POS_")
+            
+            if is_pos:
+                # For POS, address is optional per domain pack
+                # Suppress if core fields present (merchant + currency)
+                has_merchant = bool(tf.get("merchant_candidate"))
+                has_currency = bool(tf.get("currency_symbols") or tf.get("has_currency"))
+                
+                if has_merchant and has_currency:
+                    suppressed = True
+        
+        # GATE SUPPRESSION: Don't penalize spacing_anomaly when missing-field gate is disabled
+        # or doc confidence is low (likely OCR quality issue, not fraud)
+        if not suppressed and pat_l == "spacing_anomaly":
+            doc_profile_confidence = doc_profile.get("confidence", 0.0)
+            
+            # Suppress if missing-field gate is disabled (low doc confidence)
+            if not missing_fields_enabled:
+                suppressed = True
+            # Suppress if doc confidence is low (< 0.6)
+            elif doc_profile_confidence < 0.6:
+                suppressed = True
+            else:
+                # POS-SPECIFIC SUPPRESSION: Don't penalize for high uppercase POS receipts
+                doc_subtype = doc_profile.get("subtype", "").upper()
+                is_pos = doc_subtype.startswith("POS_")
+                
+                # Check if receipt has high uppercase ratio (common for thermal POS)
+                if is_pos and tf.get("full_text"):
+                    lines = [l.strip() for l in tf["full_text"].split('\n') if l.strip()]
+                    if lines:
+                        uppercase_lines = sum(1 for line in lines if len(line) > 3 and line.isupper())
+                        uppercase_ratio = uppercase_lines / len(lines)
+                        
+                        # If >50% lines are uppercase, suppress spacing_anomaly
+                        if uppercase_ratio > 0.5:
+                            suppressed = True
 
         # Clamp per-rule adjustment to avoid runaway behavior from noisy feedback.
         # (You can widen this later, but this is safe for early production.)
         conf_adj = max(-0.50, min(0.50, float(conf_adj)))
 
         if not suppressed:
+            # Track contribution for profile cap
+            total_learned_contribution += float(conf_adj)
             non_suppressed_adjustment += float(conf_adj)
 
         # User-facing reasons: mark suppressed explicitly
@@ -1924,6 +2272,8 @@ def _apply_learned_rules(
             "optional_subtype": bool(optional_subtype),
             "missing_fields_enabled": bool(missing_fields_enabled),
             "suppressed": bool(suppressed),
+            "profile_gated": bool(profile_gated),
+            "learned_rule_id": learned_rule_id,
         }
 
         # Audit-only event (never contributes to score directly)
@@ -1951,17 +2301,53 @@ def _apply_learned_rules(
             confidence_factor=1.0,
         )
 
-    # Apply soft-gating exactly once (document confidence + subtype optionality)
+    # ---- Final soft gating (apply ONCE) ----
     dp_conf_f = _safe_float(dp_conf, default=0.0)
     if dp_conf_f < 0.55:
-        non_suppressed_adjustment *= 0.65
+        # Learned rules are noisy when doc type is uncertain
+        non_suppressed_adjustment *= 0.25
+
+        # Hard cap: learned rules must never dominate the verdict
+        non_suppressed_adjustment = max(
+            min(non_suppressed_adjustment, 0.05), -0.05
+        )
+
     if optional_subtype:
         non_suppressed_adjustment *= 0.60
 
-    # Final clamp on total adjustment to avoid score spikes
-    non_suppressed_adjustment = max(-1.0, min(1.0, float(non_suppressed_adjustment)))
-
-    return float(non_suppressed_adjustment)
+    # Apply profile-based cap on total learned contribution
+    max_cap = profile_obj.max_learned_contribution
+    if max_cap is not None and total_learned_contribution > max_cap:
+        capped_adjustment = max_cap
+        logger.info(
+            f"Learned contribution capped: {total_learned_contribution:.3f} → {max_cap:.3f} "
+            f"(profile={doc_class}, cap={max_cap})"
+        )
+        
+        # Emit INFO audit event for explainability
+        _emit_event(
+            events=events,
+            reasons=None,
+            rule_id="LR_CAP_APPLIED",
+            severity="INFO",
+            weight=0.0,
+            message=f"Learned rule contribution capped for {doc_class}",
+            evidence={
+                "cap": max_cap,
+                "original": round(total_learned_contribution, 3),
+                "capped_to": round(capped_adjustment, 3),
+                "profile": doc_class,
+                "reduction": round(total_learned_contribution - max_cap, 3),
+            },
+            reason_text=None,
+            confidence_factor=1.0,
+        )
+    else:
+        capped_adjustment = total_learned_contribution
+    
+    # Clamp total adjustment to avoid runaway scores
+    out = max(-1.0, min(1.0, float(capped_adjustment)))
+    return out
 
 
 def _score_and_explain(
@@ -1980,8 +2366,26 @@ def _score_and_explain(
     fr = features.forensic_features
 
     conf_factor = _confidence_factor_from_features(ff, tf, lf, fr)
+    
+    # ============================================================================
+    # ARCHITECTURE FLIP: Profile-Based Rule Gating
+    # Load document profile and gate rules based on document type
+    # ============================================================================
+    from app.pipelines.doc_profiles import (
+        get_profile_for_doc_class,
+        should_apply_rule,
+        get_rule_severity,
+    )
+    
+    doc_class = tf.get("doc_class", "UNKNOWN")
+    doc_profile_obj = get_profile_for_doc_class(doc_class)
+    
+    logger.info(f"Applying rules for doc_class={doc_class}, profile={doc_profile_obj.doc_class}, risk={doc_profile_obj.fraud_surface}")
 
     def emit_event(*, events, reasons, rule_id, severity, weight, message, evidence=None, reason_text=None):
+        # Apply profile-based severity override
+        severity = get_rule_severity(doc_profile_obj, rule_id, severity)
+        
         return _emit_event(
             events=events,
             reasons=reasons,
@@ -2054,6 +2458,7 @@ def _score_and_explain(
             reasons=reasons,
             minor_notes=minor_notes,
             events=events,
+            features=tf,
         )
     except Exception:
         minor_notes.append("Geo consistency checks skipped due to an internal error.")
@@ -2063,27 +2468,47 @@ def _score_and_explain(
     # ---------------------------------------------------------------------------
     producer = ff.get("producer", "")
     creator = ff.get("creator", "")
-    suspicious_tools = [
+    # Split tools into high-risk (HARD_FAIL) vs medium-risk (WARNING)
+    high_risk_tools = [
         "canva", "photoshop", "illustrator", "sketch", "figma",
         "affinity", "gimp", "inkscape", "coreldraw", "pixlr",
         "fotor", "befunky", "snappa", "crello", "desygner",
+    ]
+    
+    # PDF utilities are common for legitimate workflows (merge, compress, convert)
+    # Only WARNING unless combined with other fraud signals
+    medium_risk_tools = [
         "wps", "ilovepdf", "smallpdf", "pdfcandy", "sejda",
     ]
     
     producer_lower = (producer or "").lower()
     creator_lower = (creator or "").lower()
     
-    if any(tool in producer_lower or tool in creator_lower for tool in suspicious_tools):
-        tool_found = next((t for t in suspicious_tools if t in producer_lower or t in creator_lower), "editing software")
+    # Check high-risk tools first (HARD_FAIL)
+    if any(tool in producer_lower or tool in creator_lower for tool in high_risk_tools):
+        tool_found = next((t for t in high_risk_tools if t in producer_lower or t in creator_lower), "editing software")
         score += emit_event(
             events=events,
             reasons=reasons,
             rule_id="R1_SUSPICIOUS_SOFTWARE",
             severity="HARD_FAIL",
             weight=0.50,
-            message=f"Suspicious software detected: {tool_found}",
-            evidence={"producer": producer, "creator": creator, "tool": tool_found},
+            message=f"Suspicious editing software detected: {tool_found}",
+            evidence={"producer": producer, "creator": creator, "tool": tool_found, "risk_level": "high"},
             reason_text=f"🚨 Suspicious Software Detected: '{tool_found}' - This software is commonly used to create fake receipts.",
+        )
+    # Check medium-risk tools (WARNING only)
+    elif any(tool in producer_lower or tool in creator_lower for tool in medium_risk_tools):
+        tool_found = next((t for t in medium_risk_tools if t in producer_lower or t in creator_lower), "pdf utility")
+        score += emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="R1_SUSPICIOUS_SOFTWARE",
+            severity="WARNING",
+            weight=0.10,
+            message=f"PDF utility detected: {tool_found}",
+            evidence={"producer": producer, "creator": creator, "tool": tool_found, "risk_level": "medium"},
+            reason_text=f"⚠️ PDF Utility Detected: '{tool_found}' - Document has been processed by PDF utility software.",
         )
 
     if not ff.get("creation_date"):
@@ -2105,34 +2530,93 @@ def _score_and_explain(
     has_date = tf.get("has_date", False)
     merchant_candidate = tf.get("merchant_candidate") or tf.get("merchant")
 
+    # Emit merchant extraction debug event (huge for debugging)
+    emit_event(
+        events=events,
+        reasons=None,
+        rule_id="MERCHANT_DEBUG",
+        severity="INFO",
+        weight=0.0,
+        message="Merchant extraction debug",
+        evidence={
+            "merchant_candidate": tf.get("merchant_candidate"),
+            "merchant_final": tf.get("merchant"),
+            "merchant_candidate_debug": tf.get("merchant_candidate_debug"),
+        },
+    )
+
     # Doc-aware expectations (prevents false-positives on logistics docs etc.)
-    doc_profile = _get_doc_profile(tf, doc_type_hint=doc_type_hint)
-    expects_amounts = _expects_amounts(doc_profile)
-    expects_total_line = _expects_total_line(doc_profile)
-    expects_date = _expects_date(doc_profile)
+    # Use legacy_doc_profile to avoid collision with DocumentProfile object (profile_obj)
+    legacy_doc_profile = _get_doc_profile(tf, doc_type_hint=doc_type_hint)
+    expects_amounts = _expects_amounts(tf, legacy_doc_profile)
+    expects_total_line = _expects_total_line(tf, legacy_doc_profile)
+    expects_date = _expects_date(tf, legacy_doc_profile)
     
-    # Compute missing-field gate once (early)
-    missing_fields_enabled = _missing_field_penalties_enabled(tf, doc_profile=doc_profile)
+    # Emit doc profiling debug event for diagnostics
+    emit_event(
+        events=events,
+        reasons=None,
+        rule_id="DOC_PROFILE_DEBUG",
+        severity="INFO",
+        weight=0.0,
+        message="Document profiling diagnostics",
+        evidence={
+            "doc_subtype_guess": legacy_doc_profile.get("subtype"),
+            "doc_family_guess": legacy_doc_profile.get("family"),
+            "doc_profile_confidence": legacy_doc_profile.get("confidence"),
+            "doc_profile_evidence": legacy_doc_profile.get("evidence"),
+            "document_intent": tf.get("document_intent"),
+        },
+    )
+
+    emit_event(
+        events=events,
+        reasons=None,
+        rule_id="DOMAIN_PACK_VALIDATION",
+        severity="INFO",
+        weight=0.0,
+        message="Domain pack validation diagnostics",
+        evidence={
+            "domain_validation": tf.get("domain_validation"),
+        },
+    )
+    missing_fields_enabled = _missing_field_penalties_enabled(tf, doc_profile=legacy_doc_profile)
     
     # Debug logging (not printed to console in production)
     logger.debug("\n🔍 GATE CHECK:")
     logger.debug(f"   geo_country: {tf.get('geo_country_guess')} (conf: {tf.get('geo_confidence')})")
     logger.debug(f"   doc_subtype: {tf.get('doc_subtype_guess')} (conf: {tf.get('doc_profile_confidence')})")
+    logger.debug(f"   document_intent: {tf.get('document_intent')}")
     logger.debug(f"   missing_fields_enabled: {missing_fields_enabled}")
     logger.debug(f"   Total events before gate: {len(events)}")
     
-    if not missing_fields_enabled:
-        logger.debug("   ✅ GATE ACTIVE - emitting GATE_MISSING_FIELDS event")
-        _emit_missing_field_gate_event(
-            events=events,
-            reasons=reasons,
-            tf=tf,
-            doc_profile=doc_profile,
-            message="Missing-field penalties disabled: geo/doc profile confidence too low (UNKNOWN geo or MISC/UNKNOWN subtype).",
-        )
-        logger.debug(f"   Total events after gate emission: {len(events)}")
+    # Always emit gate decision for transparency (audit event)
+    if missing_fields_enabled:
+        gate_message = "Missing-field penalties ENABLED"
     else:
-        logger.debug("   ❌ GATE INACTIVE - penalties ENABLED\n")
+        # Determine specific reason for disabling
+        doc_subtype_opt = legacy_doc_profile.get("subtype")
+        dp_conf = legacy_doc_profile.get("confidence", 0.0)
+        if doc_subtype_opt == "UNKNOWN" or not doc_subtype_opt:
+            disable_reason = f"doc subtype is UNKNOWN (confidence={dp_conf:.2f})"
+        elif dp_conf < 0.4:
+            disable_reason = f"doc profile confidence too low ({dp_conf:.2f} < 0.4)"
+        else:
+            disable_reason = f"doc profile confidence below threshold ({dp_conf:.2f}, subtype={doc_subtype_opt})"
+        gate_message = f"Missing-field penalties DISABLED: {disable_reason}"
+    
+    _emit_event(
+        events=events,
+        reasons=None,
+        rule_id="GATE_MISSING_FIELDS",
+        severity="INFO",
+        weight=0.0,
+        message=gate_message,
+        evidence=_missing_field_gate_evidence(tf, legacy_doc_profile),
+        confidence_factor=1.0,
+    )
+    
+    logger.debug(f"   Total events after gate emission: {len(events)}")
 
     # If upstream extractors (LayoutLM / DONUT / ensemble) already provided a total,
     # do NOT flag "No Total Line" purely based on missing TOTAL keyword/line.
@@ -2176,11 +2660,11 @@ def _score_and_explain(
                     message="No currency amounts detected in document",
                     evidence={
                         "has_any_amount": False,
-                        "doc_family": doc_profile.get("family"),
-                        "doc_subtype": doc_profile.get("subtype"),
-                        "doc_profile_confidence": doc_profile.get("confidence"),
+                        "doc_family": legacy_doc_profile.get("family"),
+                        "doc_subtype": legacy_doc_profile.get("subtype"),
+                        "doc_profile_confidence": legacy_doc_profile.get("confidence"),
                         "missing_fields_enabled": missing_fields_enabled,
-                        "missing_field_gate": _missing_field_gate_evidence(tf, doc_profile),
+                        "missing_field_gate": _missing_field_gate_evidence(tf, legacy_doc_profile),
                     },
                     reason_text="💰 No Amounts Detected: The document contains no recognizable currency amounts.",
                 )
@@ -2197,9 +2681,9 @@ def _score_and_explain(
                 message="No amounts detected but amounts are optional for this doc subtype",
                 evidence={
                     "has_any_amount": False,
-                    "doc_family": doc_profile.get("family"),
-                    "doc_subtype": doc_profile.get("subtype"),
-                    "doc_profile_confidence": doc_profile.get("confidence"),
+                    "doc_family": legacy_doc_profile.get("family"),
+                    "doc_subtype": legacy_doc_profile.get("subtype"),
+                    "doc_profile_confidence": legacy_doc_profile.get("confidence"),
                 },
             )
 
@@ -2221,11 +2705,11 @@ def _score_and_explain(
                         "has_any_amount": True,
                         "total_line_present": False,
                         "has_usable_total_value": has_usable_total_value,
-                        "doc_family": doc_profile.get("family"),
-                        "doc_subtype": doc_profile.get("subtype"),
-                        "doc_profile_confidence": doc_profile.get("confidence"),
+                        "doc_family": legacy_doc_profile.get("family"),
+                        "doc_subtype": legacy_doc_profile.get("subtype"),
+                        "doc_profile_confidence": legacy_doc_profile.get("confidence"),
                         "missing_fields_enabled": missing_fields_enabled,
-                        "missing_field_gate": _missing_field_gate_evidence(tf, doc_profile),
+                        "missing_field_gate": _missing_field_gate_evidence(tf, legacy_doc_profile),
                     },
                     reason_text="🧾 No Total Line: Document has amounts but no clear total/grand total line.",
                 )
@@ -2244,42 +2728,607 @@ def _score_and_explain(
                     "has_any_amount": True,
                     "total_line_present": False,
                     "has_usable_total_value": has_usable_total_value,
-                    "doc_family": doc_profile.get("family"),
-                    "doc_subtype": doc_profile.get("subtype"),
-                    "doc_profile_confidence": doc_profile.get("confidence"),
+                    "doc_family": legacy_doc_profile.get("family"),
+                    "doc_subtype": legacy_doc_profile.get("subtype"),
+                    "doc_profile_confidence": legacy_doc_profile.get("confidence"),
                 },
             )
 
+    # ---------------------------------------------------------------------------
+    # R7: Total Mismatch (POS line items don't sum to total)
+    # ---------------------------------------------------------------------------
+    """
+    RULE_ID: R7_TOTAL_MISMATCH
+    SCOPE: doc_family=TRANSACTIONAL (POS_RECEIPT, POS_RESTAURANT, etc.)
+    INTENT: reimbursement, expense_tracking
+    ALLOWED_DOC_FAMILIES: ["POS_RECEIPT", "POS_RESTAURANT", "POS_RETAIL"]
+    
+    FAILURE_MODE_ADDRESSED: Edited POS receipt totals (line items don't sum to total)
+    REAL_WORLD_EXAMPLE: Restaurant receipt with 3 items ($12, $15, $8) but total 
+                         shows $50 instead of $35. Manual edit or OCR error.
+    WHY_NEW_RULE: Core fraud detection for POS receipts. Line items are the source
+                  of truth for transactional receipts.
+    
+    CONFIDENCE_GATE:
+      - should_apply_rule(doc_profile_obj, "R7_TOTAL_MISMATCH") == True
+      - Gated OFF for COMMERCIAL_INVOICE (complex line items with shipping/duties)
+    FAILURE_MODE: soft_degrade
+    SEVERITY_RANGE: INFO → WARNING
+    GOLDEN_TEST: tests/golden/pos_receipt.json
+    VERSION: 1.0
+    """
+    # Enforce Rule × Family Matrix
+    doc_family = legacy_doc_profile.get("family", "UNKNOWN").upper()
+    execution_mode = get_execution_mode("R7_TOTAL_MISMATCH", doc_family)
+    
+    if execution_mode == ExecutionMode.FORBIDDEN:
+        logger.debug(f"R7_TOTAL_MISMATCH skipped: {doc_family} not in allow-list")
+        total_mismatch = False
+    # GATED by profile: Skip for commercial invoices (complex line items with shipping, duties, etc.)
+    elif should_apply_rule(doc_profile_obj, "R7_TOTAL_MISMATCH"):
+        total_mismatch = bool(tf.get("total_mismatch", False))
+    else:
+        total_mismatch = False
+        logger.info(f"R7_TOTAL_MISMATCH skipped for {doc_class} (profile: apply_total_reconciliation=False)")
+    
     if total_mismatch:
+        # POS-SPECIFIC TOLERANCE: Allow small mismatch due to OCR errors on thermal prints
+        doc_subtype = str(legacy_doc_profile.get("subtype") or tf.get("doc_subtype_guess") or "").upper()
+        is_pos = doc_subtype.startswith("POS_")
+
+        ocr_confidence = tf.get("ocr_confidence", None)
+        # low_ocr_quality: None when unknown, True/False when known
+        if ocr_confidence is None:
+            low_ocr_quality = None  # Unknown quality
+        else:
+            try:
+                low_ocr_quality = float(ocr_confidence) < 0.5
+            except Exception:
+                low_ocr_quality = None
+
+        # Calculate actual mismatch ratio (0-1) if available
+        total_amount = tf.get("total_amount")
+        items_sum = tf.get("line_items_sum")
+
+        # Keep raw values for debugging/audit (before normalization)
+        total_amount_raw = total_amount
+        items_sum_raw = items_sum
+
+        # Normalize amounts defensively
+        total_amount_n = _normalize_amount_str(total_amount)
+        items_sum_n = _normalize_amount_str(items_sum)
+
+        mismatch_ratio = 0.0
+        has_total_amount = total_amount_n is not None and total_amount_n > 0
+        has_line_items_sum = items_sum_n is not None
+        if has_total_amount and has_line_items_sum:
+            mismatch_ratio = abs(total_amount_n - items_sum_n) / float(total_amount_n)
+
+        # For POS receipts with low OCR quality, allow ±5% tolerance
+        tolerance_applied = bool(is_pos and (low_ocr_quality is True) and mismatch_ratio > 0 and mismatch_ratio <= 0.05)
+
+        if tolerance_applied:
+            # Small mismatch, likely OCR error - downgrade to WARNING
+            severity = "WARNING"
+            weight = 0.15
+            message = "Minor total mismatch (likely OCR error on thermal print)"
+        else:
+            # Significant mismatch or high OCR quality - keep CRITICAL
+            severity = "CRITICAL"
+            weight = 0.40
+            message = "Line items do not sum to printed total"
+
         score += emit_event(
             events=events,
             reasons=reasons,
             rule_id="R7_TOTAL_MISMATCH",
-            severity="CRITICAL",
-            weight=0.40,
-            message="Line items do not sum to printed total",
-            evidence={"total_mismatch": True},
-            reason_text="⚠️ Total Mismatch: Sum of line items does not match the printed total.",
+            severity=severity,
+            weight=weight,
+            message=message,
+            evidence={
+                "total_amount_raw": total_amount_raw,
+                "line_items_sum_raw": items_sum_raw,
+                "total_amount": total_amount_n,
+                "line_items_sum": items_sum_n,
+                "has_total_amount": has_total_amount,
+                "has_line_items_sum": has_line_items_sum,
+                "mismatch_ratio": mismatch_ratio,
+                "mismatch_percentage": round(mismatch_ratio * 100, 2),
+                "is_pos": is_pos,
+                "ocr_confidence": ocr_confidence,
+                "low_ocr_quality": low_ocr_quality,
+                "tolerance_applied": tolerance_applied,
+                "semantic_verification_invoked": tf.get("semantic_verification_invoked", False),
+                "semantic_verification_applied": tf.get("semantic_verification_applied", False),
+                "semantic_amounts": tf.get("semantic_amounts"),
+            },
+            reason_text="💰 Total Mismatch: Line items don't add up to the printed total.",
         )
 
+    # ---------------------------------------------------------------------------
+    # R7C: Credit Note Reconciliation (SIGN-AWARE VARIANT OF R7B)
+    # ---------------------------------------------------------------------------
+    """
+    RULE_ID: R7C_CREDIT_NOTE_RECONCILIATION
+    SCOPE: doc_family=INVOICE AND is_credit_note=True
+    INTENT: billing, refund_verification
+    ALLOWED_DOC_FAMILIES: ["CREDIT_NOTE"]
+    
+    FAILURE_MODE_ADDRESSED: Credit notes with negative totals fail standard reconciliation
+    REAL_WORLD_EXAMPLE: Refund invoice with total=-$118 (subtotal=-$100, tax=-$18)
+                         triggers false positive in R7B due to sign mismatch.
+    WHY_NEW_RULE: R7B uses standard reconciliation math. Credit notes need sign-aware
+                  logic (abs() for ratio calculation) and softer severity (messy IRL).
+    
+    CONFIDENCE_GATE:
+      - doc_profile_confidence >= 0.75
+      - fields_present >= 2
+      - is_credit_note == True
+    FAILURE_MODE: soft_degrade
+    SEVERITY_RANGE: INFO → WARNING (never CRITICAL)
+    GOLDEN_TEST: tests/golden/credit_note.json
+    VERSION: 1.0
+    NOTES: Credit notes can have negative totals - uses abs() for ratio calculation
+    """
+    # Credit notes can have negative totals - same math as R7B but sign-aware
+    # Lower severity than R7B (credit notes are messy IRL)
+    # RUNS BEFORE R7B because credit notes are a semantic specialization
+    
+    # Only apply to invoice-type documents (not POS receipts)
+    doc_family = legacy_doc_profile.get("family", "").upper()
+    doc_subtype = legacy_doc_profile.get("subtype", "").upper()
+    
+    # Determine if this is an invoice-type document
+    is_credit_note_family = doc_family == "CREDIT_NOTE" or tf.get("is_credit_note", False)
+    is_invoice_type = (
+        doc_family == "INVOICE" 
+        or "INVOICE" in doc_subtype 
+        or doc_subtype in ("TAX_INVOICE", "VAT_INVOICE", "COMMERCIAL_INVOICE", "SERVICE_INVOICE")
+        or is_credit_note_family
+    )
+    is_credit_note = tf.get("is_credit_note", False)
+    
+    # Enforce Rule × Family Matrix
+    execution_mode = get_execution_mode("R7C_CREDIT_NOTE_RECONCILIATION", doc_family)
+    
+    if execution_mode == ExecutionMode.FORBIDDEN:
+        logger.debug(f"R7C_CREDIT_NOTE_RECONCILIATION skipped: {doc_family} forbidden")
+        # Skip silently - forbidden
+    elif not is_credit_note_family and execution_mode != ExecutionMode.SOFT:
+        logger.debug(f"R7C_CREDIT_NOTE_RECONCILIATION skipped: not a credit note")
+        # Skip silently - not a credit note (unless SOFT mode allows it)
+    
+    # STRICT GATING: All must pass (only if not forbidden)
+    if execution_mode != ExecutionMode.FORBIDDEN and is_invoice_type and is_credit_note:
+        # Get doc_profile_confidence for gating
+        dp_conf_val = tf.get("doc_profile_confidence") or legacy_doc_profile.get("confidence") or 0.0
+        try:
+            dp_conf_val = float(dp_conf_val)
+        except Exception:
+            dp_conf_val = 0.0
+        
+        # Gate: Only apply if confidence >= 0.75
+        if dp_conf_val >= 0.75:
+            # Extract invoice components
+            subtotal = tf.get("subtotal")
+            tax_amount = tf.get("tax_amount")
+            shipping_amount = tf.get("shipping_amount")
+            discount_amount = tf.get("discount_amount")
+            total_amount = tf.get("total_amount")
+            
+            # Normalize amounts
+            subtotal_n = _normalize_amount_str(subtotal)
+            tax_n = _normalize_amount_str(tax_amount)
+            shipping_n = _normalize_amount_str(shipping_amount)
+            discount_n = _normalize_amount_str(discount_amount)
+            total_n = _normalize_amount_str(total_amount)
+            
+            # Count available fields for "enough fields present" gate
+            fields_present = sum([
+                subtotal_n is not None,
+                tax_n is not None,
+                total_n is not None and total_n > 0,
+            ])
+            
+            # Gate: Need at least 2 fields (e.g., subtotal + total, or tax + total)
+            if fields_present >= 2 and total_n is not None and total_n > 0:
+                # Calculate expected total
+                # expected_total = subtotal + tax + shipping - discount
+                expected_total = 0.0
+                components_used = []
+                
+                if subtotal_n is not None:
+                    expected_total += subtotal_n
+                    components_used.append(f"subtotal={subtotal_n}")
+                
+                if tax_n is not None:
+                    expected_total += tax_n
+                    components_used.append(f"tax={tax_n}")
+                
+                # Opportunistically add shipping and discount if available
+                if shipping_n is not None:
+                    expected_total += shipping_n
+                    components_used.append(f"shipping={shipping_n}")
+                
+                if discount_n is not None:
+                    expected_total -= discount_n
+                    components_used.append(f"discount=-{discount_n}")
+                
+                # If we only have tax but no subtotal, we can't reconcile
+                # (need at least subtotal to make sense)
+                if subtotal_n is None and tax_n is not None:
+                    # Can't reconcile - skip
+                    pass
+                elif expected_total > 0:
+                    # Calculate mismatch
+                    mismatch = abs(expected_total - total_n)
+                    mismatch_ratio = mismatch / total_n if total_n > 0 else 0.0
+                    
+                    # Determine tolerance based on OCR confidence and currency
+                    ocr_confidence = tf.get("ocr_confidence")
+                    if ocr_confidence is None or ocr_confidence >= 0.7:
+                        # High OCR confidence - stricter tolerance (2%)
+                        tolerance = 0.02
+                    elif ocr_confidence >= 0.5:
+                        # Medium OCR confidence - moderate tolerance (5%)
+                        tolerance = 0.05
+                    else:
+                        # Low OCR confidence - looser tolerance (10%)
+                        tolerance = 0.10
+                    
+                    # TAX_INVOICE: Apply stricter tolerance (regulated documents)
+                    # Tax invoices should reconcile more tightly to catch edited GST/VAT invoices
+                    if doc_subtype == "TAX_INVOICE":
+                        tolerance *= 0.5  # 1-5% instead of 2-10%
+                        logger.debug(f"TAX_INVOICE detected: applying stricter tolerance ({tolerance*100:.1f}%)")
+                    
+                    # MINIMUM ABSOLUTE DELTA FLOOR: Avoid penny-level noise
+                    # Very small totals can create noisy ratios (e.g., $5 total with $0.20 error = 4%)
+                    # Treat mismatches < $1.00 as within tolerance
+                    treat_as_within_tolerance = abs(mismatch) < 1.00
+                    
+                    # MULTI-CURRENCY DETECTION: Skip reconciliation if FX conversion detected
+                    # Invoices with currency conversions almost never reconcile cleanly
+                    multi_currency_detected = tf.get("multi_currency_detected", False)
+                    
+                    # Check if mismatch exceeds tolerance
+                    if mismatch_ratio > tolerance and not treat_as_within_tolerance and not multi_currency_detected:
+                        # Check if line items look incomplete/dirty
+                        has_line_items = bool(tf.get("has_line_items"))
+                        line_items_sum = tf.get("line_items_sum")
+                        line_items_dirty = (
+                            has_line_items 
+                            and line_items_sum is not None 
+                            and abs(line_items_sum - total_n) / total_n > 0.20  # >20% off
+                        )
+                        
+                        if line_items_dirty:
+                            # Line items incomplete - downgrade to INFO
+                            severity = "INFO"
+                            weight = 0.0
+                            message = "Invoice components don't reconcile (line items incomplete)"
+                        elif mismatch_ratio > tolerance * 2:
+                            # Significant mismatch - WARNING
+                            severity = "WARNING"
+                            weight = 0.08
+                            message = f"Invoice total reconciliation mismatch ({mismatch_ratio*100:.1f}%)"
+                        else:
+                            # Minor mismatch - INFO
+                            severity = "INFO"
+                            weight = 0.0
+                            message = f"Minor invoice reconciliation variance ({mismatch_ratio*100:.1f}%)"
+                        
+                        score += emit_event(
+                            events=events,
+                            reasons=reasons if weight > 0 else None,
+                            rule_id="R7B_INVOICE_TOTAL_RECONCILIATION",
+                            severity=severity,
+                            weight=weight,
+                            message=message,
+                            evidence={
+                                "subtotal": subtotal_n,
+                                "tax_amount": tax_n,
+                                "total_amount": total_n,
+                                "expected_total": round(expected_total, 2),
+                                "mismatch": round(mismatch, 2),
+                                "mismatch_ratio": round(mismatch_ratio, 4),
+                                "mismatch_percentage": round(mismatch_ratio * 100, 2),
+                                "tolerance": tolerance,
+                                "tolerance_percentage": round(tolerance * 100, 2),
+                                "components_used": components_used,
+                                "ocr_confidence": ocr_confidence,
+                                "line_items_dirty": line_items_dirty if 'line_items_dirty' in locals() else False,
+                                "doc_profile_confidence": dp_conf_val,
+                                "is_tax_invoice": doc_subtype == "TAX_INVOICE",
+                                "treat_as_within_tolerance": treat_as_within_tolerance,
+                                "multi_currency_detected": multi_currency_detected,
+                            },
+                            reason_text=(
+                                f"🧾 Invoice Reconciliation: Components don't add up to total "
+                                f"(expected {expected_total:.2f}, got {total_n:.2f})"
+                            ) if weight > 0 else None,
+                        )
+    
+    # ---------------------------------------------------------------------------
+    # R7B: Invoice Total Reconciliation (for COMMERCIAL_INVOICE, TAX_INVOICE, etc.)
+    # ---------------------------------------------------------------------------
+    """
+    RULE_ID: R7B_INVOICE_TOTAL_RECONCILIATION
+    SCOPE: doc_family=INVOICE AND is_credit_note=False
+    INTENT: billing, compliance_verification
+    ALLOWED_DOC_FAMILIES: ["COMMERCIAL_INVOICE", "TAX_INVOICE"]
+    
+    FAILURE_MODE_ADDRESSED: Edited invoice totals (subtotal+tax+shipping-discount != total)
+    REAL_WORLD_EXAMPLE: Vendor invoice with subtotal=$1000, tax=$180, shipping=$20
+                         but total shows $1500 instead of $1200. Manual inflation.
+    WHY_NEW_RULE: R7 only applies to POS receipts with line items. Commercial invoices
+                  use component reconciliation (subtotal+tax+shipping-discount) not
+                  line-item sums. Different document structure requires different math.
+    
+    CONFIDENCE_GATE:
+      - doc_profile_confidence >= 0.75
+      - fields_present >= 2
+      - NOT is_credit_note (R7C handles those)
+    FAILURE_MODE: soft_degrade
+    SEVERITY_RANGE: INFO → WARNING
+    GOLDEN_TEST: tests/golden/invoice.json
+    VERSION: 1.0
+    ENHANCEMENTS:
+      - TAX_INVOICE: 0.5x stricter tolerance (1-5% vs 2-10%)
+      - Minimum delta floor: $1.00 (prevents penny-level noise)
+      - Multi-currency skip: FX conversions never reconcile cleanly
+      - Opportunistic shipping/discount extraction
+    """
+    # More sophisticated reconciliation using subtotal, tax, shipping, discount
+    # Gated by doc_profile_confidence and field availability
+    # Uses looser tolerance (2-10%) based on OCR confidence and currency complexity
+    # RUNS AFTER R7C - skips credit notes (R7C handles those)
+    
+    # Enforce Rule × Family Matrix
+    execution_mode = get_execution_mode("R7B_INVOICE_TOTAL_RECONCILIATION", doc_family)
+    
+    if execution_mode == ExecutionMode.FORBIDDEN:
+        logger.debug(f"R7B_INVOICE_TOTAL_RECONCILIATION skipped: {doc_family} forbidden")
+    # Guard: Skip credit notes (let R7C handle them)
+    elif is_invoice_type and not is_credit_note:
+        # Get doc_profile_confidence for gating
+        dp_conf_val = tf.get("doc_profile_confidence") or legacy_doc_profile.get("confidence") or 0.0
+        try:
+            dp_conf_val = float(dp_conf_val)
+        except Exception:
+            dp_conf_val = 0.0
+        
+        # Gate: Only apply if confidence >= 0.75
+        if dp_conf_val >= 0.75:
+            # Extract invoice components (same as R7B)
+            subtotal = tf.get("subtotal")
+            tax_amount = tf.get("tax_amount")
+            shipping_amount = tf.get("shipping_amount")
+            discount_amount = tf.get("discount_amount")
+            total_amount = tf.get("total_amount")
+            
+            # Normalize amounts
+            subtotal_n = _normalize_amount_str(subtotal)
+            tax_n = _normalize_amount_str(tax_amount)
+            shipping_n = _normalize_amount_str(shipping_amount)
+            discount_n = _normalize_amount_str(discount_amount)
+            total_n = _normalize_amount_str(total_amount)
+            
+            # Count available fields for "enough fields present" gate
+            fields_present = sum([
+                subtotal_n is not None,
+                tax_n is not None,
+                total_n is not None,
+            ])
+            
+            # Gate: Need at least 2 fields and total must exist
+            if fields_present >= 2 and total_n is not None:
+                # Calculate expected total (same formula as R7B)
+                expected_total = 0.0
+                components_used = []
+                
+                if subtotal_n is not None:
+                    expected_total += subtotal_n
+                    components_used.append(f"subtotal={subtotal_n}")
+                
+                if tax_n is not None:
+                    expected_total += tax_n
+                    components_used.append(f"tax={tax_n}")
+                
+                # Opportunistically add shipping and discount if available
+                if shipping_n is not None:
+                    expected_total += shipping_n
+                    components_used.append(f"shipping={shipping_n}")
+                
+                if discount_n is not None:
+                    expected_total -= discount_n
+                    components_used.append(f"discount=-{discount_n}")
+                
+                # If we only have tax but no subtotal, we can't reconcile
+                if subtotal_n is None and tax_n is not None:
+                    # Can't reconcile - skip
+                    pass
+                else:
+                    # SIGN-AWARE: Credit notes can be negative
+                    # Use abs() for ratio calculation to handle negative totals
+                    mismatch = abs(expected_total - total_n)
+                    mismatch_ratio = mismatch / abs(total_n) if total_n != 0 else 0.0
+                    
+                    # Reuse R7B tolerance logic
+                    ocr_confidence = tf.get("ocr_confidence")
+                    if ocr_confidence is None or ocr_confidence >= 0.7:
+                        tolerance = 0.02  # High OCR confidence - 2%
+                    elif ocr_confidence >= 0.5:
+                        tolerance = 0.05  # Medium OCR confidence - 5%
+                    else:
+                        tolerance = 0.10  # Low OCR confidence - 10%
+                    
+                    # TAX_INVOICE credit notes: Apply stricter tolerance
+                    if doc_subtype == "TAX_INVOICE":
+                        tolerance *= 0.5  # 1-5% instead of 2-10%
+                    
+                    # MINIMUM ABSOLUTE DELTA FLOOR (same as R7B)
+                    treat_as_within_tolerance = abs(mismatch) < 1.00
+                    
+                    # MULTI-CURRENCY DETECTION (same as R7B)
+                    multi_currency_detected = tf.get("multi_currency_detected", False)
+                    
+                    # Check if mismatch exceeds tolerance
+                    if mismatch_ratio > tolerance and not treat_as_within_tolerance and not multi_currency_detected:
+                        # Check if line items look incomplete/dirty
+                        has_line_items = bool(tf.get("has_line_items"))
+                        line_items_sum = tf.get("line_items_sum")
+                        line_items_dirty = (
+                            has_line_items 
+                            and line_items_sum is not None 
+                            and abs(total_n) > 0
+                            and abs(line_items_sum - total_n) / abs(total_n) > 0.20  # >20% off
+                        )
+                        
+                        # SOFT SEVERITY MODEL (credit notes are messy IRL)
+                        if line_items_dirty:
+                            # Line items incomplete - INFO only
+                            severity = "INFO"
+                            weight = 0.0
+                            message = "Credit note components don't reconcile (line items incomplete)"
+                        elif mismatch_ratio > tolerance * 2:
+                            # Significant mismatch - WARNING (softer than R7B)
+                            severity = "WARNING"
+                            weight = 0.05  # Lower than R7B's 0.08
+                            message = f"Credit note reconciliation mismatch ({mismatch_ratio*100:.1f}%)"
+                        else:
+                            # Minor mismatch - INFO only
+                            severity = "INFO"
+                            weight = 0.0
+                            message = f"Minor credit note reconciliation variance ({mismatch_ratio*100:.1f}%)"
+                        
+                        score += emit_event(
+                            events=events,
+                            reasons=reasons if weight > 0 else None,
+                            rule_id="R7C_CREDIT_NOTE_RECONCILIATION",
+                            severity=severity,
+                            weight=weight,
+                            message=message,
+                            evidence={
+                                "is_credit_note": True,
+                                "subtotal": subtotal_n,
+                                "tax_amount": tax_n,
+                                "total_amount": total_n,
+                                "expected_total": round(expected_total, 2),
+                                "mismatch": round(mismatch, 2),
+                                "mismatch_ratio": round(mismatch_ratio, 4),
+                                "mismatch_percentage": round(mismatch_ratio * 100, 2),
+                                "tolerance": tolerance,
+                                "tolerance_percentage": round(tolerance * 100, 2),
+                                "components_used": components_used,
+                                "ocr_confidence": ocr_confidence,
+                                "line_items_dirty": line_items_dirty if 'line_items_dirty' in locals() else False,
+                                "doc_profile_confidence": dp_conf_val,
+                                "is_tax_invoice": doc_subtype == "TAX_INVOICE",
+                                "treat_as_within_tolerance": treat_as_within_tolerance,
+                                "multi_currency_detected": multi_currency_detected,
+                            },
+                            reason_text=(
+                                f"🧾 Credit Note Reconciliation: Components don't add up to total "
+                                f"(expected {expected_total:.2f}, got {total_n:.2f})"
+                            ) if weight > 0 else None,
+                        )
+
+    # R8: No date
     if not has_date:
         if expects_date:
             # Only penalize if missing-field gate is enabled
             if missing_fields_enabled:
+                # NUANCE: Downgrade severity if time OR receipt_number present
+                # Many Indian POS receipts have time but OCR misses date
+                has_time = bool(tf.get("receipt_time"))
+                has_receipt_num = bool(tf.get("receipt_number"))
+                has_alternative_identifier = has_time or has_receipt_num
+                
+                # OCR CONFIDENCE ADJUSTMENT: Reduce penalty if OCR quality is poor
+                ocr_confidence = tf.get("ocr_confidence", None)
+                # low_ocr_quality: None when unknown, True/False when known
+                if ocr_confidence is None:
+                    low_ocr_quality = None  # Unknown quality
+                else:
+                    low_ocr_quality = ocr_confidence < 0.4
+                
+                if has_alternative_identifier:
+                    # Downgrade to WARNING with reduced weight
+                    severity = "WARNING"
+                    weight = 0.10  # Half of original 0.20
+                    message = "No date found, but time or receipt number present"
+                elif low_ocr_quality:
+                    # Reduce penalty for poor OCR quality
+                    severity = "WARNING"
+                    weight = 0.12  # 60% of original 0.20
+                    message = "No date found (low OCR quality)"
+                else:
+                    # Full penalty
+                    severity = "CRITICAL"
+                    weight = 0.20
+                    message = "No date found in document"
+                
                 score += emit_event(
                     events=events,
                     reasons=reasons,
                     rule_id="R8_NO_DATE",
-                    severity="CRITICAL",
-                    weight=0.20,
-                    message="No date found in document",
+                    severity=severity,
+                    weight=weight,
+                    message=message,
                     evidence={
                         "has_date": False,
-                        "doc_family": doc_profile.get("family"),
-                        "doc_subtype": doc_profile.get("subtype"),
-                        "doc_profile_confidence": doc_profile.get("confidence"),
+                        "has_time": has_time,
+                        "has_receipt_number": has_receipt_num,
+                        "has_alternative_identifier": has_alternative_identifier,
+                        "ocr_confidence": ocr_confidence,
+                        "low_ocr_quality": low_ocr_quality,
+                        "doc_family": legacy_doc_profile.get("family"),
+                        "doc_subtype": legacy_doc_profile.get("subtype"),
+                        "doc_profile_confidence": legacy_doc_profile.get("confidence"),
                         "missing_fields_enabled": missing_fields_enabled,
-                        "missing_field_gate": _missing_field_gate_evidence(tf, doc_profile),
+                        "missing_field_gate": _missing_field_gate_evidence(tf, legacy_doc_profile),
+                        "severity_downgraded": has_alternative_identifier or low_ocr_quality,
+                    },
+                    reason_text="📅 No Date Found: Receipt/invoice is missing a transaction date.",
+                )
+                
+                if has_alternative_identifier:
+                    # Downgrade to WARNING with reduced weight
+                    severity = "WARNING"
+                    weight = 0.10  # Half of original 0.20
+                    message = "No date found, but time or receipt number present"
+                elif low_ocr_quality:
+                    # Reduce penalty for poor OCR quality
+                    severity = "WARNING"
+                    weight = 0.12  # 60% of original 0.20
+                    message = "No date found (low OCR quality)"
+                else:
+                    # Full penalty
+                    severity = "CRITICAL"
+                    weight = 0.20
+                    message = "No date found in document"
+                
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R8_NO_DATE",
+                    severity=severity,
+                    weight=weight,
+                    message=message,
+                    evidence={
+                        "has_date": False,
+                        "has_time": has_time,
+                        "has_receipt_number": has_receipt_num,
+                        "has_alternative_identifier": has_alternative_identifier,
+                        "ocr_confidence": ocr_confidence,
+                        "low_ocr_quality": low_ocr_quality,
+                        "doc_family": legacy_doc_profile.get("family"),
+                        "doc_subtype": legacy_doc_profile.get("subtype"),
+                        "doc_profile_confidence": legacy_doc_profile.get("confidence"),
+                        "missing_fields_enabled": missing_fields_enabled,
+                        "missing_field_gate": _missing_field_gate_evidence(tf, legacy_doc_profile),
+                        "severity_downgraded": has_alternative_identifier or low_ocr_quality,
                     },
                     reason_text="📅 No Date Found: Receipt/invoice is missing a transaction date.",
                 )
@@ -2315,10 +3364,55 @@ def _score_and_explain(
                 evidence={
                     "merchant_candidate": None,
                     "missing_fields_enabled": missing_fields_enabled,
-                    "missing_field_gate": _missing_field_gate_evidence(tf, doc_profile),
+                    "missing_field_gate": _missing_field_gate_evidence(tf, legacy_doc_profile),
                 },
                 reason_text="🏪 No Merchant: Could not identify a merchant/vendor name.",
             )
+
+    # R8B: Date conflict - multiple distant dates in same receipt (HIGH VALUE FRAUD SIGNAL)
+    all_dates = tf.get("all_dates", [])
+    if len(all_dates) >= 2:
+        from datetime import datetime
+        try:
+            # Parse all dates and find max difference
+            parsed_dates = []
+            for date_str in all_dates:
+                try:
+                    parsed = datetime.strptime(date_str, "%Y-%m-%d")
+                    parsed_dates.append(parsed)
+                except:
+                    pass
+            
+            if len(parsed_dates) >= 2:
+                parsed_dates.sort()
+                date_diff_days = (parsed_dates[-1] - parsed_dates[0]).days
+                
+                # If dates differ by > 30 days, this is highly suspicious
+                if date_diff_days > 30:
+                    # For POS receipts, this is especially suspicious (likely merged/tampered)
+                    doc_subtype = legacy_doc_profile.get("subtype", "").upper()
+                    is_pos = doc_subtype.startswith("POS_")
+                    
+                    severity = "CRITICAL"
+                    weight = 0.35 if is_pos else 0.25
+                    
+                    score += emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="R_DATE_CONFLICT",
+                        severity=severity,
+                        weight=weight,
+                        message=f"Multiple dates found with {date_diff_days} days difference",
+                        evidence={
+                            "all_dates": all_dates,
+                            "date_diff_days": date_diff_days,
+                            "is_pos": is_pos,
+                            "num_dates": len(all_dates),
+                        },
+                        reason_text=f"📅⚠️ Date Conflict: Receipt contains multiple dates spanning {date_diff_days} days. This suggests tampering or merged receipts.",
+                    )
+        except Exception as e:
+            logger.warning(f"Date conflict check failed: {e}")
 
     # Merchant plausibility checks
     if merchant_candidate:
@@ -2326,35 +3420,131 @@ def _score_and_explain(
         if issues:
             reason_msg = _format_merchant_issue_reason(merchant_candidate, issues)
 
-            # One score contribution (avoid double-penalizing for multiple issue flags)
-            weight = 0.12
-            if any(it in issues for it in ("looks_like_label", "looks_like_identifier")):
-                weight = 0.18
+            # Gate merchant plausibility penalties when missing-field gate is OFF
+            if missing_fields_enabled:
+                # One score contribution (avoid double-penalizing for multiple issue flags)
+                weight = 0.12
+                if any(it in issues for it in ("looks_like_label", "looks_like_identifier")):
+                    weight = 0.18
 
-            score += emit_event(
-                events=events,
-                reasons=reasons,
-                rule_id="MERCHANT_IMPLAUSIBLE",
-                severity="CRITICAL",
-                weight=weight,
-                message="Merchant name appears implausible",
-                evidence={"merchant": merchant_candidate, "issues": issues},
-                reason_text=reason_msg,
-            )
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="MERCHANT_IMPLAUSIBLE",
+                    severity="CRITICAL",
+                    weight=weight,
+                    message="Merchant name appears implausible",
+                    evidence={"merchant": merchant_candidate, "issues": issues},
+                    reason_text=reason_msg,
+                )
+            else:
+                # Emit INFO event only (no score penalty)
+                emit_event(
+                    events=events,
+                    reasons=None,
+                    rule_id="MERCHANT_IMPLAUSIBLE_GATED",
+                    severity="INFO",
+                    weight=0.0,
+                    message="Merchant name appears implausible (gated - no penalty applied)",
+                    evidence={
+                        "merchant": merchant_candidate,
+                        "issues": issues,
+                        "missing_fields_enabled": missing_fields_enabled,
+                        "gated": True,
+                    },
+                )
 
+    # ---------------------------------------------------------------------------
+    # R9B: Document Type Unknown or Mixed (SOFT DEGRADE)
+    # ---------------------------------------------------------------------------
+    """
+    RULE_ID: R9B_DOC_TYPE_UNKNOWN_OR_MIXED
+    SCOPE: doc_family=TRANSACTIONAL (POS_RECEIPT, POS_RESTAURANT, etc.)
+    INTENT: reimbursement, expense_tracking
+    ALLOWED_DOC_FAMILIES: ["POS_RECEIPT", "POS_RESTAURANT", "POS_RETAIL"]
+    
+    CONFIDENCE_GATE:
+      - doc_profile_confidence < 0.6
+      - Mixed invoice/receipt language detected
+    FAILURE_MODE: soft_degrade
+    SEVERITY_RANGE: INFO → WARNING
+    VERSION: 1.0
+    """
     # Document type checks
     # _detect_document_type returns "unknown" when invoice+receipt language is mixed
     if doc_type_hint in ("ambiguous", "unknown"):
-        score += emit_event(
-            events=events,
-            reasons=reasons,
-            rule_id="R9B_DOC_TYPE_UNKNOWN_OR_MIXED",
-            severity="CRITICAL",
-            weight=0.15,
-            message="Document type unclear or mixed (invoice/receipt language)",
-            evidence={"doc_type": doc_type_hint},
-            reason_text="📄 Document Type Ambiguity: Contains mixed/unclear invoice/receipt language.",
-        )
+        # Get doc profile confidence and subtype
+        dp_conf_val = tf.get("doc_profile_confidence") or legacy_doc_profile.get("confidence") or 0.0
+        try:
+            dp_conf_val = float(dp_conf_val)
+        except Exception:
+            dp_conf_val = 0.0
+        
+        doc_family = legacy_doc_profile.get("family", "").upper()
+        doc_subtype = legacy_doc_profile.get("subtype", "").upper()
+        
+        # Enforce Rule × Family Matrix
+        execution_mode = get_execution_mode("R9B_DOC_TYPE_UNKNOWN_OR_MIXED", doc_family)
+        
+        if execution_mode == ExecutionMode.FORBIDDEN:
+            logger.debug(f"R9B_DOC_TYPE_UNKNOWN_OR_MIXED skipped: {doc_family} forbidden")
+        # GATE: Suppress R9B for high-confidence POS receipts
+        # POS receipts are structurally noisy by nature - ambiguity ≠ fraud
+        elif dp_conf_val >= 0.8 and doc_subtype.startswith("POS_"):
+            emit_event(
+                events=events,
+                reasons=None,
+                rule_id="R9B_DOC_TYPE_UNKNOWN_GATED",
+                severity="INFO",
+                weight=0.0,
+                message="Document type ambiguity suppressed for high-confidence POS receipt",
+                evidence={
+                    "doc_type": doc_type_hint,
+                    "doc_subtype": doc_subtype,
+                    "doc_profile_confidence": dp_conf_val,
+                    "gated": True,
+                    "reason": "POS receipts are structurally noisy - ambiguity is normal",
+                },
+            )
+        else:
+            # Check if merchant/currency/table present (structural validity signals)
+            merchant_present = bool(tf.get("merchant_candidate"))
+            currency_present = bool(tf.get("has_currency") or tf.get("currency_symbols"))
+            table_present = bool(tf.get("has_line_items"))
+            structural_signals = sum([merchant_present, currency_present, table_present])
+            
+            # Downgrade if transactional doc with low confidence
+            if doc_family == "TRANSACTIONAL" and dp_conf_val < 0.4:
+                severity = "WARNING"
+                weight = 0.08
+            # Downgrade if merchant + currency + table present (likely valid POS receipt)
+            elif structural_signals >= 3:
+                severity = "WARNING"
+                weight = 0.08
+            # Reduce weight by 50% if at least 2 structural signals present
+            elif structural_signals >= 2:
+                severity = "CRITICAL"
+                weight = 0.075  # 50% of 0.15
+            else:
+                severity = "CRITICAL"
+                weight = 0.15
+            
+            score += emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="R9B_DOC_TYPE_UNKNOWN_OR_MIXED",
+                severity=severity,
+                weight=weight,
+                message="Document type unclear or mixed (invoice/receipt language)",
+                evidence={
+                    "doc_type": doc_type_hint,
+                    "doc_family": doc_family,
+                    "doc_profile_confidence": dp_conf_val,
+                    "structural_signals": structural_signals,
+                    "severity_downgraded": (severity == "WARNING"),
+                },
+                reason_text="📄 Document Type Ambiguity: Contains mixed/unclear invoice/receipt language.",
+            )
 
     # ---------------------------------------------------------------------------
     # RULE GROUP 3: Layout anomalies
@@ -2401,6 +3591,42 @@ def _score_and_explain(
     # ---------------------------------------------------------------------------
     # RULE GROUP 4: Forensic cues
     # ---------------------------------------------------------------------------
+    
+    # R_TAMPER_WATERMARK: Detect fake receipt generators and watermarks (HIGH VALUE)
+    full_text = "\n".join(raw.ocr_text_per_page) if hasattr(features, 'raw') and hasattr(features.raw, 'ocr_text_per_page') else ""
+    if not full_text:
+        # Reconstruct from lines if available
+        lines = lf.get("lines", [])
+        full_text = "\n".join(lines) if lines else ""
+    
+    tamper_keywords = [
+        "receiptfaker", "receipt faker", "fake receipt", "receipt generator",
+        "invoice generator", "fake invoice", "sample receipt", "demo receipt",
+        "test receipt", "template", "example receipt", "specimen",
+        "not valid", "void", "copy only", "for display only",
+    ]
+    
+    detected_tamper_keywords = []
+    for keyword in tamper_keywords:
+        if keyword.lower() in full_text.lower():
+            detected_tamper_keywords.append(keyword)
+    
+    if detected_tamper_keywords:
+        # This is a near hard-fail - fake receipt generator detected
+        score += emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="R_TAMPER_WATERMARK",
+            severity="CRITICAL",
+            weight=0.50,  # Very high weight - this is almost certainly fake
+            message=f"Tamper/watermark keywords detected: {', '.join(detected_tamper_keywords)}",
+            evidence={
+                "detected_keywords": detected_tamper_keywords,
+                "num_keywords": len(detected_tamper_keywords),
+            },
+            reason_text=f"🚨 WATERMARK DETECTED: Receipt contains tamper keywords: {', '.join(detected_tamper_keywords)}. This indicates a fake receipt generator or template.",
+        )
+    
     uppercase_ratio = fr.get("uppercase_ratio", 0.0)
     unique_char_count = fr.get("unique_char_count", 0)
 
@@ -2433,9 +3659,12 @@ def _score_and_explain(
     # ---------------------------------------------------------------------------
     receipt_date_str = tf.get("date_extracted") or tf.get("receipt_date")
     creation_date_str = ff.get("creation_date")
+    
+    # Parse receipt date if present (regardless of creation date)
+    receipt_date = _parse_date_best_effort(receipt_date_str) if receipt_date_str else None
 
     if receipt_date_str and creation_date_str:
-        receipt_date = _parse_date_best_effort(receipt_date_str)
+        # Parse creation date for comparison
         creation_datetime = _parse_pdf_creation_datetime_best_effort(creation_date_str)
 
         if receipt_date and creation_datetime:
@@ -2455,48 +3684,85 @@ def _score_and_explain(
                         "receipt_date_parsed": str(receipt_date),
                         "creation_date_parsed": str(creation_date),
                     },
-                    reason_text=(
-                        f"📅🚨 Impossible Date Sequence: Receipt dated {receipt_date} "
-                        f"but file created {creation_date}."
-                    ),
+                    reason_text="📅⚠️ Impossible Date: Receipt date is after file creation date.",
                 )
             else:
+                # Suspicious date gap: file created significantly after receipt date
+                # GATED by profile: Skip for commercial invoices (created later for accounting)
                 gap_days = (creation_date - receipt_date).days
-                if gap_days > 2:
+                
+                # Use the DocumentProfile object loaded from doc_class
+                from app.pipelines.doc_profiles import get_profile_for_doc_class
+                doc_class = tf.get("doc_class", "UNKNOWN")
+                profile_obj = get_profile_for_doc_class(doc_class)
+                
+                profile_threshold = profile_obj.date_gap_threshold_days
+                should_check_gap = should_apply_rule(profile_obj, "R16_SUSPICIOUS_DATE_GAP")
+                
+                if not should_check_gap:
+                    logger.info(f"R16_SUSPICIOUS_DATE_GAP skipped for {doc_class} (profile: apply_date_gap_rules=False)")
+                elif profile_threshold is None:
+                    logger.info(f"R16_SUSPICIOUS_DATE_GAP skipped for {doc_class} (profile: no threshold)")
+                elif gap_days > profile_threshold:
+                    # Get doc profile confidence for severity adjustment
+                    dp_conf_val = 0.0
+                    try:
+                        dp_conf_val = float(legacy_doc_profile.get("confidence") or 0.0)
+                    except Exception:
+                        dp_conf_val = 0.0
+                    
+                    # Downgrade severity for low-confidence docs with moderate gaps
+                    if dp_conf_val < 0.4 and gap_days < 540:
+                        severity = "WARNING"
+                        raw_weight = 0.10
+                    else:
+                        severity = "CRITICAL"
+                        raw_weight = 0.35
+                    
                     score += emit_event(
                         events=events,
                         reasons=reasons,
                         rule_id="R16_SUSPICIOUS_DATE_GAP",
-                        severity="CRITICAL",
-                        weight=0.35,
+                        severity=severity,
+                        weight=raw_weight,
                         message=f"File created {gap_days} days after receipt date",
                         evidence={
                             "receipt_date": receipt_date_str,
                             "creation_date": creation_date_str,
                             "gap_days": gap_days,
+                            "doc_profile_confidence": dp_conf_val,
+                            "severity_downgraded": (severity == "WARNING"),
+                            "profile_threshold": profile_threshold,
+                            "profile_gated": True,
                         },
                         reason_text=(
                             f"📅⚠️ Suspicious Date Gap: File created {gap_days} days "
                             f"after receipt date (backdating pattern)."
                         ),
                     )
-        elif receipt_date_str and not receipt_date:
-            score += emit_event(
-                events=events,
-                reasons=reasons,
-                rule_id="R17_UNPARSABLE_DATE",
-                severity="CRITICAL",
-                weight=0.25,
-                message="Receipt date present but unparsable",
-                evidence={"receipt_date_str": receipt_date_str},
-                reason_text=f"📅❓ Unparsable Date: '{receipt_date_str}' cannot be parsed into known format.",
-            )
+    elif receipt_date_str and not receipt_date:
+        score += emit_event(
+            events=events,
+            reasons=reasons,
+            rule_id="R17_UNPARSABLE_DATE",
+            severity="CRITICAL",
+            weight=0.25,
+            message="Receipt date present but unparsable",
+            evidence={"receipt_date_str": receipt_date_str},
+            reason_text=f"📅❓ Unparsable Date: '{receipt_date_str}' cannot be parsed into known format.",
+        )
 
     # ---------------------------------------------------------------------------
     # RULE GROUP 6: Apply learned rules from feedback
     # ---------------------------------------------------------------------------
 
     if apply_learned:
+        # ------------------------------------------------------------------
+        # Safety: learned rules expect a legacy-style doc_profile dict.
+        # Create backward-compat alias in this scope to avoid NameError.
+        # ------------------------------------------------------------------
+        doc_profile = legacy_doc_profile  # Alias for older learned-rule code paths
+        
         try:
             from app.pipelines.learning import apply_learned_rules
 
@@ -2505,11 +3771,11 @@ def _score_and_explain(
             # Compute doc profile confidence and optional subtype once
             dp_conf = 0.0
             try:
-                dp_conf = float(doc_profile.get("confidence") or 0.0)
+                dp_conf = float(legacy_doc_profile.get("confidence") or 0.0)
             except Exception:
                 dp_conf = 0.0
 
-            st = (doc_profile.get("subtype") or "").upper() if isinstance(doc_profile, dict) else ""
+            st = (legacy_doc_profile.get("subtype") or "").upper() if isinstance(legacy_doc_profile, dict) else ""
             optional_subtype = (
                 st in _DOC_SUBTYPES_TOTAL_OPTIONAL
                 or st in _DOC_SUBTYPES_AMOUNTS_OPTIONAL
@@ -2522,7 +3788,7 @@ def _score_and_explain(
                 events=events,
                 reasons=reasons,
                 tf=tf,
-                doc_profile=doc_profile,
+                doc_profile=legacy_doc_profile,
                 missing_fields_enabled=missing_fields_enabled,
                 dp_conf=dp_conf,
                 optional_subtype=optional_subtype,
@@ -2534,8 +3800,140 @@ def _score_and_explain(
 
         except Exception as e:
             logger.warning(f"Failed to apply learned rules: {e}")
+            
+            # Emit INFO event for learned rule failure with doc-profile context
+            emit_event(
+                events=events,
+                reasons=None,
+                rule_id="LEARNED_RULES_FAILURE",
+                severity="INFO",
+                weight=0.0,
+                message=f"Failed to apply learned rules: {str(e)}",
+                evidence={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "doc_subtype_guess": tf.get("doc_subtype_guess"),
+                    "doc_profile_confidence": tf.get("doc_profile_confidence"),
+                },
+            )
+            
+            # Reduce confidence factor due to system error
+            conf_factor = max(0.5, conf_factor * 0.8)
 
+    # ---------------------------------------------------------------------------
+    # R10: Template Quality Cluster (TQC)
+    # ---------------------------------------------------------------------------
+    """
+    CLUSTER_ID: TQC_TEMPLATE_QUALITY
+    RULE_ID: R10_TEMPLATE_QUALITY
     
+    ALLOWED_DOC_FAMILIES:
+      - POS_RECEIPT
+      - COMMERCIAL_INVOICE
+      - TAX_INVOICE
+    
+    INTENT: template_integrity_soft_signal
+    
+    FAILURE_MODE: soft_signal_only
+    SEVERITY_RANGE: INFO → WARNING
+    MAX_WEIGHT: 0.05
+    
+    GATES:
+      - doc_profile_confidence >= 0.75
+      - keyword_checks require lang_confidence >= 0.60
+      - date_checks require geo_confidence >= 0.70
+    
+    LANGUAGE_SUPPORT:
+      - keyword checks: language-specific (opt-in)
+      - spacing checks: language-agnostic
+    
+    SAFETY:
+      - MUST NOT flip REAL → FAKE alone
+      - MUST NOT fire on UNKNOWN family
+    
+    VERSION: 1.0
+    """
+    # Hard gates
+    doc_family = legacy_doc_profile.get("family", "").upper()
+    execution_mode = get_execution_mode("R10_TEMPLATE_QUALITY", doc_family)
+    
+    if execution_mode == ExecutionMode.FORBIDDEN:
+        logger.debug(f"R10_TEMPLATE_QUALITY skipped: {doc_family} forbidden")
+    else:
+        dp_conf_val = tf.get("doc_profile_confidence") or legacy_doc_profile.get("confidence") or 0.0
+        try:
+            dp_conf_val = float(dp_conf_val)
+        except Exception:
+            dp_conf_val = 0.0
+        
+        if dp_conf_val >= 0.75:
+            tqc_score = 0.0
+            evidence = {}
+            
+            # Canonicalize full_text for signal detectors
+            # Many pipelines don't populate full_text, so we use _join_text()
+            # which prefers tf["raw_text"]/tf["text"], else falls back to lf["lines"]
+            tf_for_tqc = dict(tf)
+            if not tf_for_tqc.get("full_text"):
+                tf_for_tqc["full_text"] = _join_text(tf, lf)
+            
+            # ---------- S1: Keyword typo detector (language-gated) ----------
+            lang = tf.get("lang_guess")
+            lang_conf = float(tf.get("lang_confidence") or 0.0)
+            
+            # Gate: lang_conf >= 0.60 AND lang != "mixed"
+            # Mixed-language receipts should not trigger spelling checks
+            if lang_conf >= 0.60 and lang != "mixed":
+                delta, ev = detect_keyword_typos(tf_for_tqc, lang)
+                tqc_score += delta
+                if ev:
+                    evidence["keyword_typos"] = ev
+            
+            # ---------- S2: Spacing anomaly (always allowed) ----------
+            delta, ev = detect_spacing_anomaly(tf_for_tqc)
+            tqc_score += delta
+            if ev:
+                evidence["spacing_anomaly"] = ev
+            
+            # ---------- S3: Date format mismatch (geo-gated, weak) ----------
+            geo_conf = float(tf.get("geo_confidence") or 0.0)
+            if geo_conf >= 0.70:
+                delta, ev = detect_date_format_anomaly(tf_for_tqc)
+                tqc_score += delta
+                if ev:
+                    evidence["date_format"] = ev
+            
+            # ---------- Language Confidence Weighting ----------
+            # Adjust signal weight based on language detection confidence
+            # High confidence (>0.8) → full weight
+            # Medium confidence (0.6-0.8) → 70% weight
+            # Low confidence (<0.6) → already gated out by S1
+            
+            lang_conf_factor = 1.0
+            if lang_conf < 0.80:
+                # Medium confidence: reduce weight to avoid false positives
+                lang_conf_factor = 0.70
+            
+            # Apply language confidence factor to TQC score
+            tqc_score_adjusted = tqc_score * lang_conf_factor
+            
+            # ---------- Cap & emit ----------
+            MAX_WEIGHT = 0.05
+            applied = min(MAX_WEIGHT, tqc_score_adjusted * MAX_WEIGHT)
+            
+            if applied > 0:
+                severity = "INFO" if applied < 0.03 else "WARNING"
+                
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R10_TEMPLATE_QUALITY",
+                    severity=severity,
+                    weight=applied,
+                    message="Template quality anomalies detected",
+                    evidence=evidence,
+                    reason_text="📝 Template Quality: Document contains formatting or spelling anomalies.",
+                )
 
     # ---------------------------------------------------------------------------
     # Final label determination (single source of truth)
@@ -2557,10 +3955,10 @@ def _score_and_explain(
     
     # Extract full geo profile for ensemble audit trail
     geo_profile_debug = {
-        "family": doc_profile.get("family"),
-        "subtype": doc_profile.get("subtype"),
-        "confidence": doc_profile.get("confidence"),
-        "evidence": doc_profile.get("evidence"),
+        "family": legacy_doc_profile.get("family"),
+        "subtype": legacy_doc_profile.get("subtype"),
+        "confidence": legacy_doc_profile.get("confidence"),
+        "evidence": legacy_doc_profile.get("evidence"),
         # Add geo-aware fields if available
         "lang_guess": tf.get("lang_guess"),
         "lang_confidence": tf.get("lang_confidence"),
@@ -2615,8 +4013,8 @@ def analyze_receipt(
     from app.schemas.receipt import ReceiptInput
     receipt_input = ReceiptInput(file_path=file_path)
     
-    # 2. Ingest the receipt file and run OCR
-    raw = ingest_and_ocr(receipt_input)
+    # 2. Ingest the receipt file and run OCR with preprocessing
+    raw = ingest_and_ocr(receipt_input, preprocess=True)
     
     # 3. Build features from the raw receipt data
     features = build_features(raw)

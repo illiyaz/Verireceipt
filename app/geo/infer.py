@@ -193,11 +193,12 @@ def _compute_result(country_scores: Dict[str, float], evidence: List[Dict[str, A
     if geo_mixed:
         confidence = max(0.0, confidence - 0.20)
     
-    # If top score < 0.30, mark as UNKNOWN
-    if top_score < 0.30:
+    # If top score < 0.30 OR confidence < 0.30, mark as UNKNOWN
+    if top_score < 0.30 or confidence < 0.30:
         return {
             "geo_country_guess": "UNKNOWN",
-            "geo_confidence": round(min(top_score * 0.5, 0.15), 2),
+            "geo_confidence": 0.0,  # Zero out confidence for UNKNOWN
+            "geo_confidence_raw": round(confidence, 2),  # Keep raw for debugging
             "geo_evidence": evidence,
             "candidates": candidates,
             "geo_mixed": geo_mixed
@@ -215,7 +216,8 @@ def _unknown_result() -> Dict[str, Any]:
     """Return UNKNOWN result."""
     return {
         "geo_country_guess": "UNKNOWN",
-        "geo_confidence": 0.0,
+        "geo_confidence": 0.0,  # Always 0.0 for UNKNOWN
+        "geo_confidence_raw": 0.0,
         "geo_evidence": [],
         "candidates": [],
         "geo_mixed": False

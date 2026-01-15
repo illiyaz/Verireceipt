@@ -161,10 +161,16 @@ Language Detection:
   • Detected Language: {lang.upper()} (confidence: {lang_conf:.2f})
   • Interpretation: {AuditFormatter._interpret_language(lang, lang_conf)}
 
-Geographic Origin:
-  • Detected Country: {geo.upper()} (confidence: {geo_conf:.2f})
-  • Interpretation: {AuditFormatter._interpret_geo(geo, geo_conf)}
-"""
+Geographic Origin:"""
+        
+        # Fix #4: Explicit message for UNKNOWN geo with low confidence
+        if geo == "UNKNOWN" and geo_conf < 0.30:
+            section += "\n  • ⚠️  No reliable geographic origin detected\n"
+            section += f"  • Confidence: {geo_conf:.2f} (below 0.30 threshold)\n"
+            section += "  • Interpretation: Insufficient or ambiguous geographic signals\n"
+        else:
+            section += f"\n  • Detected Country: {geo.upper()} (confidence: {geo_conf:.2f})\n"
+            section += f"  • Interpretation: {AuditFormatter._interpret_geo(geo, geo_conf)}\n"
         
         if geo_evidence:
             section += "  • Evidence Found:\n"

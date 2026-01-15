@@ -14,6 +14,27 @@ from typing import Dict, Any, List, Tuple, Optional
 from app.geo import infer_geo
 
 
+_lang_loader = None
+_lang_script_detector = None
+_lang_router = None
+_lang_normalizer = None
+
+
+def _get_lang_components():
+    global _lang_loader, _lang_script_detector, _lang_router, _lang_normalizer
+
+    if _lang_loader is None:
+        from app.pipelines.lang import LangPackLoader, ScriptDetector, LangPackRouter, TextNormalizer
+
+        _lang_loader = LangPackLoader(strict=True)
+        _lang_loader.load_all()
+        _lang_script_detector = ScriptDetector()
+        _lang_router = LangPackRouter(_lang_loader, _lang_script_detector)
+        _lang_normalizer = TextNormalizer()
+
+    return _lang_loader, _lang_router, _lang_normalizer
+
+
 # =============================================================================
 # STEP 1: LANGUAGE DETECTION (Fast Heuristic)
 # =============================================================================
@@ -219,7 +240,8 @@ def _detect_language(text: str, sample_size: int = 1000) -> Dict[str, Any]:
 # Ambiguous signals that match multiple countries (scored lower)
 AMBIGUOUS_SIGNALS = {
     "currency": {"$", "¥"},  # USD, MXN, CAD, SGD, HKD, AUD / CNY, JPY
-    "postal": {r"\b\d{5}\b", r"\b\d{6}\b"},  # US ZIP, MX C.P., FR/DE/TH / CN, IN, SG
+    "postal": {r"\b\d{5}\b"},  # US ZIP, MX C.P., FR/DE/TH
+    # NOTE: \b\d{6}\b removed - no longer used for any country (too ambiguous)
     "phone": {r"\b\d{10}\b"},  # MX, US (without formatting)
 }
 
@@ -267,12 +289,13 @@ GEO_SIGNALS = {
             r"\b[6-9]\d{9}\b",  # Mobile: starts with 6-9, 10 digits
         ],
         "postal_patterns": [
-            r"\bpin\s*code?\s*:?\s*\d{6}\b",  # PIN Code: 123456
-            r"\b\d{6}\b",  # 6 digits
+            r"\bpin\s*code?\s*:?\s*\d{6}\b",  # PIN Code: 123456 (contextual only)
+            # NOTE: Standalone \b\d{6}\b removed - too ambiguous (overlaps CN, SG, etc.)
         ],
         "location_markers": [
             "mumbai", "delhi", "bangalore", "hyderabad", "chennai", "kolkata",
-            "pune", "ahmedabad", "nagar", "road", "street",
+            "pune", "ahmedabad",
+            # NOTE: Removed "nagar", "road", "street" - too generic/ambiguous
         ],
         "language_hint": "hi",
     },
@@ -458,7 +481,26 @@ def _score_geo_signal(text: str, signal_type: str, patterns: List[str], has_stro
     """
     score = 0
     evidence = []
-    text_lower = text.lower()
+    text_raw_lower = (text or "").lower()
+    text_lower = text_raw_lower
+
+    routed_packs = []
+    routed_script = None
+    routed_confidence = 0.0
+    normalizer = None
+    try:
+        _, router, normalizer = _get_lang_components()
+        routing = router.route_document(text or "", allow_multi_pack=True)
+        routed_packs = routing.all_packs
+        routed_script = routing.script
+        routed_confidence = float(routing.confidence or 0.0)
+        if normalizer and routed_script:
+            text_lower = normalizer.normalize_text(text or "", routed_script).lower()
+    except Exception:
+        routed_packs = []
+        routed_script = None
+        routed_confidence = 0.0
+        normalizer = None
     
     if signal_type == "currency":
         for pattern in patterns:
@@ -628,6 +670,12 @@ def _detect_geo_country(
     if winner_score >= 10:
         confidence = min(1.0, confidence + 0.2)
 
+    # Fix #3: Cap confidence for weak-only matches
+    # If winner has no strong signals (only ambiguous/weak signals), cap at 0.25
+    has_strong = strong_signals_by_country.get(winner, False)
+    if not has_strong and winner_score < 8:
+        confidence = min(confidence, 0.25)
+
     # NEW: Explicit UNKNOWN gating (unknown geo ≠ suspicious receipt)
     # If we don't have enough absolute signal strength, emit UNKNOWN even if a country "wins".
     geo_country_guess = winner
@@ -639,15 +687,21 @@ def _detect_geo_country(
     if geo_country_guess == "UNKNOWN" and winner_score > 0 and confidence < 0.30:
         geo_suspicious = True
 
+    # Zero out confidence for UNKNOWN geo (cleaner semantics)
+    final_confidence = round(confidence, 2)
+    if geo_country_guess == "UNKNOWN":
+        final_confidence = 0.0
+
     return {
         "geo_country_guess": geo_country_guess,
-        "geo_confidence": round(confidence, 2),
+        "geo_confidence": final_confidence,
         "geo_evidence": country_evidence.get(winner, [])[:10],  # Top 10 signals from raw winner
         "geo_scores": country_scores,
         "geo_suspicious": geo_suspicious,  # Flag for downstream rules
         # Keep raw winner for audit/debugging even when we emit UNKNOWN
         "geo_winner_raw": winner,
         "geo_winner_score_raw": int(winner_score),
+        "geo_confidence_raw": round(confidence, 2),  # Raw confidence before UNKNOWN zeroing
         # Echo language prior inputs for debugging/audit
         "lang_hint": lang_hint,
         "lang_confidence": round(float(lang_confidence), 2) if isinstance(lang_confidence, (int, float)) else lang_confidence,
@@ -686,6 +740,11 @@ GEO_SUBTYPE_KEYWORDS = {
         "FUEL": ["petrol", "diesel", "fuel", "litres"],
         "UTILITY": ["electricity", "water", "gas", "bill", "consumer"],
         "TELECOM": ["mobile", "recharge", "plan", "data"],
+        # Logistics/customs documents
+        "COMMERCIAL_INVOICE": ["commercial invoice", "export", "import", "exporter", "consignee", "shipper"],
+        "AIR_WAYBILL": ["air waybill", "airway bill", "awb", "flight", "cargo"],
+        "SHIPPING_BILL": ["shipping bill", "customs", "port", "vessel"],
+        "BILL_OF_LADING": ["bill of lading", "container", "vessel", "port"],
     },
     "CN": {  # China
         "POS_RESTAURANT": ["restaurant", "receipt", "bill", "发票", "收据"],
@@ -783,65 +842,254 @@ def _detect_doc_subtype_geo_aware(
             "doc_profile_evidence": [...]
         }
     """
-    text_lower = text.lower()
+    text_raw_lower = (text or "").lower()
+    text_lower = text_raw_lower
+    
+    # POS HEURISTIC UPGRADE: Detect POS_RESTAURANT early with structural signals
+    # This prevents false negatives when keyword matching alone is insufficient
+    pos_score = 0
+    pos_evidence = []
+    
+    # Signal 1: Merchant name in ALL CAPS near top (first 5 lines)
+    if lines:
+        top_lines = lines[:5]
+        for line in top_lines:
+            line_stripped = line.strip()
+            if len(line_stripped) > 3 and line_stripped.isupper() and not line_stripped.startswith(('BILL', 'INVOICE', 'RECEIPT', 'DATE', 'TIME')):
+                pos_score += 1
+                pos_evidence.append("merchant_all_caps_top")
+                break
+    
+    # Signal 2: Currency = INR (common for Indian POS)
+    # Only add currency_inr if INR/₹ actually detected in text
+    if "inr" in text_raw_lower or "₹" in text or "rs." in text_raw_lower or "rs " in text_raw_lower:
+        pos_score += 1
+        pos_evidence.append("currency_inr")
+    
+    # Signal 3: GST detected (Indian tax)
+    if any(gst_kw in text_raw_lower for gst_kw in ["gst", "gstin", "cgst", "sgst", "igst"]):
+        pos_score += 1
+        pos_evidence.append("gst_detected")
+    
+    # Signal 4: Line items with quantity × price pattern
+    qty_price_pattern = False
+    for line in lines:
+        line_lower = line.lower()
+        # Look for patterns like: "2 x 100" or "qty: 3" or "@ 50.00"
+        if any(pattern in line_lower for pattern in [" x ", "qty", " @ ", "quantity"]):
+            qty_price_pattern = True
+            break
+    if qty_price_pattern:
+        pos_score += 1
+        pos_evidence.append("qty_price_pattern")
+    
+    # Signal 5: POS-specific words (Bill, Qty, Amount, Total)
+    pos_words = ["bill", "qty", "amount", "total"]
+    pos_word_hits = sum(1 for word in pos_words if word in text_raw_lower)
+    if pos_word_hits >= 2:
+        pos_score += 1
+        pos_evidence.append(f"pos_words:{pos_word_hits}")
+    
+    # Signal 6: NO invoice-specific blocks (Customer GSTIN, Invoice No)
+    has_invoice_block = any(inv_kw in text_raw_lower for inv_kw in ["invoice no", "invoice number", "customer gstin", "buyer gstin", "po number"])
+    if not has_invoice_block:
+        pos_score += 1
+        pos_evidence.append("no_invoice_block")
+    
+    # Early return if POS heuristic triggers (≥3 signals)
+    if pos_score >= 3:
+        confidence = min(0.85, 0.6 + 0.1 * pos_score)
+        return {
+            "doc_family_guess": "TRANSACTIONAL",
+            "doc_subtype_guess": "POS_RESTAURANT",
+            "doc_subtype_confidence": round(confidence, 2),
+            "doc_subtype_source": "pos_heuristic",
+            "doc_subtype_evidence": pos_evidence,
+            "doc_profile_confidence": round(confidence, 2),
+            "doc_profile_evidence": pos_evidence,
+            "requires_corroboration": False,
+            "disable_missing_field_penalties": False,
+        }
+
+    routed_packs = []
+    routed_script = None
+    routed_confidence = 0.0
+    normalizer = None
+    try:
+        _, router, normalizer = _get_lang_components()
+        routing = router.route_document(text or "", allow_multi_pack=True)
+        routed_packs = routing.all_packs
+        routed_script = routing.script
+        routed_confidence = float(routing.confidence or 0.0)
+        if normalizer and routed_script:
+            text_lower = normalizer.normalize_text(text or "", routed_script).lower()
+    except Exception:
+        routed_packs = []
+        routed_script = None
+        routed_confidence = 0.0
+        normalizer = None
     
     # Get geo-specific keywords (fallback to US if unknown)
     geo_keywords = GEO_SUBTYPE_KEYWORDS.get(geo_country, GEO_SUBTYPE_KEYWORDS.get("US", {}))
     
     # Score each subtype
-    subtype_scores = {}
-    subtype_evidence = {}
+    subtype_scores: Dict[str, float] = {}
+    subtype_evidence: Dict[str, List[str]] = {}
+
+    pack_keywords_by_subtype: Dict[str, List[str]] = {}
+    if routed_packs:
+        for pack in routed_packs:
+            kws = pack.keywords
+            pack_keywords_by_subtype.setdefault("TAX_INVOICE", []).extend(kws.tax_invoice)
+            pack_keywords_by_subtype.setdefault("ECOMMERCE", []).extend(kws.ecommerce)
+            pack_keywords_by_subtype.setdefault("FUEL", []).extend(kws.fuel)
+            pack_keywords_by_subtype.setdefault("PARKING", []).extend(kws.parking)
+            pack_keywords_by_subtype.setdefault("HOTEL_FOLIO", []).extend(kws.hotel_folio)
+            pack_keywords_by_subtype.setdefault("UTILITY", []).extend(kws.utility)
+            pack_keywords_by_subtype.setdefault("TELECOM", []).extend(kws.telecom)
+            pack_keywords_by_subtype.setdefault("COMMERCIAL_INVOICE", []).extend(kws.commercial_invoice)
+            pack_keywords_by_subtype.setdefault("SHIPPING_BILL", []).extend(kws.shipping_bill)
+            pack_keywords_by_subtype.setdefault("BILL_OF_LADING", []).extend(kws.bill_of_lading)
+            pack_keywords_by_subtype.setdefault("AIR_WAYBILL", []).extend(kws.air_waybill)
+
+            pack_keywords_by_subtype.setdefault("__LOGISTICS__", []).extend(kws.logistics)
     
+    pack_inc = 0.7 + 0.3 * max(0.0, min(1.0, routed_confidence))
+
     for subtype, keywords in geo_keywords.items():
-        score = 0
-        evidence = []
-        
-        for keyword in keywords:
-            if keyword in text_lower:
-                score += 1
-                evidence.append(keyword)
-        
-        subtype_scores[subtype] = score
+        score = 0.0
+        evidence: List[str] = []
+
+        keyword_weights: Dict[str, float] = {}
+        for kw in (keywords or []):
+            kw_s = str(kw or "").strip()
+            if not kw_s:
+                continue
+            keyword_weights[kw_s] = max(keyword_weights.get(kw_s, 0.0), 1.0)
+
+        for kw in (pack_keywords_by_subtype.get(subtype) or []):
+            kw_s = str(kw or "").strip()
+            if not kw_s:
+                continue
+            keyword_weights[kw_s] = max(keyword_weights.get(kw_s, 0.0), pack_inc)
+
+        for kw_s, inc in keyword_weights.items():
+            kw_l = kw_s.lower()
+            hit = False
+            if kw_l and (kw_l in text_raw_lower):
+                hit = True
+            if (not hit) and normalizer and routed_script:
+                kw_n = normalizer.normalize_text(kw_s, routed_script).lower()
+                if kw_n and (kw_n in text_lower):
+                    hit = True
+            if hit:
+                score += float(inc)
+                evidence.append(kw_s)
+
+        subtype_scores[subtype] = float(score)
         subtype_evidence[subtype] = evidence
     
-    # Pick winner
-    if not subtype_scores or max(subtype_scores.values()) == 0:
-        # Fallback to generic detection
-        # IMPORTANT: MISC subtype should disable strict field expectations
+    # Logistics boost: if we see strong logistics/customs markers, boost logistics subtypes
+    logistics_markers = [
+        "exporter", "shipper", "consignee",
+        "hs code", "hsn", "customs",
+        "awb", "airway bill", "bill of lading",
+        "shipping bill", "port of loading", "port of discharge",
+        "country of export", "country of ultimate destination",
+    ]
+    logistics_pack_markers = pack_keywords_by_subtype.get("__LOGISTICS__") or []
+    logistics_hits = sum(1 for m in logistics_markers if (m in text_lower) or (m in text_raw_lower))
+    if logistics_pack_markers:
+        for m in logistics_pack_markers:
+            m_s = str(m or "").strip()
+            if not m_s:
+                continue
+            m_l = m_s.lower()
+            if m_l and ((m_l in text_raw_lower) or (m_l in text_lower)):
+                logistics_hits += 1
+    if logistics_hits >= 2:
+        # Boost logistics-related subtypes
+        for st in ["SHIPPING_BILL", "BILL_OF_LADING", "AIR_WAYBILL", "COMMERCIAL_INVOICE", "SHIPPING_INVOICE"]:
+            if st in subtype_scores:
+                subtype_scores[st] += 3  # Significant boost to overcome UTILITY
+    
+    # --- subtype winner selection (hypothesis contract) ---
+    MIN_SUBTYPE_SCORE = 4
+
+    # SURGICAL FIX: If restaurant keyword found in POS_RESTAURANT, boost it to meet threshold
+    # This prevents returning "unknown" when restaurant evidence exists
+    restaurant_evidence = subtype_evidence.get("POS_RESTAURANT", [])
+    if isinstance(restaurant_evidence, list) and "restaurant" in restaurant_evidence:
+        pos_restaurant_score = subtype_scores.get("POS_RESTAURANT", 0.0)
+        if pos_restaurant_score > 0 and pos_restaurant_score < MIN_SUBTYPE_SCORE:
+            # Boost to meet threshold
+            subtype_scores["POS_RESTAURANT"] = MIN_SUBTYPE_SCORE
+
+    if (not subtype_scores) or (max(subtype_scores.values()) == 0):
         return {
-            "doc_family_guess": "TRANSACTIONAL",
-            "doc_subtype_guess": "MISC",
-            "doc_profile_confidence": 0.2,  # Lower confidence for MISC
+            "doc_family_guess": "UNKNOWN",
+            "doc_subtype_guess": "unknown",
+            "doc_subtype_confidence": 0.0,
+            "doc_subtype_source": "geo_profile",
+            "doc_subtype_evidence": [],
+            "doc_profile_confidence": 0.0,
             "doc_profile_evidence": [],
-            "requires_corroboration": True,  # Flag: need vision/layout confirmation
-            "disable_missing_field_penalties": True,  # Flag: don't penalize missing fields
+            "requires_corroboration": True,
+            "disable_missing_field_penalties": True,
+        }
+
+    winner = max(subtype_scores, key=subtype_scores.get)
+    winner_score = float(subtype_scores.get(winner, 0.0) or 0.0)
+    total_score = float(sum(subtype_scores.values()) or 0.0)
+
+    # Gate weak subtype picks
+    if winner_score < MIN_SUBTYPE_SCORE:
+        return {
+            "doc_family_guess": "UNKNOWN",
+            "doc_subtype_guess": "unknown",
+            "doc_subtype_confidence": 0.0,
+            "doc_subtype_source": "geo_profile",
+            "doc_subtype_evidence": (subtype_evidence.get(winner, [])[:8] if isinstance(subtype_evidence, dict) else []),
+            "doc_profile_confidence": 0.0,
+            "doc_profile_evidence": (subtype_evidence.get(winner, [])[:8] if isinstance(subtype_evidence, dict) else []),
+            "requires_corroboration": True,
+            "disable_missing_field_penalties": True,
         }
     
-    winner = max(subtype_scores, key=subtype_scores.get)
-    winner_score = subtype_scores[winner]
-    
     # Determine family from subtype
-    if winner.startswith("POS_") or winner in ["TAX_INVOICE", "ECOMMERCE", "FUEL", "PARKING", "HOTEL_FOLIO", "UTILITY", "TELECOM"]:
+    if winner.startswith("POS_") or winner in ["TAX_INVOICE", "ECOMMERCE", "FUEL", "PARKING", "HOTEL_FOLIO", "UTILITY", "TELECOM", "COMMERCIAL_INVOICE", "SHIPPING_INVOICE"]:
         family = "TRANSACTIONAL"
     elif winner in ["SHIPPING_BILL", "BILL_OF_LADING", "AIR_WAYBILL", "DELIVERY_NOTE"]:
         family = "LOGISTICS"
     else:
         family = "PAYMENT"
     
-    # Confidence = (winner_score / 5) * geo_confidence
-    # If we have 3+ keyword matches and high geo confidence, we're confident
-    base_confidence = min(1.0, winner_score / 5.0)
-    final_confidence = base_confidence * (0.5 + 0.5 * geo_confidence)
-    
-    # Determine if this needs corroboration (low confidence)
-    requires_corroboration = final_confidence < 0.4
-    
+    # Special confidence boost for POS_RESTAURANT: restaurant keyword alone should reach >= 0.5
+    # Many restaurant invoices won't have tip/table/server depending on country
+    if winner == "POS_RESTAURANT":
+        restaurant_evidence = subtype_evidence.get("POS_RESTAURANT", [])
+        if isinstance(restaurant_evidence, list) and "restaurant" in restaurant_evidence:
+            # Base: 0.55 for restaurant keyword
+            confidence = 0.55
+            # Bonus signals from merged features (passed via text analysis)
+            evidence_count = len(restaurant_evidence)
+            if evidence_count > 1:
+                # +0.05 per additional evidence (e.g., amounts, date/time, other POS signals)
+                confidence = min(0.75, 0.55 + (evidence_count - 1) * 0.05)
+        else:
+            confidence = min(1.0, float(winner_score) / max(10.0, float(total_score)))
+    else:
+        confidence = min(1.0, float(winner_score) / max(10.0, float(total_score)))
+
     return {
         "doc_family_guess": family,
         "doc_subtype_guess": winner,
-        "doc_profile_confidence": round(final_confidence, 2),
-        "doc_profile_evidence": subtype_evidence[winner][:5],
-        "requires_corroboration": requires_corroboration,
+        "doc_subtype_confidence": round(float(confidence), 2),
+        "doc_subtype_source": "geo_profile",
+        "doc_subtype_evidence": (subtype_evidence.get(winner, [])[:8] if isinstance(subtype_evidence, dict) else []),
+        "doc_profile_confidence": round(float(confidence), 2),
+        "doc_profile_evidence": (subtype_evidence.get(winner, [])[:8] if isinstance(subtype_evidence, dict) else []),
+        "requires_corroboration": False,
         "disable_missing_field_penalties": False,  # Normal subtypes use standard rules
     }
 
@@ -886,7 +1134,24 @@ def extract_us_specific(text: str) -> Dict[str, Any]:
     """Extract US-specific fields (ZIP, State, EIN, etc.)."""
     features = {}
     
-    # ZIP Code
+    # US State abbreviations (all 50 states + DC)
+    us_states = [
+        "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+        "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+        "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+        "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+        "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"
+    ]
+    
+    # Strong US signal: State + ZIP pattern (e.g., "TN 37087")
+    state_zip_pattern = r'\b(' + '|'.join(us_states) + r')\s+(\d{5}(?:-\d{4})?)\b'
+    state_zip_match = re.search(state_zip_pattern, text)
+    if state_zip_match:
+        features["us_state"] = state_zip_match.group(1)
+        features["us_zip"] = state_zip_match.group(2)
+        features["us_confidence"] = 0.95  # Very high confidence
+    
+    # ZIP Code (standalone)
     zip_pattern = r'\b(\d{5}(?:-\d{4})?)\b'
     zip_matches = re.findall(zip_pattern, text)
     if zip_matches:

@@ -1,0 +1,65 @@
+{
+  "test_id": "geo_false_india_detection",
+  "description": "Test that receipts with ambiguous signals (6-digit numbers, $ symbol) do NOT get falsely detected as India",
+  "category": "geo_detection",
+  "priority": "high",
+  "created": "2026-01-15",
+  "input": {
+    "text": "Global Professional Services\n123 Main Street\nInvoice #82216-24-GLPR\nDate: August 15, 2024\n\nServices Rendered:\nConsulting Services    $47,619.00\nProject Management     $50,000.00\nTechnical Support      $407,381.00\n\nSubtotal:             $505,000.00\nTotal Due:            $505,000.00\n\nPayment Terms: Net 30\nReference: 123456\n\nThank you for your business!",
+    "lines": [
+      "Global Professional Services",
+      "123 Main Street",
+      "Invoice #82216-24-GLPR",
+      "Date: August 15, 2024",
+      "",
+      "Services Rendered:",
+      "Consulting Services    $47,619.00",
+      "Project Management     $50,000.00",
+      "Technical Support      $407,381.00",
+      "",
+      "Subtotal:             $505,000.00",
+      "Total Due:            $505,000.00",
+      "",
+      "Payment Terms: Net 30",
+      "Reference: 123456",
+      "",
+      "Thank you for your business!"
+    ]
+  },
+  "expected": {
+    "geo_country_guess": "UNKNOWN",
+    "geo_confidence_max": 0.30,
+    "geo_confidence_min": 0.0,
+    "must_not_detect": ["IN"],
+    "reasoning": [
+      "6-digit number (123456) alone should NOT trigger India detection",
+      "$ symbol is ambiguous (US, CA, AU, SG, etc.)",
+      "No India-specific signals present (+91, INR, ₹, GSTIN, Indian states)",
+      "Should require ≥2 India signals for detection",
+      "Confidence should be below 0.30 threshold"
+    ]
+  },
+  "assertions": {
+    "geo_country_guess": {
+      "operator": "not_equals",
+      "value": "IN",
+      "message": "Should NOT detect India based on ambiguous signals alone"
+    },
+    "geo_confidence": {
+      "operator": "less_than",
+      "value": 0.30,
+      "message": "Geo confidence should be below UNKNOWN threshold"
+    },
+    "india_signals_count": {
+      "operator": "less_than",
+      "value": 2,
+      "message": "Should have fewer than 2 India-specific signals"
+    }
+  },
+  "tags": ["geo_detection", "false_positive", "india", "ambiguous_signals", "regression_test"],
+  "related_issues": [
+    "False IN detection on 82216-24-GLPR.pdf",
+    "Standalone 6-digit PIN causing false positives",
+    "Ambiguous $ symbol triggering wrong country"
+  ]
+}
