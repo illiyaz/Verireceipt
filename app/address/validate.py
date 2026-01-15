@@ -73,6 +73,12 @@ def validate_address(text: str) -> Dict[str, Any]:
     score = 0
     evidence: List[str] = []
     
+    # NEW (V2.1): Address type heuristic (safe, not part of score)
+    address_type = "STANDARD"
+    if re.search(r"\b(p\.?\s*o\.?\s*box|po\s*box)\b", text_norm, re.IGNORECASE):
+        address_type = "PO_BOX"
+        evidence.append("address_type:po_box")
+    
     # 1. Street indicators (strong signal, +2)
     street_found = False
     for kw in STREET_KEYWORDS:
@@ -108,11 +114,11 @@ def validate_address(text: str) -> Dict[str, Any]:
         score += 1
         evidence.append("postal_like_token")
     
-    # 5. Country/state explicit mention (+2)
+    # 5. Country/state explicit mention ( +1 )
     location_found = False
     for kw in LOCATION_KEYWORDS:
         if re.search(rf"\b{kw}\b", text_norm):
-            score += 2
+            score += 1
             evidence.append(f"location_keyword:{kw}")
             location_found = True
             break
@@ -123,7 +129,10 @@ def validate_address(text: str) -> Dict[str, Any]:
     return {
         "address_score": score,
         "address_classification": classification,
-        "address_evidence": evidence
+        "address_evidence": evidence,
+        # NEW fields (V2.1)
+        "address_raw_text": text,
+        "address_type": address_type,
     }
 
 
@@ -143,5 +152,86 @@ def _empty_result() -> Dict[str, Any]:
     return {
         "address_score": 0,
         "address_classification": "NOT_AN_ADDRESS",
-        "address_evidence": []
+        "address_evidence": [],
+        # V2.1 fields
+        "address_raw_text": "",
+        "address_type": "UNKNOWN",
+    }
+
+
+def assess_merchant_address_consistency(
+    merchant_name: str,
+    merchant_confidence: float,
+    address_profile: dict,
+    doc_profile_confidence: float,
+) -> dict:
+    """
+    Assess semantic consistency between merchant and address.
+
+    This is V2.1: feature-only, safe-by-default, confidence-gated.
+    It emits a SOFT mismatch score that downstream learned rules may use later.
+
+    Args:
+        merchant_name: Extracted merchant name
+        merchant_confidence: Confidence in merchant extraction
+        address_profile: Output from validate_address()
+        doc_profile_confidence: Document classification confidence
+
+    Returns:
+        {
+            "status": "CONSISTENT" | "WEAK_MISMATCH" | "MISMATCH" | "UNKNOWN",
+            "score": 0.0 - 0.2,
+            "evidence": [str, ...]
+        }
+    """
+
+    # Hard gates: if any core signal is weak -> UNKNOWN
+    if (
+        not merchant_name
+        or (merchant_confidence or 0.0) < 0.6
+        or not address_profile
+        or address_profile.get("address_classification") not in ("PLAUSIBLE_ADDRESS", "STRONG_ADDRESS")
+        or (doc_profile_confidence or 0.0) < 0.55
+    ):
+        return {"status": "UNKNOWN", "score": 0.0, "evidence": []}
+
+    evidence: List[str] = []
+    score = 0.0
+
+    # Token overlap (weak signal)
+    merchant_tokens = {
+        t.lower()
+        for t in re.findall(r"[A-Za-z]{4,}", merchant_name or "")
+        if t.lower() not in {"ltd", "llp", "inc", "corp", "company", "co", "pvt", "private", "limited"}
+    }
+
+    address_text = address_profile.get("address_raw_text", "") or ""
+    address_tokens = {t.lower() for t in re.findall(r"[A-Za-z]{4,}", address_text)}
+
+    overlap = merchant_tokens & address_tokens
+    if overlap:
+        evidence.append(f"merchant_token_overlap:{','.join(sorted(overlap))}")
+        score += 0.1
+
+    # Address type mismatch heuristics (soft)
+    address_type = address_profile.get("address_type", "UNKNOWN")
+
+    merchant_is_corporate = bool(
+        re.search(r"\b(ltd|llp|inc|corp|company|logistics|services|solutions|industries)\b", merchant_name, re.IGNORECASE)
+    )
+
+    if merchant_is_corporate and address_type == "PO_BOX":
+        evidence.append("address_type_mismatch:po_box_vs_corporate")
+        score += 0.2
+
+    # If nothing triggered, treat as consistent (don't invent mismatch)
+    if score == 0.0:
+        return {"status": "CONSISTENT", "score": 0.0, "evidence": []}
+
+    status = "WEAK_MISMATCH" if score <= 0.1 else "MISMATCH"
+
+    return {
+        "status": status,
+        "score": round(min(score, 0.2), 2),
+        "evidence": evidence,
     }

@@ -68,7 +68,7 @@ class TestAddressValidation:
         """Address with explicit location mention is strong."""
         result = validate_address("123 Market Street, San Francisco, California, USA")
         assert result["address_classification"] == "STRONG_ADDRESS"
-        assert result["address_score"] >= 7
+        assert result["address_score"] >= 6  # Location keyword now +1 instead of +2
         assert any("location_keyword" in e for e in result["address_evidence"])
     
     def test_address_with_postal_code(self):
@@ -155,7 +155,7 @@ class TestAddressValidation:
         """India-style address."""
         result = validate_address("123 MG Road, Bangalore, Karnataka 560001, India")
         assert result["address_classification"] == "STRONG_ADDRESS"
-        assert result["address_score"] >= 7
+        assert result["address_score"] >= 6  # Location keyword now +1 instead of +2
     
     def test_po_box_address(self):
         """PO Box is not a strong address signal."""

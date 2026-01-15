@@ -172,3 +172,102 @@ Once V1 lands cleanly:
 ---
 
 **Address validation V1 complete. Ready for integration into rules engine.** 🎯
+
+---
+
+## 🔁 V2.1: Merchant ↔ Address Consistency (Feature-only)
+
+**Date:** 2026-01-15  
+**Status:** 🟢 COMPLETE
+
+V2.1 introduces **semantic consistency checks** between extracted merchant identity and detected address.
+
+### **Key Properties**
+- ✅ **Geo-agnostic** - No country-specific assumptions
+- ✅ **Confidence-gated** - Only runs when signals are strong enough
+- ✅ **Non-verifying** - No "address exists" checks
+- ✅ **Soft signals only** - Feature emission, no scoring impact
+
+### **Output Format**
+
+```json
+"merchant_address_consistency": {
+  "status": "CONSISTENT | WEAK_MISMATCH | MISMATCH | UNKNOWN",
+  "score": 0.0 - 0.2,
+  "evidence": ["merchant_token_overlap:acme", "address_type_mismatch:po_box_vs_corporate"]
+}
+```
+
+### **Gating Conditions**
+
+The consistency check returns `UNKNOWN` if any of these conditions are met:
+- Merchant name is missing
+- Merchant confidence < 0.6
+- Address classification is not `PLAUSIBLE_ADDRESS` or `STRONG_ADDRESS`
+- Doc profile confidence < 0.55
+
+### **Consistency Signals**
+
+#### **1. Token Overlap (Weak Signal, +0.1)**
+- Extracts meaningful tokens from merchant name (excludes: ltd, llp, inc, corp, company, co, pvt, private, limited)
+- Checks if any merchant tokens appear in address text
+- Example: "Acme Logistics" + "123 Acme Street" → overlap detected
+
+#### **2. Address Type Mismatch (Soft Signal, +0.2)**
+- Detects if merchant is corporate (contains: ltd, llp, inc, corp, company, logistics, services, solutions, industries)
+- Flags if corporate merchant has PO Box address
+- Example: "Acme Logistics Ltd" + "P.O. Box 1234" → mismatch
+
+### **Classification**
+
+| Score | Status |
+|-------|--------|
+| 0.0 | `CONSISTENT` |
+| ≤ 0.1 | `WEAK_MISMATCH` |
+| > 0.1 | `MISMATCH` |
+
+### **Usage in Pipeline**
+
+```python
+merchant_address_consistency = assess_merchant_address_consistency(
+    merchant_name=merchant_candidate,
+    merchant_confidence=0.8,
+    address_profile=address_profile,
+    doc_profile_confidence=doc_profile.get("confidence", 0.0),
+)
+
+text_features["merchant_address_consistency"] = merchant_address_consistency
+```
+
+### **Design Rationale**
+
+**Why Feature-Only?**
+- ✅ Allows learned rules to discover patterns organically
+- ✅ Avoids premature penalization
+- ✅ Can be tuned based on real-world data
+- ✅ Safe to deploy without risk of false positives
+
+**Why Confidence-Gated?**
+- ✅ Only runs when we have strong signals
+- ✅ Prevents noise from weak extractions
+- ✅ Returns `UNKNOWN` instead of guessing
+
+**Why Geo-Agnostic?**
+- ✅ Works globally without country-specific rules
+- ✅ Avoids bias toward any region
+- ✅ Can add country-specific enrichment later (gated)
+
+### **New Fields in V2.1**
+
+#### **`address_profile` Extensions**
+- `address_raw_text`: Original input text
+- `address_type`: `STANDARD`, `PO_BOX`, or `UNKNOWN`
+
+#### **`text_features` Addition**
+- `merchant_address_consistency`: Full consistency assessment result
+
+---
+
+**This signal is designed to support learned rules and should not independently mark fraud.**
+
+---

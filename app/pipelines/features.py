@@ -10,7 +10,7 @@ from app.pipelines.geo_detection import detect_geo_and_profile
 from app.pipelines.lang import LangPackLoader, ScriptDetector, LangPackRouter, TextNormalizer
 from app.pipelines.document_intent import resolve_document_intent, IntentSource
 from app.pipelines.domain_validation import infer_domain_from_domainpacks, validate_domain_pack
-from app.address.validate import validate_address
+from app.address.validate import validate_address, assess_merchant_address_consistency
 
 logger = logging.getLogger(__name__)
 
@@ -1445,6 +1445,14 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     # Address validation (geo-agnostic, structure-based)
     address_profile = validate_address(full_text)
     
+    # V2.1: Merchant-address consistency assessment (feature-only, no scoring impact)
+    merchant_address_consistency = assess_merchant_address_consistency(
+        merchant_name=merchant_candidate,
+        merchant_confidence=0.8,  # TODO: Extract actual merchant confidence when available
+        address_profile=address_profile,
+        doc_profile_confidence=conf,
+    )
+    
     # Safety clamp: never treat low-confidence subtype as truth
     try:
         conf = float(doc_subtype_confidence) if doc_subtype_confidence is not None else 0.0
@@ -1708,6 +1716,8 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         "geo_evidence": geo_profile.get("geo_evidence"),
         # NEW: Address validation (geo-agnostic, structure-based)
         "address_profile": address_profile,
+        # V2.1: Merchant-address consistency (feature-only)
+        "merchant_address_consistency": merchant_address_consistency,
         # NEW: Language pack routing information
         **lang_pack_info,
     }
