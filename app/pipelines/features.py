@@ -10,8 +10,12 @@ from app.pipelines.geo_detection import detect_geo_and_profile
 from app.pipelines.lang import LangPackLoader, ScriptDetector, LangPackRouter, TextNormalizer
 from app.pipelines.document_intent import resolve_document_intent, IntentSource
 from app.pipelines.domain_validation import infer_domain_from_domainpacks, validate_domain_pack
-from app.address.validate import validate_address, assess_merchant_address_consistency, detect_multi_address_profile
-
+from app.address import (
+    validate_address,
+    assess_merchant_address_consistency,
+    detect_multi_address_profile,
+)
+from app.telemetry.address_metrics import record_address_features
 logger = logging.getLogger(__name__)
 
 
@@ -1545,6 +1549,23 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         text=full_text,
         doc_profile_confidence=conf,
     )
+    text_features["multi_address_profile"] = multi_address_profile
+    
+    # Optional: Record address telemetry (controlled by ENABLE_ADDRESS_TELEMETRY env var)
+    import os
+    if os.environ.get("ENABLE_ADDRESS_TELEMETRY", "false").lower() == "true":
+        try:
+            record_address_features(
+                address_profile=address_profile,
+                merchant_address_consistency=merchant_address_consistency,
+                multi_address_profile=multi_address_profile,
+                merchant_confidence=merchant_confidence,
+                doc_profile_confidence=conf,
+                doc_subtype=doc_profile.get("subtype", "UNKNOWN"),
+            )
+        except Exception as e:
+            # Never fail feature extraction due to telemetry
+            logger.warning(f"Address telemetry failed: {e}")
     
     # MERCHANT-PRESENT BIAS: Add small positive prior toward TRANSACTIONAL
     # If merchant + currency + table exist, boost confidence slightly
