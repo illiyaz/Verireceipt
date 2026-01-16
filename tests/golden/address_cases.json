@@ -1,0 +1,306 @@
+{
+  "version": "1.0",
+  "description": "Golden test cases for address validation features (V1, V2.1, V2.2). These lock behavior against real-world drift and prevent silent regressions.",
+  "test_cases": [
+    {
+      "id": "invoice_single_strong_address",
+      "description": "Commercial invoice with single strong address in header",
+      "doc_text": "ACME LOGISTICS LTD\nGSTIN: 29ABCDE1234F1Z5\n123 Industrial Park Road\nBangalore, Karnataka 560001\nIndia\n\nINVOICE #INV-2024-001\nDate: 15-Jan-2024\n\nBill To:\nXYZ Corporation\n\nItem                Qty    Rate    Amount\nWidget A            10     100     1000\nWidget B            5      200     1000\n\nSubtotal:                          2000\nGST 18%:                           360\nTotal:                             2360",
+      "doc_profile_confidence": 0.85,
+      "expected": {
+        "address_profile": {
+          "classification": ["PLAUSIBLE_ADDRESS", "STRONG_ADDRESS"],
+          "score_min": 4
+        },
+        "merchant_address_consistency": {
+          "status": ["CONSISTENT", "WEAK_MISMATCH"]
+        },
+        "multi_address_profile": {
+          "status": ["SINGLE", "MULTIPLE", "UNKNOWN"],
+          "count_max": 5,
+          "note": "May detect merchant address + bill-to as distinct"
+        }
+      }
+    },
+    {
+      "id": "invoice_multi_address_bill_ship",
+      "description": "Invoice with distinct Bill To and Ship To addresses",
+      "doc_text": "GLOBAL TRADERS INC\n456 Commerce Street, Suite 200\nNew York, NY 10001\n\nINVOICE #2024-5678\nDate: 20-Jan-2024\n\nBill To:\nAcme Corp\n789 Business Blvd\nChicago, IL 60601\nUSA\n\nShip To:\nAcme Warehouse\n321 Logistics Lane\nHouston, TX 77001\nUSA\n\nItem                Qty    Rate    Amount\nProduct X           20     50      1000\nProduct Y           15     80      1200\n\nTotal:                             2200",
+      "doc_profile_confidence": 0.90,
+      "expected": {
+        "address_profile": {
+          "classification": ["PLAUSIBLE_ADDRESS", "STRONG_ADDRESS"],
+          "score_min": 4
+        },
+        "merchant_address_consistency": {
+          "status": ["CONSISTENT", "WEAK_MISMATCH", "MISMATCH"]
+        },
+        "multi_address_profile": {
+          "status": ["MULTIPLE"],
+          "count_min": 2
+        }
+      }
+    },
+    {
+      "id": "pos_receipt_single_address",
+      "description": "POS restaurant receipt with single merchant address",
+      "doc_text": "BOB'S BURGERS\n123 Main Street\nSpringfield, IL 62701\n\nReceipt #45678\nDate: 16-Jan-2024 14:30\nServer: Alice\n\nCheeseburger         1    $8.99\nFries                1    $3.99\nSoda                 1    $2.50\n\nSubtotal:                 $15.48\nTax:                      $1.24\nTotal:                    $16.72\n\nThank you for dining with us!",
+      "doc_profile_confidence": 0.75,
+      "expected": {
+        "address_profile": {
+          "classification": ["PLAUSIBLE_ADDRESS", "STRONG_ADDRESS"],
+          "score_min": 4
+        },
+        "merchant_address_consistency": {
+          "status": ["CONSISTENT", "WEAK_MISMATCH"]
+        },
+        "multi_address_profile": {
+          "status": ["SINGLE", "MULTIPLE", "UNKNOWN"],
+          "count_max": 5
+        }
+      }
+    },
+    {
+      "id": "invoice_po_box_address",
+      "description": "Invoice with PO Box address (should be detected as PO_BOX type)",
+      "doc_text": "TECH SOLUTIONS LLC\nPO Box 12345\nSan Francisco, CA 94102\n\nINVOICE #TS-2024-100\nDate: 18-Jan-2024\n\nBill To:\nClient Services Inc\n\nConsulting Services    40 hrs    $150    $6000\nSupport Package        1         $500    $500\n\nSubtotal:                                $6500\nTax:                                     $520\nTotal:                                   $7020",
+      "doc_profile_confidence": 0.80,
+      "expected": {
+        "address_profile": {
+          "classification": ["WEAK_ADDRESS", "PLAUSIBLE_ADDRESS"],
+          "score_min": 3,
+          "address_type": "PO_BOX"
+        },
+        "merchant_address_consistency": {
+          "status": ["UNKNOWN", "WEAK_MISMATCH"],
+          "note": "PO Box addresses may have low merchant confidence"
+        },
+        "multi_address_profile": {
+          "status": ["SINGLE", "MULTIPLE", "UNKNOWN"],
+          "count_max": 5
+        }
+      }
+    },
+    {
+      "id": "invoice_weak_address",
+      "description": "Invoice with weak/incomplete address information",
+      "doc_text": "QUICK SERVICES\nDowntown Area\n\nINVOICE #QS-789\nDate: 19-Jan-2024\n\nService Fee              $500\nProcessing Fee           $50\n\nTotal:                   $550\n\nPayment due in 30 days",
+      "doc_profile_confidence": 0.65,
+      "expected": {
+        "address_profile": {
+          "classification": ["NOT_AN_ADDRESS", "WEAK_ADDRESS"],
+          "score_max": 3
+        },
+        "merchant_address_consistency": {
+          "status": ["UNKNOWN", "WEAK_MISMATCH"]
+        },
+        "multi_address_profile": {
+          "status": ["UNKNOWN"],
+          "count_max": 1
+        }
+      }
+    },
+    {
+      "id": "invoice_multi_address_three_locations",
+      "description": "Complex invoice with three distinct addresses (merchant, bill-to, ship-to)",
+      "doc_text": "INTERNATIONAL EXPORTS PVT LTD\nGSTIN: 27AABCI1234E1Z5\n88 Export House, Nehru Place\nNew Delhi 110019\nIndia\n\nTAX INVOICE #EXP/2024/456\nDate: 21-Jan-2024\n\nBill To:\nImporter Corp\n456 Trade Center\nMumbai 400001\nIndia\n\nShip To:\nWarehouse Solutions\n789 Logistics Hub\nChennai 600001\nIndia\n\nGoods Description      Qty    Rate      Amount\nElectronics            100    5000      500000\nAccessories            50     1000      50000\n\nSubtotal:                              550000\nIGST 18%:                              99000\nTotal:                                 649000",
+      "doc_profile_confidence": 0.92,
+      "expected": {
+        "address_profile": {
+          "classification": ["PLAUSIBLE_ADDRESS", "STRONG_ADDRESS"],
+          "score_min": 5
+        },
+        "merchant_address_consistency": {
+          "status": ["CONSISTENT", "WEAK_MISMATCH"]
+        },
+        "multi_address_profile": {
+          "status": ["MULTIPLE"],
+          "count_min": 3
+        }
+      }
+    },
+    {
+      "id": "receipt_no_address",
+      "description": "Simple receipt with no address information",
+      "doc_text": "COFFEE SHOP\n\nReceipt #12345\nDate: 22-Jan-2024 09:15\n\nLatte                    $4.50\nCroissant                $3.00\n\nTotal:                   $7.50\n\nThank you!",
+      "doc_profile_confidence": 0.70,
+      "expected": {
+        "address_profile": {
+          "classification": ["NOT_AN_ADDRESS", "WEAK_ADDRESS"],
+          "score_max": 3
+        },
+        "merchant_address_consistency": {
+          "status": ["UNKNOWN"]
+        },
+        "multi_address_profile": {
+          "status": ["UNKNOWN", "MULTIPLE"],
+          "count_max": 5
+        }
+      }
+    },
+    {
+      "id": "invoice_low_doc_confidence",
+      "description": "Invoice with address but low document confidence (should gate features)",
+      "doc_text": "Some Company\n123 Street Name\nCity 12345\n\nInvoice\n\nItem 1    $100\nItem 2    $200\n\nTotal     $300",
+      "doc_profile_confidence": 0.45,
+      "expected": {
+        "address_profile": {
+          "classification": ["WEAK_ADDRESS", "PLAUSIBLE_ADDRESS"],
+          "score_min": 3
+        },
+        "merchant_address_consistency": {
+          "status": ["UNKNOWN"],
+          "note": "Gated due to low doc_profile_confidence < 0.55"
+        },
+        "multi_address_profile": {
+          "status": ["UNKNOWN"],
+          "note": "Gated due to low doc_profile_confidence < 0.55"
+        }
+      }
+    },
+    {
+      "id": "invoice_international_address",
+      "description": "Invoice with international address format (UK postcode)",
+      "doc_text": "LONDON TRADING LTD\nVAT Registration: GB123456789\n42 Oxford Street\nLondon W1D 1BS\nUnited Kingdom\n\nINVOICE #LT-2024-789\nDate: 23-Jan-2024\n\nBill To:\nEuropean Imports GmbH\n\nGoods                  Qty    Price    Amount\nProduct A              25     £50      £1250\nProduct B              10     £100     £1000\n\nSubtotal:                              £2250\nVAT 20%:                               £450\nTotal:                                 £2700",
+      "doc_profile_confidence": 0.88,
+      "expected": {
+        "address_profile": {
+          "classification": ["PLAUSIBLE_ADDRESS", "STRONG_ADDRESS"],
+          "score_min": 5
+        },
+        "merchant_address_consistency": {
+          "status": ["CONSISTENT", "WEAK_MISMATCH"]
+        },
+        "multi_address_profile": {
+          "status": ["SINGLE", "MULTIPLE", "UNKNOWN"],
+          "count_max": 5
+        }
+      }
+    },
+    {
+      "id": "invoice_scattered_merchant",
+      "description": "Invoice where merchant name appears scattered (footer + header)",
+      "doc_text": "ACME CORP\n\nINVOICE #2024-999\nDate: 24-Jan-2024\n\nBill To:\nClient Name\n456 Client Street\nClient City 12345\n\nServices Rendered        $5000\n\nTotal:                   $5000\n\n---\nACME CORP\nwww.acmecorp.com\ninfo@acmecorp.com",
+      "doc_profile_confidence": 0.75,
+      "expected": {
+        "address_profile": {
+          "classification": ["PLAUSIBLE_ADDRESS", "STRONG_ADDRESS"],
+          "score_min": 4
+        },
+        "merchant_address_consistency": {
+          "status": ["UNKNOWN", "WEAK_MISMATCH", "MISMATCH"],
+          "note": "Merchant confidence may be low due to scattered appearance"
+        },
+        "multi_address_profile": {
+          "status": ["SINGLE", "MULTIPLE", "UNKNOWN"],
+          "count_max": 5
+        }
+      }
+    },
+    {
+      "id": "tax_invoice_india_strong",
+      "description": "Indian tax invoice with complete address and GST details",
+      "doc_text": "SHARMA INDUSTRIES PRIVATE LIMITED\nGSTIN: 29AABCS1234F1Z5\nCIN: U12345KA2020PTC123456\n#45, Industrial Area, Phase 2\nPeenya, Bangalore 560058\nKarnataka, India\nPhone: +91-80-12345678\n\nTAX INVOICE\nInvoice No: SI/2024/0123\nDate: 25-Jan-2024\n\nBill To:\nM/s ABC Enterprises\n789 MG Road\nBangalore 560001\n\nDescription            HSN     Qty    Rate      Amount\nManufactured Goods     8421    100    1000      100000\n\nTaxable Value:                                  100000\nCGST 9%:                                        9000\nSGST 9%:                                        9000\nTotal Invoice Value:                            118000",
+      "doc_profile_confidence": 0.95,
+      "expected": {
+        "address_profile": {
+          "classification": ["STRONG_ADDRESS"],
+          "score_min": 6
+        },
+        "merchant_address_consistency": {
+          "status": ["CONSISTENT", "WEAK_MISMATCH"]
+        },
+        "multi_address_profile": {
+          "status": ["MULTIPLE"],
+          "count_min": 2
+        }
+      }
+    },
+    {
+      "id": "ecommerce_receipt_multi_address",
+      "description": "E-commerce receipt with billing and shipping addresses",
+      "doc_text": "ONLINE STORE\nOrder #ORD-2024-5678\nDate: 26-Jan-2024\n\nBilling Address:\nJohn Doe\n123 Residential Ave, Apt 4B\nNew York, NY 10001\nUSA\n\nShipping Address:\nJohn Doe\n456 Office Plaza, Suite 200\nBoston, MA 02101\nUSA\n\nItems Ordered:\nLaptop                 1    $999.99\nMouse                  1    $29.99\n\nSubtotal:                   $1029.98\nShipping:                   $15.00\nTax:                        $82.40\nTotal:                      $1127.38",
+      "doc_profile_confidence": 0.82,
+      "expected": {
+        "address_profile": {
+          "classification": ["PLAUSIBLE_ADDRESS", "STRONG_ADDRESS"],
+          "score_min": 4
+        },
+        "merchant_address_consistency": {
+          "status": ["UNKNOWN", "WEAK_MISMATCH", "MISMATCH"],
+          "note": "Merchant name weak, addresses are customer addresses"
+        },
+        "multi_address_profile": {
+          "status": ["MULTIPLE"],
+          "count_min": 2
+        }
+      }
+    },
+    {
+      "id": "utility_bill_single_address",
+      "description": "Utility bill with single service address",
+      "doc_text": "CITY POWER COMPANY\nCustomer Service: 1-800-POWER-01\n\nELECTRICITY BILL\nAccount #: 123456789\nBill Date: 27-Jan-2024\n\nService Address:\n789 Maple Drive\nSpringfield, IL 62704\n\nBilling Period: Dec 1 - Dec 31, 2023\nUsage: 450 kWh\n\nCurrent Charges:              $67.50\nPrevious Balance:             $0.00\nTotal Amount Due:             $67.50\n\nDue Date: Feb 15, 2024",
+      "doc_profile_confidence": 0.78,
+      "expected": {
+        "address_profile": {
+          "classification": ["PLAUSIBLE_ADDRESS", "STRONG_ADDRESS"],
+          "score_min": 4
+        },
+        "merchant_address_consistency": {
+          "status": ["UNKNOWN", "WEAK_MISMATCH", "MISMATCH"],
+          "note": "Utility bills typically have weak merchant-address consistency"
+        },
+        "multi_address_profile": {
+          "status": ["SINGLE", "MULTIPLE", "UNKNOWN"],
+          "count_max": 5
+        }
+      }
+    },
+    {
+      "id": "proforma_invoice_minimal",
+      "description": "Proforma invoice with minimal address details",
+      "doc_text": "EXPORT HOUSE\nProforma Invoice\n\nPI No: PI/2024/001\nDate: 28-Jan-2024\n\nBuyer: International Buyer\nCountry: USA\n\nDescription            Qty    Unit Price    Amount\nGoods Type A           500    $10           $5000\nGoods Type B           300    $15           $4500\n\nTotal FOB Value:                            $9500\n\nTerms: 30% advance, 70% against B/L copy",
+      "doc_profile_confidence": 0.68,
+      "expected": {
+        "address_profile": {
+          "classification": ["NOT_AN_ADDRESS", "WEAK_ADDRESS", "PLAUSIBLE_ADDRESS"],
+          "score_max": 5
+        },
+        "merchant_address_consistency": {
+          "status": ["UNKNOWN", "WEAK_MISMATCH"]
+        },
+        "multi_address_profile": {
+          "status": ["UNKNOWN", "MULTIPLE"],
+          "count_max": 5
+        }
+      }
+    },
+    {
+      "id": "hotel_folio_guest_address",
+      "description": "Hotel folio with guest address",
+      "doc_text": "GRAND HOTEL & SUITES\n100 Luxury Boulevard\nMiami, FL 33101\nUSA\n\nGUEST FOLIO\nFolio #: HF-2024-789\nDate: 29-Jan-2024\n\nGuest Name: Jane Smith\nGuest Address:\n321 Visitor Lane\nLos Angeles, CA 90001\nUSA\n\nRoom 505 - Deluxe Suite\nCheck-in: Jan 25, 2024\nCheck-out: Jan 29, 2024\nNights: 4\n\nRoom Charges:           4 x $250    $1000.00\nMini Bar:                           $45.00\nRoom Service:                       $120.00\n\nSubtotal:                           $1165.00\nTax 12%:                            $139.80\nTotal:                              $1304.80",
+      "doc_profile_confidence": 0.85,
+      "expected": {
+        "address_profile": {
+          "classification": ["PLAUSIBLE_ADDRESS", "STRONG_ADDRESS"],
+          "score_min": 5
+        },
+        "merchant_address_consistency": {
+          "status": ["CONSISTENT", "WEAK_MISMATCH"]
+        },
+        "multi_address_profile": {
+          "status": ["MULTIPLE"],
+          "count_min": 2,
+          "note": "Hotel address + guest address"
+        }
+      }
+    }
+  ],
+  "assertion_guidelines": {
+    "coarse_not_brittle": "Assertions use ranges and sets, not exact values",
+    "classification_ranges": "Use sets like [PLAUSIBLE_ADDRESS, STRONG_ADDRESS] to allow heuristic evolution",
+    "count_ranges": "Use count_min/count_max instead of exact counts",
+    "status_sets": "Allow multiple valid statuses for consistency checks",
+    "confidence_gating": "Tests below 0.55 doc_profile_confidence should return UNKNOWN for V2.1/V2.2"
+  }
+}
