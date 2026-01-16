@@ -189,7 +189,7 @@ class SignalRegistry:
             severity="weak",
             gated_by=["doc_profile_confidence"],
             privacy="safe",
-            description="Weak merchant name extraction",
+            description="Merchant business entity identification has low confidence or ambiguous results",
         ),
         "merchant.confidence_low": SignalSpec(
             name="merchant.confidence_low",

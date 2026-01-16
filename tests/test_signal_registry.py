@@ -115,7 +115,7 @@ class TestSignalRegistry:
         }
         
         actual_domains = set()
-        for signal_name in SignalRegistry.ALLOWED_SIGNALS:
+        for signal_name in SignalRegistry.get_all_names():
             domain = signal_name.split(".")[0]
             actual_domains.add(domain)
         
@@ -138,7 +138,7 @@ class TestSignalRegistry:
         }
         
         actual_counts = {}
-        for signal_name in SignalRegistry.ALLOWED_SIGNALS:
+        for signal_name in SignalRegistry.get_all_names():
             domain = signal_name.split(".")[0]
             actual_counts[domain] = actual_counts.get(domain, 0) + 1
         
@@ -152,8 +152,8 @@ class TestSignalRegistry:
         """
         Test that there are no duplicate signal names in the registry.
         """
-        signal_list = list(SignalRegistry.ALLOWED_SIGNALS)
-        signal_set = set(SignalRegistry.ALLOWED_SIGNALS)
+        signal_list = SignalRegistry.get_all_names()
+        signal_set = set(signal_list)
         
         assert len(signal_list) == len(signal_set), (
             "Registry contains duplicate signal names"
@@ -163,7 +163,7 @@ class TestSignalRegistry:
         """
         Test that all registered signals follow the format: domain.signal_name
         """
-        for signal_name in SignalRegistry.ALLOWED_SIGNALS:
+        for signal_name in SignalRegistry.get_all_names():
             parts = signal_name.split(".")
             assert len(parts) == 2, (
                 f"Signal '{signal_name}' must follow format 'domain.signal_name'"

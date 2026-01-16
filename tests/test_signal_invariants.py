@@ -121,7 +121,7 @@ class TestSignalInvariants:
         }
         
         actual_counts = {}
-        for signal_name in SIGNAL_REGISTRY:
+        for signal_name in self.SIGNAL_REGISTRY:
             domain = signal_name.split(".")[0]
             actual_counts[domain] = actual_counts.get(domain, 0) + 1
         
@@ -138,7 +138,7 @@ class TestSignalInvariants:
         """
         from app.schemas.receipt import SignalRegistry
         
-        for signal_name in SignalRegistry.get_all_names():
+        for signal_name in self.SIGNAL_REGISTRY:
             assert SignalRegistry.is_allowed(signal_name), (
                 f"Signal '{signal_name}' in registry but not allowed"
             )
