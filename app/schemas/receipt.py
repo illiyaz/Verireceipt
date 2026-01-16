@@ -238,7 +238,7 @@ class SignalRegistry:
             severity="weak",
             gated_by=[],
             privacy="safe",
-            description="OCR confidence below threshold",
+            description="Optical character recognition quality score indicates unreliable text extraction",
         ),
         "ocr.text_sparse": SignalSpec(
             name="ocr.text_sparse",
@@ -247,7 +247,7 @@ class SignalRegistry:
             severity="medium",
             gated_by=["doc_profile_confidence"],
             privacy="safe",
-            description="Insufficient text extraction",
+            description="Document contains very little extractable content relative to expected volume",
         ),
         "ocr.language_mismatch": SignalSpec(
             name="ocr.language_mismatch",
@@ -256,7 +256,7 @@ class SignalRegistry:
             severity="weak",
             gated_by=["doc_profile_confidence"],
             privacy="safe",
-            description="Detected language doesn't match expected",
+            description="Identified document language differs from user-specified or system-expected locale",
         ),
         
         # Language signals
