@@ -62,6 +62,68 @@ class SignalV1(BaseModel):
     gating_reason: Optional[str] = Field(None, description="Why signal was gated")
 
 
+class SignalRegistry:
+    """
+    Static registry of all allowed signal names for Unified Signal Contract (V1).
+    
+    Purpose:
+    - Contract enforcement (prevents typos like addr.multiAddr)
+    - Safer refactors (know exactly what signals exist)
+    - ML-feature stability (consistent signal names for learned rules)
+    - Clean telemetry joins (no orphaned signal names)
+    
+    Design:
+    - Static in V1 (no dynamic registration)
+    - Hard fail on unregistered signals
+    - CI-enforced completeness
+    """
+    
+    ALLOWED_SIGNALS = {
+        # Address signals
+        "addr.structure",
+        "addr.merchant_consistency",
+        "addr.multi_address",
+        
+        # Amount signals
+        "amount.total_mismatch",
+        "amount.missing",
+        "amount.semantic_override",
+        
+        # Template / PDF signals
+        "template.pdf_producer_suspicious",
+        "template.quality_low",
+        
+        # Merchant signals
+        "merchant.extraction_weak",
+        "merchant.confidence_low",
+        
+        # Date signals
+        "date.missing",
+        "date.future",
+        "date.gap_suspicious",
+        
+        # OCR signals
+        "ocr.confidence_low",
+        "ocr.text_sparse",
+        "ocr.language_mismatch",
+        
+        # Language signals
+        "language.detection_low_confidence",
+        "language.script_mismatch",
+        "language.mixed_scripts",
+    }
+    
+    @classmethod
+    def is_allowed(cls, name: str) -> bool:
+        """Check if a signal name is registered."""
+        return name in cls.ALLOWED_SIGNALS
+    
+    @classmethod
+    def count(cls) -> int:
+        """Return the number of registered signals."""
+        return len(cls.ALLOWED_SIGNALS)
+
+
 @dataclass
 class ReceiptFeatures:
     """

@@ -2147,6 +2147,20 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
             # Fix it automatically to maintain invariant
             signal.name = key
 
+    # ------------------------------------------------------------------
+    # SignalRegistry Enforcement (Hard Fail)
+    # ------------------------------------------------------------------
+    # Enforce SignalRegistry contract - prevents typos, ensures ML stability
+    from app.schemas.receipt import SignalRegistry
+    
+    for name in unified_signals.keys():
+        if not SignalRegistry.is_allowed(name):
+            raise ValueError(
+                f"Unregistered signal emitted: '{name}'. "
+                f"Add it to SignalRegistry.ALLOWED_SIGNALS in app/schemas/receipt.py. "
+                f"This is a schema violation - CI must fail to prevent corrupted telemetry."
+            )
+
     return ReceiptFeatures(
         file_features=file_features,
         text_features=text_features,
