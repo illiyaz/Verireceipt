@@ -454,6 +454,141 @@ Treat signals as **internal-only** data. Use for:
 
 ---
 
+## 🔒 SignalRegistry & Contract Enforcement
+
+### Purpose
+
+The `SignalRegistry` is a static registry of all allowed signal names in the Unified Signal Contract (V1). It provides:
+
+- **Contract enforcement** - Prevents typos like `addr.multiAddr` or `date.future_2`
+- **Safer refactors** - Know exactly what signals exist across the codebase
+- **ML-feature stability** - Consistent signal names for learned rules and telemetry
+- **Clean telemetry joins** - No orphaned or misspelled signal names
+
+### Registry Definition
+
+Located in `app/schemas/receipt.py`:
+
+```python
+class SignalRegistry:
+    ALLOWED_SIGNALS = {
+        "addr.structure", "addr.merchant_consistency", "addr.multi_address",
+        "amount.total_mismatch", "amount.missing", "amount.semantic_override",
+        "template.pdf_producer_suspicious", "template.quality_low",
+        "merchant.extraction_weak", "merchant.confidence_low",
+        "date.missing", "date.future", "date.gap_suspicious",
+        "ocr.confidence_low", "ocr.text_sparse", "ocr.language_mismatch",
+        "language.detection_low_confidence", "language.script_mismatch", "language.mixed_scripts",
+    }
+    
+    @classmethod
+    def is_allowed(cls, name: str) -> bool:
+        return name in cls.ALLOWED_SIGNALS
+```
+
+### Enforcement
+
+Registry enforcement happens in `app/pipelines/features.py` after signal emission:
+
+```python
+from app.schemas.receipt import SignalRegistry
+
+for name in unified_signals.keys():
+    if not SignalRegistry.is_allowed(name):
+        raise ValueError(f"Unregistered signal emitted: '{name}'")
+```
+
+**Why hard fail?** This is a schema violation - CI must fail to prevent corrupted telemetry and broken ML joins.
+
+### Adding New Signals
+
+1. Create signal wrapper in `app/signals/`
+2. Add to `SignalRegistry.ALLOWED_SIGNALS`
+3. Update tests in `tests/test_signal_registry.py`
+4. Update count in `test_signal_registry_count()`
+5. Document in this file
+
+---
+
+## 🤖 Learned Rules & Signal Consumption
+
+### Design Principles
+
+**Hard Invariant:** A learned rule must **never** fire on a single signal alone.
+
+**Minimum requirements:**
+- ≥2 signals OR
+- 1 signal + external evidence (user history, risk profile)
+
+### Canonical Input
+
+Learned rules only see:
+```python
+{"signal_name": "addr.multi_address", "status": "TRIGGERED", "confidence": 0.82}
+```
+
+**Nothing else.** No raw evidence, no interpretation, no PII.
+
+### Pattern 1: Boolean Embedding
+
+For logistic regression, LightGBM, small neural nets:
+
+```python
+features = {
+    "addr_multi_triggered": signal.status == "TRIGGERED",
+    "addr_multi_conf": signal.confidence,
+    "addr_multi_gated": signal.status == "GATED",
+}
+```
+
+### Pattern 2: Signal Interaction Features
+
+Explicit, auditable combinations:
+
+```python
+addr_multi_and_mismatch = (
+    signals["addr.multi_address"].status == "TRIGGERED" and
+    signals["addr.merchant_consistency"].status == "TRIGGERED"
+)
+```
+
+### Pattern 3: Confidence-Weighted Signals
+
+For scoring models:
+
+```python
+score = weight * signal.confidence if signal.status == "TRIGGERED" else 0
+# GATED signals contribute zero, not negative
+```
+
+### Example Learned Rule
+
+```python
+def learned_rule_addr_anomaly_cluster(signals: Dict[str, SignalV1]) -> Dict[str, Any]:
+    sig_multi = signals.get("addr.multi_address")
+    sig_cons = signals.get("addr.merchant_consistency")
+    
+    if not sig_multi or sig_multi.status == "GATED":
+        return {"status": "GATED", "reason": "addr.multi_address gated"}
+    if not sig_cons or sig_cons.status == "GATED":
+        return {"status": "GATED", "reason": "addr.merchant_consistency gated"}
+    
+    if sig_multi.status == "TRIGGERED" and sig_cons.status == "TRIGGERED":
+        combined_confidence = min(sig_multi.confidence, sig_cons.confidence)
+        return {
+            "status": "TRIGGERED",
+            "rule_id": "LEARNED_ADDR_ANOMALY_CLUSTER",
+            "confidence": combined_confidence,
+            "evidence": {
+                "signals_used": ["addr.multi_address", "addr.merchant_consistency"],
+            },
+        }
+    
+    return {"status": "NOT_TRIGGERED"}
+```
+
+---
+
 ## 📚 Related Documentation
 
 - `app/schemas/receipt.py` - SignalV1 schema definition
