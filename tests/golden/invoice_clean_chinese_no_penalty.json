@@ -1,0 +1,42 @@
+{
+  "name": "invoice_clean_chinese_no_penalty",
+  "description": "Clean Chinese invoice with proper spacing - R10 should NOT fire",
+  "input": {
+    "full_text": "发票\n\n发票号码: INV-2024-CN-001\n日期: 2024年3月20日\n\n客户:\n北京科技有限公司\n北京市朝阳区建国路88号\n\n商品名称           数量    单价      金额\n产品甲             50      ¥120.00   ¥6,000.00\n产品乙             30      ¥200.00   ¥6,000.00\n\n小计:                                ¥12,000.00\n增值税(13%):                         ¥1,560.00\n总计:                                ¥13,560.00\n\n付款条件: 30天内付款\n感谢您的惠顾!",
+    "has_line_items": true,
+    "has_currency": true,
+    "currency_symbols": ["¥"],
+    "merchant_candidate": "北京科技有限公司",
+    "lang_guess": "zh",
+    "lang_confidence": 0.98,
+    "doc_profile_confidence": 0.90,
+    "text_lines": [
+      "发票",
+      "",
+      "发票号码: INV-2024-CN-001",
+      "日期: 2024年3月20日",
+      "",
+      "客户:",
+      "北京科技有限公司",
+      "北京市朝阳区建国路88号",
+      "",
+      "商品名称           数量    单价      金额",
+      "产品甲             50      ¥120.00   ¥6,000.00",
+      "产品乙             30      ¥200.00   ¥6,000.00",
+      "",
+      "小计:                                ¥12,000.00",
+      "增值税(13%):                         ¥1,560.00",
+      "总计:                                ¥13,560.00",
+      "",
+      "付款条件: 30天内付款",
+      "感谢您的惠顾!"
+    ]
+  },
+  "expected": {
+    "label": "real",
+    "score_max": 0.05,
+    "rules_fired": [],
+    "rules_not_fired": ["R10_TEMPLATE_QUALITY"],
+    "evidence_required": {}
+  }
+}

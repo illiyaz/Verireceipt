@@ -36,11 +36,22 @@ def start_web_server():
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(web_dir), **kwargs)
         
+        def send_header(self, keyword, value):
+            """Override to ensure UTF-8 encoding for HTML Content-Type headers."""
+            if keyword.lower() == 'content-type' and value.startswith('text/html'):
+                value = 'text/html; charset=utf-8'
+            super().send_header(keyword, value)
+        
         def end_headers(self):
             # Add CORS headers
             self.send_header('Access-Control-Allow-Origin', '*')
             self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
             self.send_header('Access-Control-Allow-Headers', '*')
+            # Force no caching for HTML files
+            if hasattr(self, 'path') and self.path.endswith('.html'):
+                self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+                self.send_header('Pragma', 'no-cache')
+                self.send_header('Expires', '0')
             super().end_headers()
         
         def log_message(self, format, *args):

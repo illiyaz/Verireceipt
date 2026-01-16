@@ -1,0 +1,43 @@
+{
+  "name": "invoice_clean_spanish",
+  "description": "Clean Spanish invoice - R10 should NOT fire (no English typos expected)",
+  "input": {
+    "full_text": "FACTURA\n\nNúmero de Factura: FAC-2024-789\nFecha: 15 de marzo de 2024\n\nCliente:\nEmpresas Globales S.A.\nCalle Principal 456\nMadrid, España\n\nDescripción         Cantidad    Precio    Total\nProducto A          20          €45.00    €900.00\nProducto B          10          €60.00    €600.00\n\nSubtotal:                                 €1,500.00\nIVA (21%):                                €315.00\nTotal:                                    €1,815.00\n\nCondiciones de Pago: 30 días\n¡Gracias por su negocio!",
+    "has_line_items": true,
+    "has_currency": true,
+    "currency_symbols": ["€"],
+    "merchant_candidate": "Empresas Globales S.A.",
+    "lang_guess": "es",
+    "lang_confidence": 0.95,
+    "doc_profile_confidence": 0.88,
+    "text_lines": [
+      "FACTURA",
+      "",
+      "Número de Factura: FAC-2024-789",
+      "Fecha: 15 de marzo de 2024",
+      "",
+      "Cliente:",
+      "Empresas Globales S.A.",
+      "Calle Principal 456",
+      "Madrid, España",
+      "",
+      "Descripción         Cantidad    Precio    Total",
+      "Producto A          20          €45.00    €900.00",
+      "Producto B          10          €60.00    €600.00",
+      "",
+      "Subtotal:                                 €1,500.00",
+      "IVA (21%):                                €315.00",
+      "Total:                                    €1,815.00",
+      "",
+      "Condiciones de Pago: 30 días",
+      "¡Gracias por su negocio!"
+    ]
+  },
+  "expected": {
+    "label": "real",
+    "score_max": 0.05,
+    "rules_fired": [],
+    "rules_not_fired": ["R10_TEMPLATE_QUALITY"],
+    "evidence_required": {}
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "name": "invoice_portuguese_clean",
+  "description": "Clean Portuguese invoice - R10 should NOT fire",
+  "input": {
+    "full_text": "Fatura\n\nNúmero da Fatura: FAT-2024-1234\nData: 15 de janeiro de 2024\n\nCliente:\nEmpresas Comerciais Ltda\nSão Paulo, Brasil\n\nDescrição            Quantidade    Preço       Valor\nProduto A            15            R$ 80.00    R$ 1,200.00\nProduto B            8             R$ 150.00   R$ 1,200.00\n\nSubtotal:                                      R$ 2,400.00\nImposto (18%):                                 R$ 432.00\nTotal:                                         R$ 2,832.00\n\nObrigado pela sua compra",
+    "has_line_items": true,
+    "has_currency": true,
+    "currency_symbols": ["R$"],
+    "merchant_candidate": "Empresas Comerciais Ltda",
+    "lang_guess": "pt",
+    "lang_confidence": 0.94,
+    "lang_source": "fasttext",
+    "doc_profile_confidence": 0.89,
+    "text_lines": [
+      "Fatura",
+      "",
+      "Número da Fatura: FAT-2024-1234",
+      "Data: 15 de janeiro de 2024",
+      "",
+      "Cliente:",
+      "Empresas Comerciais Ltda",
+      "São Paulo, Brasil",
+      "",
+      "Descrição            Quantidade    Preço       Valor",
+      "Produto A            15            R$ 80.00    R$ 1,200.00",
+      "Produto B            8             R$ 150.00   R$ 1,200.00",
+      "",
+      "Subtotal:                                      R$ 2,400.00",
+      "Imposto (18%):                                 R$ 432.00",
+      "Total:                                         R$ 2,832.00",
+      "",
+      "Obrigado pela sua compra"
+    ]
+  },
+  "expected": {
+    "label": "real",
+    "score_max": 0.05,
+    "rules_fired": [],
+    "rules_not_fired": ["R10_TEMPLATE_QUALITY"],
+    "evidence_required": {},
+    "notes": "Clean Portuguese invoice - no typos, R10 should not fire"
+  }
+}

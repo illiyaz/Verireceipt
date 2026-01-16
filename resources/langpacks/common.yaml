@@ -1,0 +1,470 @@
+# Common language pack - shared defaults and fallbacks
+# This pack provides baseline keywords that work across most languages
+# Other packs inherit and extend these defaults
+
+id: common
+version: 1.0.0
+name: Common (Fallback)
+scripts: ["latin"]
+locales: []
+priority: 0
+
+# Shared keyword defaults
+keywords:
+  doc_titles:
+    - "invoice"
+    - "receipt"
+    - "bill"
+    - "tax invoice"
+    - "proforma invoice"
+    - "credit note"
+    - "debit note"
+    - "order"
+    - "purchase order"
+    - "online order"
+    - "e-commerce"
+    - "rechnung"
+    - "quittung"
+    - "kassenbon"
+    - "facture"
+    - "reçu"
+    - "factura"
+    - "recibo"
+    - "ticket"
+  
+  invoice:
+    - "invoice"
+    - "tax invoice"
+    - "proforma invoice"
+    - "credit note"
+    - "debit note"
+    - "rechnung"
+    - "facture"
+    - "factura"
+  
+  receipt:
+    - "receipt"
+    - "bill"
+    - "proof of purchase"
+    - "cash receipt"
+    - "credit card receipt"
+    - "quittung"
+    - "kassenbon"
+    - "reçu"
+    - "recibo"
+    - "ticket"
+  
+  tax_invoice:
+    - "tax invoice"
+    - "vat invoice"
+    - "gst invoice"
+    - "tax bill"
+    - "mwst"
+    - "ust"
+    - "tva"
+    - "iva"
+  
+  ecommerce:
+    - "order"
+    - "purchase order"
+    - "online order"
+    - "e-commerce"
+    - "marketplace"
+  
+  fuel:
+    - "fuel"
+    - "gas"
+    - "petrol"
+    - "diesel"
+    - "gas station"
+    - "service station"
+  
+  parking:
+    - "parking"
+    - "parking fee"
+    - "valet"
+    - "garage"
+    - "car park"
+  
+  hotel_folio:
+    - "hotel"
+    - "room"
+    - "accommodation"
+    - "lodging"
+    - "folio"
+    - "guest folio"
+  
+  utility:
+    - "electricity"
+    - "water"
+    - "gas"
+    - "utility"
+    - "power"
+    - "energy"
+  
+  telecom:
+    - "mobile"
+    - "phone"
+    - "telecom"
+    - "internet"
+    - "broadband"
+    - "recharge"
+    - "plan"
+  
+  commercial_invoice:
+    - "commercial invoice"
+    - "export invoice"
+    - "import invoice"
+    - "trade invoice"
+    - "customs invoice"
+
+  purchase_invoice:
+    - "purchase invoice"
+    - "vendor invoice"
+    - "supplier invoice"
+    - "invoice to"
+    - "bill to"
+
+  vendor_invoice:
+    - "vendor invoice"
+    - "supplier invoice"
+    - "supplier"
+    - "vendor"
+    - "purchase invoice"
+
+  service_invoice:
+    - "service invoice"
+    - "service fee"
+    - "consulting"
+    - "maintenance"
+    - "support fee"
+
+  shipping_invoice:
+    - "shipping invoice"
+    - "freight invoice"
+    - "freight charges"
+    - "carrier"
+    - "awb"
+    - "tracking"
+
+  proforma:
+    - "proforma"
+    - "pro forma"
+    - "proforma invoice"
+    - "quotation"
+    - "quote"
+
+  credit_note:
+    - "credit note"
+    - "credit memo"
+    - "credited"
+
+  debit_note:
+    - "debit note"
+    - "debit memo"
+    - "debited"
+
+  expense_report:
+    - "expense report"
+    - "expense statement"
+    - "reimbursement"
+    - "expense claim"
+    - "submitted by"
+
+  statement:
+    - "statement"
+    - "account statement"
+    - "card statement"
+    - "bank statement"
+    - "statement period"
+    - "opening balance"
+    - "closing balance"
+
+  payment_receipt:
+    - "payment receipt"
+    - "payment successful"
+    - "transaction id"
+    - "txn id"
+    - "reference"
+    - "utr"
+    - "rrn"
+
+  refund_receipt:
+    - "refund"
+    - "refunded"
+    - "refund receipt"
+    - "reversal"
+
+  insurance:
+    - "insurance"
+    - "policy"
+    - "premium"
+    - "insured"
+    - "policy number"
+
+  claim:
+    - "claim"
+    - "claim id"
+    - "claim number"
+    - "reimbursement"
+    - "submitted"
+
+  medical_claim:
+    - "medical"
+    - "hospital"
+    - "patient"
+    - "doctor"
+    - "diagnosis"
+    - "treatment"
+
+  eob:
+    - "explanation of benefits"
+    - "eob"
+    - "covered"
+    - "copay"
+    - "coinsurance"
+    - "deductible"
+
+  warranty_claim:
+    - "warranty"
+    - "warranty claim"
+    - "service request"
+    - "serial number"
+    - "replacement"
+
+  rma:
+    - "rma"
+    - "return merchandise authorization"
+    - "return authorization"
+    - "authorization number"
+    - "return request"
+
+  service_report:
+    - "service report"
+    - "work order"
+    - "job card"
+    - "technician"
+    - "inspection"
+  
+  air_waybill:
+    - "air waybill"
+    - "airway bill"
+    - "awb"
+    - "air cargo"
+    - "freight"
+  
+  shipping_bill:
+    - "shipping bill"
+    - "export documentation"
+    - "customs"
+  
+  bill_of_lading:
+    - "bill of lading"
+    - "b/l"
+    - "bl"
+    - "container"
+  
+  total:
+    - "total"
+    - "total amount"
+    - "grand total"
+    - "sum total"
+    - "amount due"
+    - "balance due"
+    - "gesamt"
+    - "summe"
+    - "gesamtbetrag"
+    - "totalbetrag"
+    - "montant total"
+    - "importe total"
+  
+  subtotal:
+    - "subtotal"
+    - "sub total"
+    - "net amount"
+    - "before tax"
+    - "zwischensumme"
+    - "sous-total"
+    - "sous total"
+  
+  tax:
+    - "tax"
+    - "vat"
+    - "gst"
+    - "sales tax"
+    - "service tax"
+    - "tax amount"
+    - "mwst"
+    - "ust"
+    - "mehrwertsteuer"
+    - "umsatzsteuer"
+    - "tva"
+    - "iva"
+  
+  date:
+    - "date"
+    - "invoice date"
+    - "receipt date"
+    - "bill date"
+    - "issued on"
+    - "datum"
+    - "fecha"
+  
+  amount:
+    - "amount"
+    - "price"
+    - "cost"
+    - "charge"
+    - "fee"
+    - "betrag"
+    - "montant"
+    - "importe"
+  
+  logistics:
+    - "exporter"
+    - "shipper"
+    - "consignee"
+    - "importer"
+    - "freight"
+    - "cargo"
+    - "shipment"
+    - "port"
+    - "vessel"
+    - "container"
+    - "customs"
+
+# Common structural labels
+labels:
+  structural:
+    - "invoice"
+    - "receipt"
+    - "bill"
+    - "statement"
+    - "claim"
+    - "policy"
+    - "member"
+    - "date"
+    - "total"
+    - "tax"
+    - "amount"
+    - "subtotal"
+    - "description"
+    - "quantity"
+    - "unit price"
+    - "order"
+    - "customer"
+    - "address"
+    - "phone"
+    - "email"
+  
+  next_line_preference:
+    - "bill to"
+    - "ship to"
+    - "customer"
+    - "client"
+    - "guest"
+    - "patient"
+    - "member"
+    - "insured"
+    - "policy holder"
+
+# Common company patterns
+company:
+  suffixes:
+    - "ltd"
+    - "limited"
+    - "inc"
+    - "corp"
+    - "corporation"
+    - "llc"
+    - "pty ltd"
+    - "gmbh"
+    - "sa"
+    - "ag"
+    - "co"
+    - "company"
+  
+  prefixes:
+    - "the"
+    - "mr"
+    - "mrs"
+    - "ms"
+    - "dr"
+
+# Common address patterns
+address:
+  keywords:
+    - "address"
+    - "street"
+    - "road"
+    - "avenue"
+    - "boulevard"
+    - "lane"
+    - "drive"
+    - "court"
+    - "place"
+    - "square"
+    - "building"
+    - "suite"
+    - "unit"
+    - "floor"
+    - "postal"
+    - "zip"
+    - "postcode"
+  
+  postal_code_patterns:
+    - "\\b\\d{5}\\b"          # US ZIP
+    - "\\b\\d{5}-\\d{4}\\b"   # US ZIP+4
+    - "\\b[A-Z]{1,2}\\d[A-Z\\d]? ?\\d[A-Z]{2}\\b"  # UK postcode
+
+# Common currency
+currency:
+  symbols:
+    - "$"
+    - "€"
+    - "£"
+    - "¥"
+    - "₩"
+    - "₹"
+    - "₽"
+    - "₺"
+    - "₨"
+    - "₱"
+    - "₫"
+    - "₡"
+    - "₴"
+    - "₪"
+  
+  codes:
+    - "USD"
+    - "EUR"
+    - "GBP"
+    - "JPY"
+    - "KRW"
+    - "INR"
+    - "RUB"
+    - "TRY"
+    - "PKR"
+    - "BDT"
+    - "LKR"
+    - "NPR"
+    - "PHP"
+    - "VND"
+    - "THB"
+    - "MYR"
+    - "SGD"
+    - "HKD"
+    - "CNY"
+    - "TWD"
+    - "AUD"
+    - "CAD"
+    - "CHF"
+    - "SEK"
+    - "NOK"
+    - "DKK"
+    - "PLN"
+    - "CZK"
+    - "HUF"
+    - "RON"
+    - "BGN"
+    - "HRK"

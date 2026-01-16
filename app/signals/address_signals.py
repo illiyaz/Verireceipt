@@ -49,6 +49,7 @@ def signal_addr_structure(address_profile: Dict[str, Any]) -> SignalV1:
         interpretation = "Address validation failed"
     
     return SignalV1(
+        name="addr.structure",
         status=status,
         confidence=confidence,
         evidence={
@@ -84,6 +85,7 @@ def signal_addr_merchant_consistency(
     if status_raw == "UNKNOWN":
         gating_reason = evidence_dict.get("reason", "Unknown gating reason")
         return SignalV1(
+            name="addr.merchant_consistency",
             status="GATED",
             confidence=0.0,
             evidence={},
@@ -92,6 +94,7 @@ def signal_addr_merchant_consistency(
         )
     elif status_raw == "CONSISTENT":
         return SignalV1(
+            name="addr.merchant_consistency",
             status="NOT_TRIGGERED",
             confidence=score,
             evidence={
@@ -103,6 +106,7 @@ def signal_addr_merchant_consistency(
         )
     elif status_raw in {"WEAK_MISMATCH", "MISMATCH"}:
         return SignalV1(
+            name="addr.merchant_consistency",
             status="TRIGGERED",
             confidence=1.0 - score,  # Invert: low score = high mismatch confidence
             evidence={
@@ -114,6 +118,7 @@ def signal_addr_merchant_consistency(
         )
     else:
         return SignalV1(
+            name="addr.merchant_consistency",
             status="UNKNOWN",
             confidence=0.0,
             evidence={},
@@ -146,6 +151,7 @@ def signal_addr_multi_address(
     if status_raw == "UNKNOWN":
         gating_reason = evidence_list[0] if evidence_list else "Unknown gating reason"
         return SignalV1(
+            name="addr.multi_address",
             status="GATED",
             confidence=0.0,
             evidence={},
@@ -154,6 +160,7 @@ def signal_addr_multi_address(
         )
     elif status_raw == "SINGLE":
         return SignalV1(
+            name="addr.multi_address",
             status="NOT_TRIGGERED",
             confidence=0.8,  # High confidence in single address
             evidence={
@@ -173,6 +180,7 @@ def signal_addr_multi_address(
             confidence = 0.6  # Lower confidence - structural only
         
         return SignalV1(
+            name="addr.multi_address",
             status="TRIGGERED",
             confidence=confidence,
             evidence={
@@ -185,6 +193,7 @@ def signal_addr_multi_address(
         )
     else:
         return SignalV1(
+            name="addr.multi_address",
             status="UNKNOWN",
             confidence=0.0,
             evidence={},

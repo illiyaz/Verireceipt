@@ -1,0 +1,43 @@
+{
+  "name": "invoice_arabic_typo",
+  "description": "Arabic invoice with OCR error - R10 should fire if Arabic typo patterns are detected",
+  "input": {
+    "full_text": "فاتورة\n\nرقم الفاتورة: INV-2024-001\nالتاريخ: 2024-01-15\n\nالعميل:\nشركة التجارة العالمية\nدبي، الإمارات العربية المتحدة\n\nالوصف                    الكمية    السعر      المبلغ\nمنتج أ                    10        100.00     1,000.00\nمنتج ب                    5         200.00     1,000.00\n\nالمجموع الفرعي:                              2,000.00\nضريبة القيمة المضافة (5%):                    100.00\nالإجمالي:                                     2,100.00\n\nشكراً لتعاملكم معنا",
+    "has_line_items": true,
+    "has_currency": false,
+    "currency_symbols": [],
+    "merchant_candidate": "شركة التجارة العالمية",
+    "lang_guess": "ar",
+    "lang_confidence": 0.95,
+    "lang_source": "script_based",
+    "doc_profile_confidence": 0.88,
+    "text_lines": [
+      "فاتورة",
+      "",
+      "رقم الفاتورة: INV-2024-001",
+      "التاريخ: 2024-01-15",
+      "",
+      "العميل:",
+      "شركة التجارة العالمية",
+      "دبي، الإمارات العربية المتحدة",
+      "",
+      "الوصف                    الكمية    السعر      المبلغ",
+      "منتج أ                    10        100.00     1,000.00",
+      "منتج ب                    5         200.00     1,000.00",
+      "",
+      "المجموع الفرعي:                              2,000.00",
+      "ضريبة القيمة المضافة (5%):                    100.00",
+      "الإجمالي:                                     2,100.00",
+      "",
+      "شكراً لتعاملكم معنا"
+    ]
+  },
+  "expected": {
+    "label": "real",
+    "score_max": 0.05,
+    "rules_fired": [],
+    "rules_not_fired": ["R10_TEMPLATE_QUALITY"],
+    "evidence_required": {},
+    "notes": "Clean Arabic invoice - no typos, R10 should not fire. Arabic keywords are correctly spelled."
+  }
+}

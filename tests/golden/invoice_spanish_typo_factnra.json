@@ -1,0 +1,53 @@
+{
+  "name": "invoice_spanish_typo_factnra",
+  "description": "Spanish invoice with OCR typo 'factnra' instead of 'factura' - R10 should fire",
+  "input": {
+    "full_text": "Factnra\n\nNúmero de Factura: FAC-2024-5678\nFecha: 15 de enero de 2024\n\nCliente:\nEmpresas Globales S.A.\nMadrid, España\n\nDescripción          Cantidad    Precio      Importe\nServicio A           10          €50.00      €500.00\nServicio B           5           €100.00     €500.00\n\nSubtotal:                                    €1,000.00\nIVA (21%):                                   €210.00\nTotal:                                       €1,210.00\n\nGracias por su compra",
+    "has_line_items": true,
+    "has_currency": true,
+    "currency_symbols": ["€"],
+    "merchant_candidate": "Empresas Globales S.A.",
+    "lang_guess": "es",
+    "lang_confidence": 0.92,
+    "lang_source": "fasttext",
+    "doc_profile_confidence": 0.85,
+    "text_lines": [
+      "Factnra",
+      "",
+      "Número de Factura: FAC-2024-5678",
+      "Fecha: 15 de enero de 2024",
+      "",
+      "Cliente:",
+      "Empresas Globales S.A.",
+      "Madrid, España",
+      "",
+      "Descripción          Cantidad    Precio      Importe",
+      "Servicio A           10          €50.00      €500.00",
+      "Servicio B           5           €100.00     €500.00",
+      "",
+      "Subtotal:                                    €1,000.00",
+      "IVA (21%):                                   €210.00",
+      "Total:                                       €1,210.00",
+      "",
+      "Gracias por su compra"
+    ]
+  },
+  "expected": {
+    "label": "real",
+    "score_max": 0.05,
+    "rules_fired": ["R10_TEMPLATE_QUALITY"],
+    "rules_not_fired": [],
+    "evidence_required": {
+      "R10_TEMPLATE_QUALITY": {
+        "keyword_typos": [
+          {
+            "expected": "factura",
+            "found": "factnra",
+            "pattern_match": true
+          }
+        ]
+      }
+    },
+    "notes": "Spanish invoice with known OCR typo pattern 'factnra' - R10 should fire with pattern_match=true"
+  }
+}

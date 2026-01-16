@@ -44,6 +44,7 @@ def signal_amount_total_mismatch(
     # Gate if missing required data
     if total_amount is None or not has_line_items:
         return SignalV1(
+            name="amount.total_mismatch",
             status="NOT_TRIGGERED",
             confidence=0.0,
             evidence={
@@ -58,6 +59,7 @@ def signal_amount_total_mismatch(
         mismatch_pct = (mismatch_amount / total_amount * 100) if total_amount > 0 else 0
         
         return SignalV1(
+            name="amount.total_mismatch",
             status="TRIGGERED",
             confidence=0.8,  # High confidence in arithmetic
             evidence={
@@ -70,6 +72,7 @@ def signal_amount_total_mismatch(
         )
     
     return SignalV1(
+        name="amount.total_mismatch",
         status="NOT_TRIGGERED",
         confidence=0.9,
         evidence={
@@ -104,6 +107,7 @@ def signal_amount_missing(
     # Gate on confidence
     if doc_profile_confidence < 0.55:
         return SignalV1(
+            name="amount.missing",
             status="GATED",
             confidence=0.0,
             evidence={},
@@ -115,6 +119,7 @@ def signal_amount_missing(
     transactional_types = {"INVOICE", "TAX_INVOICE", "VAT_INVOICE", "POS_RECEIPT", "CREDIT_NOTE"}
     if doc_subtype not in transactional_types:
         return SignalV1(
+            name="amount.missing",
             status="NOT_TRIGGERED",
             confidence=0.0,
             evidence={"doc_subtype": doc_subtype},
@@ -123,6 +128,7 @@ def signal_amount_missing(
     
     if total_amount is None:
         return SignalV1(
+            name="amount.missing",
             status="TRIGGERED",
             confidence=0.7,
             evidence={
@@ -134,6 +140,7 @@ def signal_amount_missing(
         )
     
     return SignalV1(
+        name="amount.missing",
         status="NOT_TRIGGERED",
         confidence=0.9,
         evidence={"total_amount": round(total_amount, 2)},
@@ -162,6 +169,7 @@ def signal_amount_semantic_override(
     """
     if not semantic_amounts or semantic_total is None:
         return SignalV1(
+            name="amount.semantic_override",
             status="NOT_TRIGGERED",
             confidence=0.0,
             evidence={},
@@ -173,6 +181,7 @@ def signal_amount_semantic_override(
     # Only trigger if semantic override actually changed the value
     if original_total is not None and abs(semantic_total - original_total) > 0.01:
         return SignalV1(
+            name="amount.semantic_override",
             status="TRIGGERED",
             confidence=confidence,
             evidence={
@@ -185,6 +194,7 @@ def signal_amount_semantic_override(
         )
     
     return SignalV1(
+        name="amount.semantic_override",
         status="NOT_TRIGGERED",
         confidence=confidence,
         evidence={

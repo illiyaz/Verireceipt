@@ -1,0 +1,266 @@
+# Vietnamese language pack
+# Extends common.yaml with Vietnamese-specific keywords and patterns
+
+id: vi
+version: 1.0.0
+name: Vietnamese
+scripts: ["latin"]
+locales: ["vi", "vi-VN"]
+
+keywords:
+  doc_titles:
+    - "hóa đơn"
+    - "biên lai"
+    - "hóa đơn thuế"
+    - "báo giá"
+    - "phiếu giao hàng"
+  
+  invoice:
+    - "hóa đơn"
+    - "hóa đơn thuế"
+    - "hóa đơn bán hàng"
+    - "hóa đơn dịch vụ"
+    - "hóa đơn tư vấn"
+    - "hóa đơn thương mại"
+    - "hóa đơn xuất khẩu"
+    - "hóa đơn nhập khẩu"
+  
+  receipt:
+    - "biên lai"
+    - "biên lai thu tiền"
+    - "biên lai tiền mặt"
+    - "biên lai thẻ tín dụng"
+    - "biên lai ngân hàng"
+    - "giấy nhận tiền"
+  
+  tax_invoice:
+    - "hóa đơn thuế"
+    - "hóa đơn GTGT"
+    - "hóa đơn VAT"
+    - "hóa đơn thuế GTGT"
+  
+  ecommerce:
+    - "đơn hàng"
+    - "đơn đặt hàng"
+    - "đơn hàng online"
+    - "đơn hàng thương mại điện tử"
+    - "đơn hàng số"
+    - "đơn hàng giao hàng"
+  
+  fuel:
+    - "xăng"
+    - "dầu"
+    - "nhiên liệu"
+    - "trạm xăng"
+    - "trạm dịch vụ"
+    - " đổ xăng"
+  
+  parking:
+    - "đỗ xe"
+    - "phí đỗ xe"
+    - "vé đỗ xe"
+    - "đỗ xe valet"
+    - "bãi đỗ xe"
+    - "đỗ xe tháng"
+    - "đỗ xe ngày"
+  
+  hotel_folio:
+    - "khách sạn"
+    - "phòng"
+    - "lưu trú"
+    - "hóa đơn khách sạn"
+    - "phí phòng"
+    - "hóa đơn lưu trú"
+  
+  utility:
+    - "điện"
+    - "nước"
+    - "gas"
+    - "tiện ích"
+    - "điện lực"
+    - "hóa đơn điện"
+    - "hóa đơn nước"
+    - "hóa đơn gas"
+  
+  telecom:
+    - "di động"
+    - "điện thoại"
+    - "viễn thông"
+    - "internet"
+    - "hóa đơn di động"
+    - "hóa đơn điện thoại"
+    - "hóa đơn internet"
+    - "gói dữ liệu"
+    - "nạp tiền"
+  
+  commercial_invoice:
+    - "hóa đơn thương mại"
+    - "hóa đơn xuất khẩu"
+    - "hóa đơn nhập khẩu"
+    - "hóa đơn thương mại quốc tế"
+    - "hóa đơn hải quan"
+  
+  air_waybill:
+    - "vận đơn hàng không"
+    - "AWB"
+    - "hàng không"
+    - "vận chuyển hàng không"
+  
+  shipping_bill:
+    - "vận đơn đường biển"
+    - "tài liệu xuất khẩu"
+    - "hải quan"
+    - "cảng"
+    - "tàu"
+    - "tờ khai xuất khẩu"
+  
+  bill_of_lading:
+    - "vận đơn"
+    - "B/L"
+    - "container"
+    - "tàu"
+    - "cảng"
+  
+  total:
+    - "tổng cộng"
+    - "tổng số"
+    - "số tiền phải thanh toán"
+    - "tổng số tiền"
+    - "số tiền cuối cùng"
+  
+  subtotal:
+    - "tổng"
+    - "số tiền tạm tính"
+    - "số tiền trước thuế"
+  
+  tax:
+    - "thuế"
+    - "GTGT"
+    - "VAT"
+    - "thuế bán hàng"
+    - "thuế dịch vụ"
+    - "số tiền thuế"
+  
+  date:
+    - "ngày"
+    - "ngày hóa đơn"
+    - "ngày biên lai"
+    - "ngày phát hành"
+    - "ngày giao dịch"
+    - "ngày mua"
+  
+  amount:
+    - "số tiền"
+    - "giá"
+    - "chi phí"
+    - "phí"
+    - "đơn giá"
+  
+  logistics:
+    - "người xuất khẩu"
+    - "người gửi hàng"
+    - "người nhận hàng"
+    - "người nhập khẩu"
+    - "hàng hóa"
+    - "vận chuyển"
+    - "cảng"
+    - "tàu"
+    - "container"
+    - "hải quan"
+    - "kho"
+    - "logistics"
+
+labels:
+  structural:
+    - "hóa đơn"
+    - "biên lai"
+    - "ngày"
+    - "tổng cộng"
+    - "thuế"
+    - "số tiền"
+    - "mô tả"
+    - "số lượng"
+    - "đơn giá"
+    - "đơn hàng"
+    - "khách hàng"
+    - "địa chỉ"
+    - "điện thoại"
+    - "email"
+    - "mã số thuế"
+    - "số hóa đơn"
+    - "số biên lai"
+    - "số đơn hàng"
+    - "số tài khoản"
+  
+  next_line_preference:
+    - "hóa đơn cho"
+    - "gửi đến"
+    - "khách hàng"
+    - "thành viên"
+    - "chủ tài khoản"
+    - "người thanh toán"
+    - "người mua"
+
+company:
+  suffixes:
+    - "TNHH"
+    - "Công ty TNHH"
+    - "Cổ phần"
+    - "Công ty Cổ phần"
+    - "Doanh nghiệp tư nhân"
+    - "Công ty"
+    - "DNTN"
+    - "CTCP"
+  
+  prefixes:
+    - "Công ty"
+    - "Ông"
+    - "Bà"
+    - "Cô"
+    - "Anh"
+    - "TS"
+    - "ThS"
+
+address:
+  keywords:
+    - "địa chỉ"
+    - "đường"
+    - "ngõ"
+    - "hẻm"
+    - "tòa nhà"
+    - "tầng"
+    - "phòng"
+    - "mã bưu chính"
+    - "địa chỉ giao hàng"
+    - "địa chỉ hóa đơn"
+    - "quận"
+    - "huyện"
+    - "tỉnh"
+    - "thành phố"
+  
+  postal_code_patterns:
+    - "\\b\\d{6}\\b"          # Vietnamese 6-digit postal codes
+
+currency:
+  symbols:
+    - "₫"
+    - "đ"
+    - "$"
+    - "€"
+    - "£"
+    - "¥"
+    - "₩"
+    - "฿"
+    - "RM"
+  
+  codes:
+    - "VND"
+    - "USD"
+    - "EUR"
+    - "GBP"
+    - "JPY"
+    - "KRW"
+    - "THB"
+    - "MYR"
+    - "CNY"
+    - "SGD"

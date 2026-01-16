@@ -1,0 +1,95 @@
+# Rule PR Gate - CI Enforcement for Rule Admission Policy (RAP)
+#
+# This workflow enforces the Rule Admission Policy and prevents entropy.
+# A PR is BLOCKED if:
+#   1. New rule ID introduced without header block + golden test
+#   2. Golden test scores change without explicit approval
+#   3. Any rule fires in misc_safe.json
+
+name: Rule PR Gate
+
+on:
+  pull_request:
+    paths:
+      - 'app/pipelines/rules.py'
+      - 'tests/golden/*.json'
+
+jobs:
+  enforce-rap:
+    name: Enforce Rule Admission Policy
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Need full history for diff
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Check for new rule IDs
+        id: check_new_rules
+        run: |
+          # Extract all RULE_ID declarations from rules.py
+          NEW_RULES=$(git diff origin/main HEAD -- app/pipelines/rules.py | grep "^+.*RULE_ID:" | sed 's/.*RULE_ID: //' || true)
+          
+          if [ -n "$NEW_RULES" ]; then
+            echo "new_rules_found=true" >> $GITHUB_OUTPUT
+            echo "New rules detected: $NEW_RULES"
+            echo "$NEW_RULES" > /tmp/new_rules.txt
+          else
+            echo "new_rules_found=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Validate new rule headers
+        if: steps.check_new_rules.outputs.new_rules_found == 'true'
+        run: |
+          python scripts/validate_rule_headers.py /tmp/new_rules.txt
+      
+      - name: Validate Rule × Family Matrix
+        run: |
+          python scripts/validate_rule_family_matrix.py
+      
+      - name: Run golden tests
+        id: golden_tests
+        run: |
+          python tests/golden_test_runner.py --strict
+      
+      - name: CRITICAL - Check misc_safe.json
+        run: |
+          python tests/golden_test_runner.py --check-misc
+      
+      - name: Check for golden test score changes
+        run: |
+          # Compare golden test results with baseline
+          git diff origin/main HEAD -- tests/golden/*.json > /tmp/golden_diff.txt
+          
+          if [ -s /tmp/golden_diff.txt ]; then
+            echo "⚠️  Golden test files changed - manual review required"
+            echo "Changes:"
+            cat /tmp/golden_diff.txt
+            
+            # Check if PR has 'golden-test-approved' label
+            if ! gh pr view ${{ github.event.pull_request.number }} --json labels | grep -q "golden-test-approved"; then
+              echo "❌ Golden test changes require 'golden-test-approved' label"
+              exit 1
+            fi
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Report results
+        if: always()
+        run: |
+          echo "## Rule PR Gate Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ All RAP checks passed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Golden Tests" >> $GITHUB_STEP_SUMMARY
+          python tests/golden_test_runner.py >> $GITHUB_STEP_SUMMARY

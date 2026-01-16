@@ -1,0 +1,156 @@
+# resources/domainpacks/common.yaml
+# Shared domainpack defaults (language-agnostic).
+# Domain packs (telecom/healthcare/logistics/insurance/hr_expense) should build on these
+# expectations and canonical field keys.
+#
+# IMPORTANT:
+# - This file MUST NOT contain language terms like "Telefonnummer" or "Kunden-ID".
+#   Those belong in langpacks (de.yaml), which normalize them into canonical buckets.
+# - Domainpacks validate *expectations* (what should exist), not localization keywords.
+
+id: domainpack_common
+version: 1.0.0
+name: DomainPacks Common Defaults
+priority: 0
+
+schema:
+  # The canonical field keys that downstream logic should use.
+  # Langpacks map localized tokens -> these canonical keys.
+  canonical_fields:
+    # Party / identity
+    - merchant_name
+    - merchant_address
+    - merchant_phone
+    - merchant_email
+    - customer_name
+    - customer_id
+    - account_id
+    - member_id
+    - policy_number
+    - claim_id
+
+    # Document identifiers
+    - invoice_number
+    - receipt_number
+    - order_id
+    - reference_id
+    - transaction_id
+    - utr
+    - rrn
+
+    # Dates / periods
+    - issue_date
+    - due_date
+    - service_date
+    - billing_period_start
+    - billing_period_end
+
+    # Amounts
+    - currency
+    - subtotal_amount
+    - tax_amount
+    - total_amount
+    - amount_due
+    - paid_amount
+
+    # Line items / services
+    - line_items_present
+    - item_description_present
+    - quantity_present
+    - unit_price_present
+
+    # Location / logistics
+    - pickup_location
+    - dropoff_location
+    - shipper
+    - consignee
+    - carrier
+    - tracking_number
+    - awb_number
+    - bol_number
+
+    # Healthcare-ish
+    - provider_name
+    - patient_name
+    - diagnosis_code
+    - procedure_code
+    - admission_date
+    - discharge_date
+
+    # HR/expense-ish
+    - employee_name
+    - employee_id
+    - cost_center
+    - expense_category
+    - reimbursement_amount
+
+defaults:
+  # Minimum evidence quality required before enforcing domain expectations.
+  # Mirrors the idea you already use in domain_validation.py.
+  enforcement_gate:
+    min_intent_confidence: 0.55
+    min_domain_confidence: 0.60
+
+  # Generic “document quality” expectations that apply widely.
+  baseline_expectations:
+    # These are NOT always mandatory (receipts vary).
+    # Each domain pack can override severity / requiredness.
+    - id: has_any_date
+      field: issue_date
+      required: false
+      severity: INFO
+      rationale: "Most transactional docs include a date."
+
+    - id: has_any_amount
+      field: total_amount
+      required: false
+      severity: INFO
+      rationale: "Most transactional docs include at least one monetary amount."
+
+    - id: has_currency_or_symbol
+      field: currency
+      required: false
+      severity: INFO
+      rationale: "Currency is often present via symbol/code; may be missing in some scans."
+
+    - id: has_identifier
+      field: invoice_number
+      required: false
+      severity: INFO
+      rationale: "Invoices/receipts often contain a reference number, but not guaranteed."
+
+    - id: has_merchant_identity
+      field: merchant_name
+      required: false
+      severity: INFO
+      rationale: "Merchant name/address may be missing in some low-quality or cropped scans."
+
+scoring:
+  # Optional: a simple additive scoring model for “expectations met”.
+  # Domain packs can override weights for their domain-critical fields.
+  weights:
+    issue_date: 0.10
+    total_amount: 0.20
+    currency: 0.10
+    invoice_number: 0.10
+    merchant_name: 0.10
+    merchant_address: 0.10
+    merchant_phone: 0.05
+    line_items_present: 0.10
+    tax_amount: 0.05
+    billing_period_start: 0.05
+    billing_period_end: 0.05
+
+  thresholds:
+    # Used if you compute a domainpack “coverage score”.
+    good: 0.60
+    ok: 0.40
+    weak: 0.25
+
+integration:
+  # How domainpacks relate to subtype/intent in your current architecture.
+  # This is only metadata (docs); real mapping should live in document_intent.py / resolver.
+  notes:
+    - "Intent is resolved in document_intent.py (language independent)."
+    - "Domain hint can be inferred (heuristic/LLM) and validated here (gated)."
+    - "Langpacks provide localization -> canonical fields. Domainpacks validate expectations."

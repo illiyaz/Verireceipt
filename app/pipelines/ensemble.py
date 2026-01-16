@@ -763,11 +763,17 @@ class EnsembleIntelligence:
         verdict["final_label"] = rule_label if rule_label in ("real", "fake", "suspicious") else "suspicious"
         
         # Map rule score to confidence (rules drive the decision)
+        # IMPORTANT: rule_score is fraud probability (0.0 = clean, 1.0 = definitely fake)
+        # So for "fake" labels, higher rule_score = higher confidence
+        # For "real" labels, lower rule_score = higher confidence
         if rule_label == "fake":
-            verdict["confidence"] = self._normalize_confidence(min(0.90, 0.70 + (rule_score * 0.20)), default=0.75)
+            # Fraud score is high, map directly to confidence in "fake" verdict
+            verdict["confidence"] = self._normalize_confidence(min(0.95, 0.60 + (rule_score * 0.35)), default=0.75)
             verdict["recommended_action"] = "reject"
         elif rule_label == "real":
-            verdict["confidence"] = self._normalize_confidence(min(0.90, 0.60 + ((1.0 - rule_score) * 0.30)), default=0.70)
+            # Fraud score is low, invert to get confidence in "real" verdict
+            # rule_score < 0.5 means likely real, so confidence = 1.0 - rule_score
+            verdict["confidence"] = self._normalize_confidence(min(0.95, 0.50 + ((1.0 - rule_score) * 0.45)), default=0.70)
             verdict["recommended_action"] = "approve"
         else:
             verdict["confidence"] = self._normalize_confidence(0.65, default=0.65)

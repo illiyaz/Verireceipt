@@ -1,0 +1,28 @@
+{
+  "name": "invoice_short_text",
+  "description": "Very short invoice text (<150 chars) - lang=mixed, R10 should NOT fire",
+  "input": {
+    "full_text": "INVOICE\nTotal: $50.00\nThank you",
+    "has_line_items": false,
+    "has_currency": true,
+    "currency_symbols": ["$"],
+    "merchant_candidate": null,
+    "lang_guess": "mixed",
+    "lang_confidence": 0.0,
+    "lang_source": "fasttext",
+    "doc_profile_confidence": 0.65,
+    "text_lines": [
+      "INVOICE",
+      "Total: $50.00",
+      "Thank you"
+    ]
+  },
+  "expected": {
+    "label": "real",
+    "score_max": 0.20,
+    "rules_fired": [],
+    "rules_not_fired": ["R10_TEMPLATE_QUALITY"],
+    "evidence_required": {},
+    "notes": "Short text should result in lang=mixed, preventing language-based rules from firing"
+  }
+}

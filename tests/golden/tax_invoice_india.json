@@ -1,0 +1,35 @@
+{
+  "name": "Tax Invoice (India) – GST Reconciliation",
+  "description": "Indian tax invoice with CGST+SGST that reconciles with stricter tolerance",
+  "input": {
+    "doc_class": "TAX_INVOICE",
+    "doc_subtype_guess": "TAX_INVOICE",
+    "doc_family_guess": "INVOICE",
+    "doc_profile_confidence": 0.95,
+    "total_amount": 1180.0,
+    "subtotal": 1000.0,
+    "tax_amount": 180.0,
+    "shipping_amount": null,
+    "discount_amount": null,
+    "has_line_items": false,
+    "is_credit_note": false,
+    "ocr_confidence": 0.85,
+    "has_date": true,
+    "merchant_candidate": "ABC Pvt Ltd",
+    "tax_breakdown": {
+      "CGST": 90.0,
+      "SGST": 90.0
+    }
+  },
+  "expected": {
+    "decision": "real",
+    "score_max": 0.35,
+    "rules_fired": [],
+    "rules_not_fired": [
+      "R7_TOTAL_MISMATCH",
+      "R7B_INVOICE_TOTAL_RECONCILIATION",
+      "R7C_CREDIT_NOTE_RECONCILIATION"
+    ],
+    "notes": "GST invoice with CGST+SGST should reconcile with stricter tolerance (0.5x)"
+  }
+}

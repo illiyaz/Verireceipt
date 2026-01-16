@@ -1,0 +1,140 @@
+# German language pack
+# Extends common.yaml with German-specific keywords and patterns
+
+id: de
+version: 1.0.0
+name: German
+scripts: ["latin"]
+locales: ["de", "de-DE", "de-AT", "de-CH"]
+
+keywords:
+  doc_titles:
+    - "Rechnung"
+    - "Quittung"
+    - "Beleg"
+    - "Gutschrift"
+    - "Lieferschein"
+
+  invoice:
+    - "Rechnung"
+    - "Rechnungsnummer"
+    - "Rechnungsdatum"
+    - "Kundennummer"
+
+  receipt:
+    - "Quittung"
+    - "Kassenbon"
+    - "Beleg"
+
+  tax_invoice:
+    - "USt"
+    - "USt-IdNr"
+    - "Umsatzsteuer"
+
+  ecommerce: []
+  fuel: []
+  parking: []
+  hotel_folio: []
+  utility: []
+  telecom: []
+
+  commercial_invoice:
+    - "Handelsrechnung"
+    - "Ausfuhr"
+    - "Einfuhr"
+    - "Incoterms"
+    - "Ursprungsland"
+
+  air_waybill: []
+  shipping_bill: []
+  bill_of_lading: []
+
+  total:
+    - "Gesamt"
+    - "Gesamtbetrag"
+    - "Summe"
+    - "Endbetrag"
+
+  subtotal:
+    - "Zwischensumme"
+    - "Nettobetrag"
+    - "Netto"
+
+  tax:
+    - "MwSt"
+    - "Mehrwertsteuer"
+    - "Umsatzsteuer"
+
+  date:
+    - "Datum"
+    - "Rechnungsdatum"
+    - "Belegdatum"
+
+  amount:
+    - "Betrag"
+    - "Preis"
+    - "Kosten"
+    - "Gebühr"
+
+  logistics: []
+
+labels:
+  structural:
+    - "Rechnung"
+    - "Quittung"
+    - "Datum"
+    - "Gesamt"
+    - "Summe"
+    - "MwSt"
+    - "Netto"
+    - "Brutto"
+    - "Adresse"
+    - "Telefon"
+    - "E-Mail"
+    - "Rechnungsnummer"
+    - "Kundennummer"
+    - "IBAN"
+    - "BIC"
+
+  next_line_preference:
+    - "Rechnung an"
+    - "Lieferadresse"
+    - "Kunde"
+    - "Empfänger"
+
+company:
+  suffixes:
+    - "GmbH"
+    - "AG"
+    - "UG"
+    - "KG"
+    - "OHG"
+    - "GmbH & Co. KG"
+    - "e.K."
+
+  prefixes: []
+
+address:
+  keywords:
+    - "Adresse"
+    - "Straße"
+    - "Str."
+    - "PLZ"
+    - "Ort"
+    - "Deutschland"
+    - "Schweiz"
+    - "Österreich"
+
+  postal_code_patterns:
+    - "\\b\\d{5}\\b"
+
+currency:
+  symbols:
+    - "€"
+    - "$"
+    - "CHF"
+
+  codes:
+    - "EUR"
+    - "USD"
+    - "CHF"

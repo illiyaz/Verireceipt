@@ -1,0 +1,31 @@
+{
+  "name": "Credit Note – Negative Total Reconciliation",
+  "description": "Credit note with negative total that reconciles correctly (sign-aware)",
+  "input": {
+    "doc_class": "COMMERCIAL_INVOICE",
+    "doc_subtype_guess": "COMMERCIAL_INVOICE",
+    "doc_family_guess": "INVOICE",
+    "doc_profile_confidence": 0.88,
+    "total_amount": -118.0,
+    "subtotal": -100.0,
+    "tax_amount": -18.0,
+    "shipping_amount": null,
+    "discount_amount": null,
+    "has_line_items": false,
+    "is_credit_note": true,
+    "ocr_confidence": 0.75,
+    "has_date": true,
+    "merchant_candidate": "Acme Corp"
+  },
+  "expected": {
+    "decision": "real",
+    "score_max": 0.35,
+    "rules_fired": [],
+    "rules_not_fired": [
+      "R7_TOTAL_MISMATCH",
+      "R7B_INVOICE_TOTAL_RECONCILIATION",
+      "R7C_CREDIT_NOTE_RECONCILIATION"
+    ],
+    "notes": "Credit note with negative total should reconcile via R7C (sign-aware)"
+  }
+}

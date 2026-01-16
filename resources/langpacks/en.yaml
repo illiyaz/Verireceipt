@@ -1,0 +1,392 @@
+# English language pack
+# Extends common.yaml with English-specific keywords and patterns
+
+id: en
+version: 1.0.0
+name: English
+scripts: ["latin"]
+locales: ["en", "en-US", "en-GB", "en-AU", "en-CA", "en-NZ", "en-IE", "en-ZA", "en-IN"]
+
+# English-specific keywords (extends common defaults)
+keywords:
+  doc_titles:
+    - "invoice"
+    - "receipt"
+    - "bill"
+    - "tax invoice"
+    - "commercial invoice"
+    - "proforma invoice"
+    - "credit memo"
+    - "debit memo"
+    - "statement"
+    - "quote"
+    - "estimate"
+  
+  invoice:
+    - "invoice"
+    - "tax invoice"
+    - "vat invoice"
+    - "gst invoice"
+    - "sales invoice"
+    - "service invoice"
+    - "consulting invoice"
+    - "professional invoice"
+    - "commercial invoice"
+    - "export invoice"
+  
+  receipt:
+    - "receipt"
+    - "cash receipt"
+    - "credit card receipt"
+    - "debit card receipt"
+    - "bank receipt"
+    - "payment receipt"
+    - "deposit receipt"
+    - "proof of payment"
+  
+  tax_invoice:
+    - "tax invoice"
+    - "vat invoice"
+    - "gst invoice"
+    - "hst invoice"
+    - "sales tax invoice"
+  
+  ecommerce:
+    - "order"
+    - "purchase order"
+    - "online order"
+    - "e-commerce order"
+    - "amazon order"
+    - "ebay order"
+    - "marketplace order"
+    - "digital order"
+    - "app order"
+    - "delivery order"
+  
+  fuel:
+    - "fuel"
+    - "gas"
+    - "petrol"
+    - "diesel"
+    - "gas station"
+    - "service station"
+    - "filling station"
+    - "petrol station"
+    - "fuel pump"
+    - "gas purchase"
+  
+  parking:
+    - "parking"
+    - "parking fee"
+    - "parking ticket"
+    - "valet parking"
+    - "garage parking"
+    - "car park"
+    - "parking garage"
+    - "monthly parking"
+    - "daily parking"
+  
+  hotel_folio:
+    - "hotel"
+    - "room"
+    - "accommodation"
+    - "lodging"
+    - "folio"
+    - "guest folio"
+    - "hotel bill"
+    - "room charge"
+    - "hotel invoice"
+    - "stay invoice"
+  
+  utility:
+    - "electricity"
+    - "water"
+    - "gas"
+    - "utility"
+    - "power"
+    - "energy"
+    - "electric bill"
+    - "water bill"
+    - "gas bill"
+    - "utility bill"
+    - "power bill"
+  
+  telecom:
+    - "mobile"
+    - "phone"
+    - "telecom"
+    - "internet"
+    - "broadband"
+    - "cable"
+    - "phone bill"
+    - "mobile bill"
+    - "internet bill"
+    - "data plan"
+    - "recharge"
+    - "top up"
+  
+  commercial_invoice:
+    - "commercial invoice"
+    - "export invoice"
+    - "import invoice"
+    - "trade invoice"
+    - "customs invoice"
+    - "international invoice"
+    - "foreign invoice"
+    - "export documentation"
+  
+  air_waybill:
+    - "air waybill"
+    - "airway bill"
+    - "awb"
+    - "air cargo"
+    - "air freight"
+    - "flight waybill"
+    - "cargo waybill"
+    - "freight waybill"
+  
+  shipping_bill:
+    - "shipping bill"
+    - "export documentation"
+    - "customs"
+    - "port"
+    - "vessel"
+    - "shipping manifest"
+    - "export declaration"
+  
+  bill_of_lading:
+    - "bill of lading"
+    - "b/l"
+    - "bl"
+    - "container"
+    - "vessel"
+    - "port"
+    - "shipping manifest"
+    - "sea waybill"
+  
+  total:
+    - "total"
+    - "total amount"
+    - "grand total"
+    - "sum total"
+    - "amount due"
+    - "balance due"
+    - "payable amount"
+    - "total payable"
+    - "final amount"
+  
+  subtotal:
+    - "subtotal"
+    - "sub total"
+    - "net amount"
+    - "before tax"
+    - "pre-tax total"
+    - "net total"
+  
+  tax:
+    - "tax"
+    - "vat"
+    - "gst"
+    - "hst"
+    - "sales tax"
+    - "service tax"
+    - "tax amount"
+    - "tax payable"
+    - "vat amount"
+    - "gst amount"
+  
+  date:
+    - "date"
+    - "invoice date"
+    - "receipt date"
+    - "bill date"
+    - "issued on"
+    - "date issued"
+    - "transaction date"
+    - "purchase date"
+  
+  amount:
+    - "amount"
+    - "price"
+    - "cost"
+    - "charge"
+    - "fee"
+    - "rate"
+    - "unit price"
+  
+  logistics:
+    - "exporter"
+    - "shipper"
+    - "consignee"
+    - "importer"
+    - "freight"
+    - "cargo"
+    - "shipment"
+    - "port"
+    - "vessel"
+    - "container"
+    - "customs"
+    - "warehouse"
+    - "logistics"
+    - "forwarding"
+
+# English structural labels
+labels:
+  structural:
+    - "invoice"
+    - "receipt"
+    - "bill"
+    - "date"
+    - "total"
+    - "tax"
+    - "amount"
+    - "subtotal"
+    - "description"
+    - "quantity"
+    - "unit price"
+    - "order"
+    - "customer"
+    - "address"
+    - "phone"
+    - "email"
+    - "tax id"
+    - "vat number"
+    - "gst number"
+    - "invoice number"
+    - "receipt number"
+    - "order number"
+    - "account number"
+  
+  next_line_preference:
+    - "bill to"
+    - "ship to"
+    - "customer"
+    - "client"
+    - "guest"
+    - "patient"
+    - "member"
+    - "account holder"
+    - "payer"
+    - "buyer"
+
+# English company patterns
+company:
+  suffixes:
+    - "ltd"
+    - "limited"
+    - "inc"
+    - "corp"
+    - "corporation"
+    - "llc"
+    - "pty ltd"
+    - "gmbh"
+    - "sa"
+    - "ag"
+    - "co"
+    - "company"
+    - "plc"
+    - "limited partnership"
+    - "lp"
+    - "llp"
+  
+  prefixes:
+    - "the"
+    - "mr"
+    - "mrs"
+    - "ms"
+    - "dr"
+    - "prof"
+    - "hon"
+    - "sr"
+    - "jr"
+
+# English address patterns
+address:
+  keywords:
+    - "address"
+    - "street"
+    - "road"
+    - "avenue"
+    - "boulevard"
+    - "lane"
+    - "drive"
+    - "court"
+    - "place"
+    - "square"
+    - "building"
+    - "suite"
+    - "unit"
+    - "floor"
+    - "apartment"
+    - "apt"
+    - "flat"
+    - "postal"
+    - "zip"
+    - "postcode"
+    - "mailing"
+    - "billing"
+    - "shipping"
+  
+  postal_code_patterns:
+    - "\\b\\d{5}\\b"          # US ZIP
+    - "\\b\\d{5}-\\d{4}\\b"   # US ZIP+4
+    - "\\b[A-Z]{1,2}\\d[A-Z\\d]? ?\\d[A-Z]{2}\\b"  # UK postcode
+    - "\\b[A-Z]\\d[A-Z] ?\\d[A-Z]\\d\\b"  # Canadian postal code
+    - "\\b\\d{4}\\b"          # Simple 4-digit
+
+# English currency
+currency:
+  symbols:
+    - "$"
+    - "€"
+    - "£"
+    - "¥"
+    - "₩"
+    - "₹"
+    - "₽"
+    - "₺"
+    - "₨"
+    - "₱"
+    - "₫"
+    - "₡"
+    - "₴"
+    - "₪"
+    - "R"  # South African Rand
+    - "C$" # Canadian Dollar
+    - "A$" # Australian Dollar
+  
+  codes:
+    - "USD"
+    - "EUR"
+    - "GBP"
+    - "JPY"
+    - "KRW"
+    - "INR"
+    - "RUB"
+    - "TRY"
+    - "PKR"
+    - "BDT"
+    - "LKR"
+    - "NPR"
+    - "PHP"
+    - "VND"
+    - "THB"
+    - "MYR"
+    - "SGD"
+    - "HKD"
+    - "CNY"
+    - "TWD"
+    - "AUD"
+    - "CAD"
+    - "CHF"
+    - "SEK"
+    - "NOK"
+    - "DKK"
+    - "PLN"
+    - "CZK"
+    - "HUF"
+    - "RON"
+    - "BGN"
+    - "HRK"
+    - "ZAR"
+    - "NZD"

@@ -281,5 +281,144 @@ class TestDecisionContractRegressions:
         assert len(d_dict["reasons"]) == 2
 
 
+class TestBehavioralContracts:
+    """Test end-to-end behavioral expectations for specific document scenarios."""
+
+    def test_low_confidence_logistics_doc_with_date_gap(self):
+        """
+        Contract: Low-confidence logistics doc with moderate date gap should not be marked fake.
+        
+        Scenario:
+        - Document type: UTILITY/TRANSACTIONAL (low confidence 0.2)
+        - Merchant: Structural label rejected ("Date of Export")
+        - Date gap: 399 days (moderate, < 540)
+        - Expected: R16 downgraded to WARNING, missing-field penalties gated OFF
+        - Result: Should be "real" or "suspicious" (NOT "fake")
+        """
+        from app.pipelines.rules import _score_and_explain
+        from app.schemas.receipt import ReceiptFeatures, ReceiptRaw
+        
+        # Simulate low-confidence logistics document
+        raw = ReceiptRaw(
+            file_path="/tmp/logistics_invoice.pdf",
+            full_text="COMMERCIAL INVOICE\nDate of Export: 2023-09-05\nExporter: ABC Corp",
+            metadata={"creation_date": "D:20241008184241+05'30'"},
+        )
+        
+        features = ReceiptFeatures(
+            raw=raw,
+            text_features={
+                "receipt_date": "2023-09-05",
+                "has_date": True,
+                "doc_profile_confidence": 0.2,  # Low confidence
+                "doc_subtype_guess": "UTILITY",
+                "merchant_candidate": "Date of Export",  # Structural label (should be rejected)
+                "has_any_amount": True,
+                "total_line_present": False,
+            },
+            layout_features={},
+            metadata_features={"creation_date": "D:20241008184241+05'30'"},
+            doc_profile={
+                "family": "TRANSACTIONAL",
+                "subtype": "UTILITY",
+                "confidence": 0.2,
+            },
+        )
+        
+        # Run scoring
+        decision = _score_and_explain(features, apply_learned=False)
+        
+        # Contract assertions
+        assert decision.label in ["real", "suspicious"], \
+            f"Low-confidence doc with moderate gap should not be 'fake', got: {decision.label}"
+        
+        # Verify R16 was downgraded
+        r16_events = [e for e in decision.events if e.rule_id == "R16_SUSPICIOUS_DATE_GAP"]
+        if r16_events:
+            r16 = r16_events[0]
+            assert r16.severity == "WARNING", "R16 should be downgraded to WARNING"
+            assert r16.weight == 0.10, "R16 weight should be 0.10"
+            assert r16.evidence.get("severity_downgraded") is True
+        
+        # Verify missing-field gate was OFF
+        gate_events = [e for e in decision.events if e.rule_id == "GATE_MISSING_FIELDS"]
+        if gate_events:
+            gate = gate_events[0]
+            assert "DISABLED" in gate.message or gate.evidence.get("missing_fields_enabled") is False, \
+                "Missing-field penalties should be gated OFF"
+        
+        # Verify merchant implausible was gated
+        merchant_events = [e for e in decision.events if "MERCHANT_IMPLAUSIBLE" in e.rule_id]
+        if merchant_events:
+            # Should be GATED version (INFO only)
+            assert any("GATED" in e.rule_id for e in merchant_events), \
+                "Merchant implausible should be gated when missing_fields_enabled is OFF"
+
+    def test_high_confidence_receipt_with_large_date_gap(self):
+        """
+        Contract: High-confidence receipt with large date gap should be marked suspicious/fake.
+        
+        Scenario:
+        - Document type: POS_RESTAURANT (high confidence 0.8)
+        - Date gap: 600 days (extreme, > 540)
+        - Expected: R16 remains CRITICAL, full penalties applied
+        - Result: Should be "suspicious" or "fake"
+        """
+        from app.pipelines.rules import _score_and_explain
+        from app.schemas.receipt import ReceiptFeatures, ReceiptRaw
+        from datetime import datetime, timedelta
+        
+        # High-confidence receipt with extreme date gap
+        receipt_date = "2023-01-01"
+        creation_datetime = datetime(2023, 1, 1) + timedelta(days=600)
+        creation_date = creation_datetime.strftime("D:%Y%m%d120000+00'00'")
+        
+        raw = ReceiptRaw(
+            file_path="/tmp/suspicious_receipt.pdf",
+            full_text="Restaurant Receipt\nDate: 2023-01-01\nTotal: $45.00\nTax: $3.60",
+            metadata={"creation_date": creation_date},
+        )
+        
+        features = ReceiptFeatures(
+            raw=raw,
+            text_features={
+                "receipt_date": receipt_date,
+                "has_date": True,
+                "doc_profile_confidence": 0.8,  # High confidence
+                "doc_subtype_guess": "POS_RESTAURANT",
+                "merchant_candidate": "Restaurant Name",
+                "has_any_amount": True,
+                "total_line_present": True,
+                "total_amount": 45.00,
+            },
+            layout_features={},
+            metadata_features={"creation_date": creation_date},
+            doc_profile={
+                "family": "TRANSACTIONAL",
+                "subtype": "POS_RESTAURANT",
+                "confidence": 0.8,
+            },
+        )
+        
+        # Run scoring
+        decision = _score_and_explain(features, apply_learned=False)
+        
+        # Contract assertions
+        assert decision.label in ["suspicious", "fake"], \
+            f"High-confidence receipt with extreme gap should be flagged, got: {decision.label}"
+        
+        # Verify R16 was NOT downgraded
+        r16_events = [e for e in decision.events if e.rule_id == "R16_SUSPICIOUS_DATE_GAP"]
+        assert len(r16_events) > 0, "R16 should be triggered"
+        
+        r16 = r16_events[0]
+        assert r16.severity == "CRITICAL", "R16 should remain CRITICAL for extreme gap"
+        assert r16.weight == 0.35, "R16 weight should be 0.35"
+        assert r16.evidence.get("severity_downgraded") is False, "Should NOT be downgraded"
+        
+        # Score should be significantly negative
+        assert decision.score < -0.2, f"Score should be significantly negative, got: {decision.score}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

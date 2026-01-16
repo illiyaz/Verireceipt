@@ -1,0 +1,58 @@
+# Language Pack Schema (Human-readable version)
+# This file documents the expected structure of language pack YAML files
+# Actual validation is handled by Pydantic models in app/pipelines/lang/schema.py
+
+# Required fields
+id: string          # Language pack ID (e.g., "en", "ar", "zh-CN")
+version: string     # Semantic version (e.g., "1.0.0") 
+name: string        # Human-readable language name
+scripts: array      # Unicode scripts this pack supports
+
+# Optional fields
+locales: array      # Locale codes this pack supports (e.g., ["en-US", "en-GB"])
+
+# Keyword groups for document profiling and extraction
+keywords:
+  doc_titles: array      # Document title keywords
+  invoice: array         # Invoice-related keywords
+  receipt: array         # Receipt-related keywords  
+  tax_invoice: array     # Tax invoice keywords
+  ecommerce: array       # E-commerce keywords
+  fuel: array           # Fuel station keywords
+  parking: array        # Parking keywords
+  hotel_folio: array    # Hotel folio keywords
+  utility: array        # Utility bill keywords
+  telecom: array        # Telecom keywords
+  commercial_invoice: array  # Commercial invoice keywords
+  air_waybill: array    # Air waybill keywords
+  shipping_bill: array  # Shipping bill keywords
+  bill_of_lading: array # Bill of lading keywords
+  total: array          # Total amount keywords
+  subtotal: array       # Subtotal keywords
+  tax: array            # Tax keywords
+  date: array           # Date keywords
+  amount: array         # Amount keywords
+  logistics: array      # Logistics/shipping keywords
+
+# Structural labels for merchant extraction
+labels:
+  structural: array           # Labels to reject as merchants
+  next_line_preference: array # Labels where next line is likely merchant
+
+# Company information patterns
+company:
+  suffixes: array      # Company legal suffixes
+  prefixes: array      # Common company prefixes
+
+# Address-related patterns
+address:
+  keywords: array              # Address-related keywords
+  postal_code_patterns: array  # Regex patterns for postal codes
+
+# Currency information
+currency:
+  symbols: array       # Currency symbols
+  codes: array         # Currency codes
+
+# Optional extensions for language-specific features
+extensions: object

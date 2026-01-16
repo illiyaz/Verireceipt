@@ -1,0 +1,51 @@
+{
+  "name": "invoice_template_typo_maximun",
+  "description": "Commercial invoice with typo 'maximun' instead of 'maximum' - R10 should fire",
+  "input": {
+    "full_text": "COMMERCIAL INVOICE\n\nInvoice #: INV-2024-001\nDate: 2024-01-15\n\nBill To:\nAcme Corp\n123 Business St\n\nItem                    Qty    Price    Total\nWidget A                10     $50.00   $500.00\nWidget B                5      $30.00   $150.00\n\nSubtotal:                              $650.00\nTax (10%):                             $65.00\nMaximun Amount Due:                    $715.00\n\nPayment Terms: Net 30\nThank you for your business!",
+    "has_line_items": true,
+    "has_currency": true,
+    "currency_symbols": ["$"],
+    "merchant_candidate": "Acme Corp",
+    "lang_guess": "en",
+    "lang_confidence": 0.95,
+    "doc_profile_confidence": 0.85,
+    "text_lines": [
+      "COMMERCIAL INVOICE",
+      "",
+      "Invoice #: INV-2024-001",
+      "Date: 2024-01-15",
+      "",
+      "Bill To:",
+      "Acme Corp",
+      "123 Business St",
+      "",
+      "Item                    Qty    Price    Total",
+      "Widget A                10     $50.00   $500.00",
+      "Widget B                5      $30.00   $150.00",
+      "",
+      "Subtotal:                              $650.00",
+      "Tax (10%):                             $65.00",
+      "Maximun Amount Due:                    $715.00",
+      "",
+      "Payment Terms: Net 30",
+      "Thank you for your business!"
+    ]
+  },
+  "expected": {
+    "label": "real",
+    "score_max": 0.05,
+    "rules_fired": ["R10_TEMPLATE_QUALITY"],
+    "rules_not_fired": [],
+    "evidence_required": {
+      "R10_TEMPLATE_QUALITY": {
+        "keyword_typos": [
+          {
+            "expected": "maximum",
+            "found": "maximun"
+          }
+        ]
+      }
+    }
+  }
+}

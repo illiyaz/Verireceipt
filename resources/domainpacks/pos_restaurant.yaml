@@ -1,0 +1,143 @@
+# resources/domainpacks/pos_restaurant.yaml
+# POS Restaurant-specific field expectations
+# Overrides common.yaml defaults for POS receipts
+
+id: domainpack_pos_restaurant
+version: 1.0.0
+name: POS Restaurant Field Expectations
+priority: 10  # Higher priority than common.yaml
+applies_to:
+  subtypes:
+    - POS_RESTAURANT
+    - POS_RETAIL
+    - POS_FUEL
+  families:
+    - TRANSACTIONAL
+
+# POS-specific field expectations
+field_expectations:
+  # REQUIRED fields for POS receipts (core transaction evidence)
+  required:
+    - id: has_total_or_line_items
+      fields: [total_amount, line_items_present]
+      logic: OR  # At least one must be present
+      severity: CRITICAL
+      rationale: "POS receipts must show either a total amount or itemized line items"
+      weight: 0.20
+    
+    - id: has_merchant_name
+      field: merchant_name
+      severity: CRITICAL
+      rationale: "Merchant name is essential for POS receipt validation"
+      weight: 0.15
+    
+    - id: has_currency
+      field: currency
+      severity: WARNING
+      rationale: "Currency symbol or code should be present"
+      weight: 0.08
+  
+  # OPTIONAL fields (nice to have, but not required - zero penalty if missing)
+  optional:
+    - id: has_merchant_phone
+      field: merchant_phone
+      severity: NONE
+      rationale: "Phone number is optional for POS receipts"
+      weight: 0.0
+    
+    - id: has_merchant_address
+      field: merchant_address
+      severity: NONE
+      rationale: "Full address is optional for POS receipts (partial address acceptable)"
+      weight: 0.0
+    
+    - id: has_date_or_time
+      fields: [issue_date, receipt_time]
+      logic: OR
+      severity: INFO
+      rationale: "Date or time preferred but not mandatory (OCR often misses on thermal prints)"
+      weight: 0.05
+    
+    - id: has_receipt_number
+      field: receipt_number
+      severity: NONE
+      rationale: "Receipt number is helpful but not always present"
+      weight: 0.0
+  
+  # NEVER REQUIRED (should not penalize if missing)
+  never_required:
+    - id: invoice_number_not_expected
+      field: invoice_number
+      severity: NONE
+      rationale: "POS receipts do not have invoice numbers"
+      weight: 0.0
+    
+    - id: customer_gstin_not_expected
+      field: customer_gstin
+      severity: NONE
+      rationale: "POS receipts do not require customer tax IDs"
+      weight: 0.0
+    
+    - id: po_number_not_expected
+      field: po_number
+      severity: NONE
+      rationale: "POS receipts do not have purchase order numbers"
+      weight: 0.0
+    
+    - id: customer_name_not_expected
+      field: customer_name
+      severity: NONE
+      rationale: "POS receipts typically do not include customer names"
+      weight: 0.0
+
+# Scoring adjustments for POS receipts
+scoring:
+  weights:
+    # Core POS fields (higher weight)
+    total_amount: 0.25
+    line_items_present: 0.20
+    merchant_name: 0.15
+    currency: 0.10
+    
+    # Nice to have (lower weight)
+    issue_date: 0.08
+    receipt_time: 0.08
+    receipt_number: 0.05
+    merchant_phone: 0.04
+    merchant_address: 0.05
+    
+    # Not expected (zero weight)
+    invoice_number: 0.0
+    customer_gstin: 0.0
+    po_number: 0.0
+    customer_name: 0.0
+  
+  thresholds:
+    good: 0.50  # Lower threshold for POS (less structured than invoices)
+    ok: 0.35
+    weak: 0.20
+
+# Integration with learned rules
+learned_rules_config:
+  # Suppress "missing_elements" pattern if these conditions met
+  suppress_missing_elements_when:
+    - has_total_amount: true
+      has_merchant_name: true
+      has_currency: true
+    - has_line_items: true
+      has_merchant_name: true
+  
+  # Adjust confidence penalties for POS-specific context
+  confidence_adjustments:
+    missing_phone: 0.0  # Don't penalize missing phone (optional)
+    missing_address: 0.0  # Don't penalize missing full address (optional)
+    missing_date: 0.03  # Minimal penalty if time present (was 0.15)
+    missing_invoice_number: 0.0  # Never penalize (not expected)
+    missing_customer_name: 0.0  # Never penalize (not expected)
+    missing_customer_gstin: 0.0  # Never penalize (not expected)
+
+notes:
+  - "POS receipts are less structured than invoices"
+  - "OCR quality varies significantly for thermal prints"
+  - "Focus on core transaction evidence (amount, merchant, currency)"
+  - "Don't over-penalize missing optional fields"

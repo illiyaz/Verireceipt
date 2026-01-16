@@ -47,12 +47,14 @@ class SignalV1(BaseModel):
     - Human-readable interpretation
     
     Fields:
+    - name: Signal name (e.g., "addr.structure")
     - status: Signal state (TRIGGERED, NOT_TRIGGERED, GATED, UNKNOWN)
     - confidence: Signal confidence [0.0-1.0]
-    - evidence: Structured, privacy-safe evidence (no raw text)
+    - evidence: Structured evidence (no PII)
     - interpretation: Human-readable explanation
     - gating_reason: Why signal was gated (if status=GATED)
     """
+    name: str = Field(..., description="Signal name (e.g., addr.structure)")
     status: str = Field(..., description="TRIGGERED | NOT_TRIGGERED | GATED | UNKNOWN")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Signal confidence [0.0-1.0]")
     evidence: Dict[str, Any] = Field(default_factory=dict, description="Structured evidence (no PII)")
@@ -72,6 +74,7 @@ class ReceiptFeatures:
     forensic_features: Dict[str, Any]
     document_intent: Dict[str, Any] = field(default_factory=dict)
     signals: Dict[str, Any] = field(default_factory=dict)  # Unified signals (SignalV1)
+    signal_version: str = "v1"  # Signal contract version
 
 
 

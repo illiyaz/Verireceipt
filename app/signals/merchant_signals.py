@@ -30,6 +30,7 @@ def signal_merchant_extraction_weak(
     # Gate on document confidence
     if doc_profile_confidence < 0.55:
         return SignalV1(
+            name="merchant.extraction_weak",
             status="GATED",
             confidence=0.0,
             evidence={},
@@ -40,6 +41,7 @@ def signal_merchant_extraction_weak(
     # No merchant found
     if not merchant_candidate:
         return SignalV1(
+            name="merchant.extraction_weak",
             status="TRIGGERED",
             confidence=0.9,
             evidence={
@@ -52,6 +54,7 @@ def signal_merchant_extraction_weak(
     # Weak merchant confidence
     if merchant_confidence < 0.6:
         return SignalV1(
+            name="merchant.extraction_weak",
             status="TRIGGERED",
             confidence=merchant_confidence,
             evidence={
@@ -63,6 +66,7 @@ def signal_merchant_extraction_weak(
         )
     
     return SignalV1(
+        name="merchant.extraction_weak",
         status="NOT_TRIGGERED",
         confidence=merchant_confidence,
         evidence={
@@ -92,6 +96,7 @@ def signal_merchant_confidence_low(
     """
     if merchant_confidence < threshold:
         return SignalV1(
+            name="merchant.confidence_low",
             status="TRIGGERED",
             confidence=1.0 - merchant_confidence,  # Invert: low confidence = high signal
             evidence={
@@ -103,6 +108,7 @@ def signal_merchant_confidence_low(
         )
     
     return SignalV1(
+        name="merchant.confidence_low",
         status="NOT_TRIGGERED",
         confidence=merchant_confidence,
         evidence={

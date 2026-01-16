@@ -1,0 +1,45 @@
+{
+  "name": "invoice_chinese_clean",
+  "description": "Clean Chinese invoice - R10 should NOT fire (no English spelling expected)",
+  "input": {
+    "full_text": "发票\n\n发票号码: INV-2024-CN-5678\n日期: 2024年4月10日\n\n客户信息:\n上海贸易有限公司\n上海市浦东新区世纪大道1000号\n\n商品描述           数量    单价        金额\n办公用品套装        20      ¥150.00    ¥3,000.00\n电脑配件            5       ¥800.00    ¥4,000.00\n打印纸箱            10      ¥50.00     ¥500.00\n\n小计:                                  ¥7,500.00\n增值税(13%):                           ¥975.00\n总计:                                  ¥8,475.00\n\n付款条件: 收到发票后30天内付款\n感谢您的惠顾!",
+    "has_line_items": true,
+    "has_currency": true,
+    "currency_symbols": ["¥"],
+    "merchant_candidate": "上海贸易有限公司",
+    "lang_guess": "zh",
+    "lang_confidence": 0.98,
+    "lang_source": "fasttext",
+    "doc_profile_confidence": 0.92,
+    "text_lines": [
+      "发票",
+      "",
+      "发票号码: INV-2024-CN-5678",
+      "日期: 2024年4月10日",
+      "",
+      "客户信息:",
+      "上海贸易有限公司",
+      "上海市浦东新区世纪大道1000号",
+      "",
+      "商品描述           数量    单价        金额",
+      "办公用品套装        20      ¥150.00    ¥3,000.00",
+      "电脑配件            5       ¥800.00    ¥4,000.00",
+      "打印纸箱            10      ¥50.00     ¥500.00",
+      "",
+      "小计:                                  ¥7,500.00",
+      "增值税(13%):                           ¥975.00",
+      "总计:                                  ¥8,475.00",
+      "",
+      "付款条件: 收到发票后30天内付款",
+      "感谢您的惠顾!"
+    ]
+  },
+  "expected": {
+    "label": "real",
+    "score_max": 0.05,
+    "rules_fired": [],
+    "rules_not_fired": ["R10_TEMPLATE_QUALITY"],
+    "evidence_required": {},
+    "notes": "Chinese invoice should not trigger English spelling checks"
+  }
+}

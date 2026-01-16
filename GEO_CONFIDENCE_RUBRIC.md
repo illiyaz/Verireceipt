@@ -13,6 +13,8 @@ Define clear, auditable scoring rules for geographic origin detection to prevent
 
 ## 📊 Signal Types & Weights
 
+A “signal” may consist of one or more weighted points depending on strength.
+
 ### **Strong Signals (3 points each)**
 - Tax keywords (GST, VAT, HST, PST, GSTIN, etc.)
 - Formatted phone numbers (country-specific patterns)
@@ -27,11 +29,13 @@ Define clear, auditable scoring rules for geographic origin detection to prevent
 - Ambiguous currency symbols ($, ¥)
 - Ambiguous postal patterns (6-digit alone)
 
+
 ### **Language Hint Bonus (0-3 points)**
 - Proportional to language confidence
 - Capped at 3 points
 - Formula: `min(3.0, lang_score * 0.30)`
 
+Language hints never override missing strong geo signals.
 ---
 
 ## 🎚️ Confidence Calculation
@@ -40,6 +44,8 @@ Define clear, auditable scoring rules for geographic origin detection to prevent
 ```python
 confidence = min(1.0, winner_score / max(10, total_score))
 ```
+
+“Exact confidence calculation may vary slightly in implementation; thresholds and caps are contractual.”
 
 ### **Modifiers:**
 

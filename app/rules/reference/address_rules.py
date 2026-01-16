@@ -34,36 +34,27 @@ from app.schemas.receipt import SignalV1
 def rule_addr_multi_and_mismatch(
     doc_subtype: str,
     doc_profile_confidence: float,
-    multi_address_profile: Dict[str, Any],
-    merchant_address_consistency: Dict[str, Any],
-    sig_multi: Optional[Dict[str, Any]] = None,
-    sig_cons: Optional[Dict[str, Any]] = None,
+    sig_multi: Dict[str, Any],
+    sig_cons: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     RULE: Multiple addresses + merchant-address mismatch in high-confidence invoice.
     
-    Signal Combination:
+    Signal Combination (V1):
+    - addr.multi_address: TRIGGERED
+    - addr.merchant_consistency: TRIGGERED
+    - doc_profile_confidence >= 0.8
     
-    Prefers unified signals if available, falls back to legacy features.
     Returns structured evidence (no scoring).
     """
     # Gate on confidence
     if doc_profile_confidence < 0.8:
         return {"status": "GATED", "reason": "doc_profile_confidence < 0.8"}
     
-    # Check conditions (prefer signals)
+    # Check conditions using signals
     is_invoice = doc_subtype in {"INVOICE", "TAX_INVOICE", "VAT_INVOICE", "COMMERCIAL_INVOICE"}
-    
-    # Use signals if available, otherwise fall back to legacy
-    if sig_multi:
-        has_multiple_addresses = sig_multi.get("status") == "TRIGGERED"
-    else:
-        has_multiple_addresses = multi_address_profile.get("status") == "MULTIPLE"
-    
-    if sig_cons:
-        has_mismatch = sig_cons.get("status") == "TRIGGERED"
-    else:
-        has_mismatch = merchant_address_consistency.get("status") in {"WEAK_MISMATCH", "MISMATCH"}
+    has_multiple_addresses = sig_multi.get("status") == "TRIGGERED"
+    has_mismatch = sig_cons.get("status") == "TRIGGERED"
     
     if is_invoice and has_multiple_addresses and has_mismatch:
         return {
@@ -73,9 +64,10 @@ def rule_addr_multi_and_mismatch(
             "evidence": {
                 "doc_subtype": doc_subtype,
                 "doc_profile_confidence": doc_profile_confidence,
-                "multi_address_count": multi_address_profile.get("count", 0),
-                "consistency_status": merchant_address_consistency.get("status"),
-                "consistency_score": merchant_address_consistency.get("score", 0.0),
+                "multi_address_count": sig_multi.get("evidence", {}).get("count", 0),
+                "consistency_status": sig_cons.get("evidence", {}).get("consistency_status"),
+                "multi_address_confidence": sig_multi.get("confidence", 0.0),
+                "consistency_confidence": sig_cons.get("confidence", 0.0),
             },
             "interpretation": "Multiple addresses with merchant mismatch - review with other signals",
             "next_steps": [
@@ -386,15 +378,13 @@ def evaluate_address_rules(
     """
     triggered_rules = []
     
-    # Extract unified signals (preferred) or fall back to legacy features
-    sig_multi = signals.get("addr.multi_address") if signals else None
-    sig_cons = signals.get("addr.merchant_consistency") if signals else None
-    sig_struct = signals.get("addr.structure") if signals else None
+    # Extract unified signals (required in V1)
+    if not signals:
+        raise ValueError("Signals are required for rule evaluation (signal_version=v1)")
     
-    # Extract features (legacy format - for backward compatibility)
-    address_profile = text_features.get("address_profile", {})
-    merchant_address_consistency = text_features.get("merchant_address_consistency", {})
-    multi_address_profile = text_features.get("multi_address_profile", {})
+    sig_multi = signals.get("addr.multi_address", {})
+    sig_cons = signals.get("addr.merchant_consistency", {})
+    sig_struct = signals.get("addr.structure", {})
     
     doc_subtype = doc_profile.get("subtype", "UNKNOWN")
     doc_profile_confidence = doc_profile.get("confidence", 0.0)
@@ -409,8 +399,8 @@ def evaluate_address_rules(
         rule_addr_multi_and_mismatch(
             doc_subtype=doc_subtype,
             doc_profile_confidence=doc_profile_confidence,
-            multi_address_profile=multi_address_profile,
-            merchant_address_consistency=merchant_address_consistency,
+            sig_multi=sig_multi,
+            sig_cons=sig_cons,
         ),
         rule_addr_multi_in_invoice_highconf(
             doc_subtype=doc_subtype,

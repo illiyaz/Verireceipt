@@ -1,0 +1,42 @@
+{
+  "name": "invoice_spacing_anomaly",
+  "description": "Invoice with misaligned columns (multiple spaces) - R10 should fire on spacing",
+  "input": {
+    "full_text": "INVOICE\n\nInvoice Number: 2024-5678\nDate: 2024-02-20\n\nCustomer: Global Trading Ltd\n\nDescription          Qty       Price        Total\nProduct X            15        $25.00       $375.00\nProduct Y      8           $40.00            $320.00\nProduct Z                 3     $100.00   $300.00\n\nSubtotal:                                   $995.00\nTax:                                        $99.50\nTotal:                                    $1,094.50",
+    "has_line_items": true,
+    "has_currency": true,
+    "currency_symbols": ["$"],
+    "merchant_candidate": "Global Trading Ltd",
+    "lang_guess": "en",
+    "lang_confidence": 0.90,
+    "doc_profile_confidence": 0.80,
+    "text_lines": [
+      "INVOICE",
+      "",
+      "Invoice Number: 2024-5678",
+      "Date: 2024-02-20",
+      "",
+      "Customer: Global Trading Ltd",
+      "",
+      "Description          Qty       Price        Total",
+      "Product X            15        $25.00       $375.00",
+      "Product Y      8           $40.00            $320.00",
+      "Product Z                 3     $100.00   $300.00",
+      "",
+      "Subtotal:                                   $995.00",
+      "Tax:                                        $99.50",
+      "Total:                                    $1,094.50"
+    ]
+  },
+  "expected": {
+    "label": "real",
+    "score_max": 0.05,
+    "rules_fired": ["R10_TEMPLATE_QUALITY"],
+    "rules_not_fired": [],
+    "evidence_required": {
+      "R10_TEMPLATE_QUALITY": {
+        "spacing_anomaly": true
+      }
+    }
+  }
+}

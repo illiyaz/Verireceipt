@@ -1,0 +1,212 @@
+# resources/domainpacks/telecom.yaml
+# Domain pack = expectations + validation hints (NOT keywords)
+# Language-specific keyword triggers live in langpacks/*.yaml
+
+id: telecom
+name: Telecom Billing / Recharge / ISP
+version: 1.0.0
+description: >
+  Telecom documents: postpaid bills, prepaid recharge receipts, broadband/ISP invoices,
+  add-on packs, roaming, device EMI via telco, etc. Used to set field expectations and
+  validation hints across geos/languages.
+
+intent_bias:
+  default_intent: subscription
+  confidence_multiplier: 0.8
+
+applies_to:
+  intents:
+    # DocumentIntent v2
+    - billing
+    - subscription
+    - proof_of_payment
+    - reimbursement
+    - purchase
+  doc_families:
+    - TRANSACTIONAL
+    - PAYMENT
+  doc_subtypes:
+    # This list is an OPTIONAL restriction. Keep permissive to avoid missing new subtypes.
+    - TELECOM
+    - UTILITY
+    - SUBSCRIPTION
+    - SERVICE_INVOICE
+    - PAYMENT_RECEIPT
+    - BANK_SLIP
+    - CARD_CHARGE_SLIP
+  regions: []  # empty = global
+
+expectations:
+  # At least one group must match (OR across groups)
+  # TELECOM-SPECIFIC SIGNALS to reduce false positives
+  required_any:
+    # Account/customer identifiers (telecom-specific)
+    - ["customer_id", "account_id", "subscriber_id", "account_number", "contract_number"]
+    # Phone identifiers (telecom-specific)
+    - ["phone_number", "msisdn", "sim_number", "imei"]
+    # Billing period / service period (telecom-specific)
+    - ["billing_period_start", "billing_period_end", "billing_cycle", "service_period"]
+    # Plan/tariff keywords (telecom-specific)
+    - ["plan_name", "plan_type", "tariff", "service_type", "data_plan"]
+    # Telecom-specific usage metrics
+    - ["data_used", "minutes_used", "sms_used", "units_consumed", "roaming_charges"]
+
+  # All groups must match (AND across groups)
+  required_all:
+    - ["issue_date", "due_date", "service_date", "invoice_date", "bill_date", "transaction_date"]
+    - ["merchant_name", "provider_name"]
+
+  preferred:
+    # Demoted from required_any: generic signals that appear in all receipts
+    - ["invoice_number", "transaction_id", "reference_id", "receipt_number", "order_id", "bill_number", "reference_number"]
+    - ["total_amount", "amount_due", "paid_amount", "subtotal_amount", "tax_amount", "amount_paid", "grand_total"]
+    - ["merchant_address", "service_address", "billing_address"]
+    - ["tax_amount", "vat_amount", "gst_amount"]
+    - ["currency", "currency_code", "country_code"]
+    - ["payment_method", "card_last4", "auth_code", "rrn", "utr"]
+    - ["late_fee", "previous_balance", "adjustments", "discounts"]
+
+  # NEGATIVE KEYWORDS: slam confidence to 0 for obvious non-telecom docs
+  forbidden:
+    - "restaurant"
+    - "buffet"
+    - "gst @"
+    - "cgst"
+    - "sgst"
+    - "food"
+    - "beverage"
+    - "menu"
+    - "table"
+    - "waiter"
+    - "dine"
+    - "takeaway"
+    - "delivery"
+    - "hotel"
+    - "room"
+    - "checkout"
+    - "fuel"
+    - "petrol"
+    - "diesel"
+    - "parking"
+    - "toll"
+
+validators:
+  - id: merchant_phone_loose
+    field: merchant_phone
+    rule: regex
+    severity: warning
+    params:
+      regex: "(?i)\\b(?:\\+?\\d{1,3}[\\s\\-]?)?(?:\\d[\\s\\-]?){8,15}\\b"
+
+  - id: phone_number_loose
+    field: phone_number
+    rule: regex
+    severity: info
+    params:
+      regex: "(?i)\\b(?:\\+?\\d{1,3}[\\s\\-]?)?(?:\\d[\\s\\-]?){8,15}\\b"
+
+  # ----------------------------
+  # Invoice / reference IDs
+  # ----------------------------
+  - id: invoice_number_generic
+    field: invoice_number
+    rule: regex
+    severity: warning
+    params:
+      regex: "^[A-Z0-9][A-Z0-9\\-_/]{3,40}$"
+
+  - id: transaction_id_generic
+    field: transaction_id
+    rule: regex
+    severity: warning
+    params:
+      regex: "^[A-Z0-9][A-Z0-9\\-_/]{4,64}$"
+
+  # ----------------------------
+  # Amount sanity checks
+  # ----------------------------
+  - id: total_amount_range
+    field: total_amount
+    rule: numeric_range
+    severity: warning
+    params:
+      min: 0
+      max: 1000000
+
+  - id: amount_due_range
+    field: amount_due
+    rule: numeric_range
+    severity: warning
+    params:
+      min: 0
+      max: 1000000
+
+  # ----------------------------
+  # Billing period sanity
+  # ----------------------------
+  - id: billing_period_date_range
+    field: billing_period_start
+    rule: date_range
+    severity: info
+    params:
+      # Domain hint: telecom billing cycles are typically <= 45 days
+      max_span_days: 45
+
+  # ----------------------------
+  # Tax percent sanity (if extracted)
+  # ----------------------------
+  - id: tax_rate_percent
+    field: tax_rate_percent
+    rule: numeric_range
+    severity: info
+    params:
+      min: 0
+      max: 40
+
+hints:
+  extraction:
+    # Shape hints to help heuristic extractors / LLM
+    merchant_phone:
+      pattern: "phone_e164_loose"
+    account_id:
+      pattern: "alphanumeric"
+      max_length: 32
+    customer_id:
+      pattern: "alphanumeric"
+      max_length: 32
+    service_type:
+      allowed_values: ["mobile", "broadband", "isp", "dth", "roaming", "recharge", "device_emi", "other"]
+    plan_type:
+      allowed_values: ["prepaid", "postpaid", "hybrid", "unknown"]
+    billing_cycle:
+      pattern: "month_or_cycle"
+    account_number:
+      pattern: "alphanumeric"
+      max_length: 32
+    subscriber_id:
+      pattern: "alphanumeric"
+      max_length: 32
+    units_consumed:
+      pattern: "numeric"
+    data_used:
+      pattern: "data_volume"
+      examples: ["1.5 GB", "850MB", "2,048 MB"]
+    currency_code:
+      pattern: "iso_4217"
+
+  llm:
+    enabled: true
+    when_confidence_below: 0.55
+    prompt_stub: "domainpacks/prompts/telecom_intent_and_fields.md"
+
+audit:
+  rationale: >
+    Telecom docs are frequently used for reimbursements/claims and vary heavily across countries.
+    This pack avoids keyword dependence and focuses on cross-geo structural expectations:
+    identity (account/phone), references (invoice/txn id), dates (bill/transaction/due), and amounts.
+  examples:
+    - "Postpaid mobile bill (monthly invoice)"
+    - "Broadband/ISP bill (billing period + address)"
+    - "Prepaid recharge receipt (txn id + amount + phone)"
+    - "Roaming add-on charges invoice"
+    - "Telecom payment receipt / confirmation"

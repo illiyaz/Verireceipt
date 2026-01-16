@@ -11,7 +11,7 @@ This allows the pipeline to continue even without OCR,
 using other signals (metadata, structure, etc.).
 """
 
-from typing import List
+from typing import List, Dict, Tuple
 import logging
 import os
 
@@ -54,20 +54,45 @@ def _get_easyocr_reader():
     return _easyocr_reader
 
 
-def _run_easyocr(img: Image.Image) -> str:
-    """Run EasyOCR on a single image"""
+def _run_easyocr(img: Image.Image) -> tuple[str, float, list]:
+    """
+    Run EasyOCR on a single image with confidence scoring.
+    
+    Returns:
+        (text, avg_confidence, detailed_results)
+    """
     try:
         reader = _get_easyocr_reader()
         # Convert PIL to numpy array
         img_array = np.array(img)
-        # Run OCR
-        results = reader.readtext(img_array, detail=0)  # detail=0 returns just text
+        # Run OCR with detail=1 to get confidence scores
+        results = reader.readtext(img_array, detail=1)
+        
+        if not results:
+            return "", 0.0, []
+        
+        # Extract text and confidence
+        text_blocks = []
+        confidences = []
+        detailed = []
+        
+        for (bbox, text, conf) in results:
+            text_blocks.append(text)
+            confidences.append(conf)
+            detailed.append({
+                "text": text,
+                "confidence": conf,
+                "bbox": bbox
+            })
+        
         # Join all text blocks with newlines
-        text = '\n'.join(results)
-        return text
+        full_text = '\n'.join(text_blocks)
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+        
+        return full_text, avg_confidence, detailed
     except Exception as e:
         logger.warning(f"EasyOCR failed: {e}")
-        return ""
+        return "", 0.0, []
 
 
 def _run_tesseract(img: Image.Image) -> str:
@@ -83,63 +108,89 @@ def _run_tesseract(img: Image.Image) -> str:
         return ""
 
 
-def run_ocr_on_images(images: List[Image.Image]) -> List[str]:
+def run_ocr_on_images(images: List[Image.Image], preprocess: bool = True) -> Tuple[List[str], Dict]:
     """
-    Runs OCR on each page image and returns a list of strings.
+    Run OCR on a list of images with preprocessing and confidence scoring.
     
-    OCR Engine Selection (priority order):
-    1. EasyOCR (if available and OCR_ENGINE != 'tesseract')
-    2. Tesseract (fallback or if OCR_ENGINE == 'tesseract')
+    Automatically selects best available OCR engine:
+    1. EasyOCR (if available)
+    2. Tesseract (fallback)
     3. Empty strings (if no OCR available)
     
-    Environment Variables:
-    - OCR_ENGINE: 'auto' (default), 'easyocr', 'tesseract'
+    Args:
+        images: List of PIL Images
+        preprocess: Apply image preprocessing for better OCR quality
     
     Returns:
-        List of OCR text strings (one per image)
+        (ocr_texts, ocr_metadata)
+        ocr_metadata contains confidence scores and preprocessing info
     """
-    texts: List[str] = []
+    if not images:
+        return [], {}
     
-    # Determine which OCR engine to use
-    use_easyocr = False
-    use_tesseract = False
+    # Import preprocessing if needed
+    if preprocess:
+        try:
+            from app.pipelines.image_preprocessing import preprocess_batch
+            images_processed, preprocessing_meta = preprocess_batch(images, auto_detect=True)
+            logger.info(f"✅ Image preprocessing applied to {len(images)} images")
+        except ImportError as e:
+            logger.warning(f"⚠️ Image preprocessing not available: {e}. Using original images.")
+            images_processed = images
+            preprocessing_meta = [{}] * len(images)
+        except Exception as e:
+            logger.error(f"❌ Image preprocessing failed: {e}. Using original images.")
+            images_processed = images
+            preprocessing_meta = [{}] * len(images)
+    else:
+        images_processed = images
+        preprocessing_meta = [{}] * len(images)
     
-    if OCR_ENGINE == "easyocr" and HAS_EASYOCR:
-        use_easyocr = True
-        logger.info("Using EasyOCR (forced by OCR_ENGINE=easyocr)")
-    elif OCR_ENGINE == "tesseract" and HAS_TESSERACT:
-        use_tesseract = True
-        logger.info("Using Tesseract (forced by OCR_ENGINE=tesseract)")
-    elif OCR_ENGINE == "auto":
-        # Auto-select: prefer EasyOCR if available
-        if HAS_EASYOCR:
-            use_easyocr = True
-            logger.info("Using EasyOCR (auto-selected, better accuracy)")
-        elif HAS_TESSERACT:
-            use_tesseract = True
-            logger.info("Using Tesseract (auto-selected, EasyOCR not available)")
+    # Determine which engine to use
+    use_easyocr = HAS_EASYOCR and OCR_ENGINE in ["auto", "easyocr"]
+    use_tesseract = HAS_TESSERACT and (OCR_ENGINE == "tesseract" or (OCR_ENGINE == "auto" and not use_easyocr))
     
-    # If no OCR available, return empty strings
     if not use_easyocr and not use_tesseract:
-        logger.warning(
-            "OCR skipped: No OCR engine available. "
-            "Install easyocr (pip install easyocr) or tesseract. "
-            "Returning empty OCR results."
-        )
-        return [""] * len(images)
+        logger.warning("⚠️ No OCR engine available. Install easyocr or pytesseract.")
+        return [""] * len(images), {"engine": "none", "confidences": [0.0] * len(images)}
     
-    # Run OCR on each image
-    for idx, img in enumerate(images):
+    results = []
+    confidences = []
+    detailed_results = []
+    
+    for i, img in enumerate(images_processed):
+        logger.info(f"Running OCR on image {i+1}/{len(images)}...")
+        
         if use_easyocr:
-            text = _run_easyocr(img)
-        else:
+            text, conf, detailed = _run_easyocr(img)
+            engine = "easyocr"
+        elif use_tesseract:
             text = _run_tesseract(img)
-        
-        texts.append(text)
-        
-        if text:
-            logger.debug(f"OCR extracted {len(text)} characters from image {idx}")
+            conf = None  # Tesseract doesn't provide confidence - use None not 0.0
+            detailed = []
+            engine = "tesseract"
         else:
-            logger.warning(f"OCR returned empty text for image {idx}")
+            text = ""
+            conf = None  # OCR not available - use None not 0.0
+            detailed = []
+            engine = "none"
+        
+        results.append(text)
+        confidences.append(conf)
+        detailed_results.append(detailed)
+        conf_str = f"{conf:.2f}" if conf is not None else "N/A"
+        logger.info(f"✅ OCR completed for image {i+1} ({len(text)} chars, conf={conf_str})")
     
-    return texts
+    # Calculate average confidence, filtering out None values
+    valid_confidences = [c for c in confidences if c is not None]
+    avg_confidence = sum(valid_confidences) / len(valid_confidences) if valid_confidences else None
+    
+    ocr_metadata = {
+        "engine": engine,
+        "confidences": confidences,
+        "avg_confidence": avg_confidence,
+        "preprocessing": preprocessing_meta,
+        "detailed_results": detailed_results,
+    }
+    
+    return results, ocr_metadata

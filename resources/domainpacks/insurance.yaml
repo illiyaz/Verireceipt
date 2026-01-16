@@ -1,0 +1,165 @@
+# resources/domainpacks/insurance.yaml
+# Domain pack = expectations + validation hints (NOT keywords)
+# Language-specific keyword triggers live in langpacks/*.yaml
+
+id: insurance
+name: Insurance / Policy / Premium / Claims
+version: 1.0.0
+description: >
+  Insurance-related documents: policy schedule/certificate, premium receipt,
+  renewal notice, claim intimation, claim settlement letters, coverage summaries.
+  Focuses on structural completeness (policy identifiers, insured party, period,
+  premium/amounts, insurer identity) across countries/providers.
+
+applies_to:
+  intents:
+    # DocumentIntent v2
+    - claim
+    - reimbursement
+    - proof_of_payment
+    - subscription
+    - purchase
+  doc_families:
+    - TRANSACTIONAL
+    - PAYMENT
+  doc_subtypes:
+    - INSURANCE
+    - PAYMENT_RECEIPT
+    - REFUND_RECEIPT
+    - STATEMENT
+  regions: []  # global default
+
+expectations:
+  # At least one group must match (OR)
+  required_any:
+    # Either a policy identifier or a claim identifier (depending on doc)
+    - ["policy_number", "policy_id", "certificate_number", "member_id"]
+    - ["claim_number", "claim_id", "reference_number"]
+
+  # All groups must match (AND)
+  required_all:
+    # Insurer identity OR intermediary identity
+    - ["insurer_name", "insurance_company", "provider_name"]
+    # Some date range (policy period) or an issuance date
+    - ["issue_date", "policy_start_date", "policy_end_date", "renewal_date"]
+
+  preferred:
+    # Parties
+    - ["insured_name", "policy_holder_name", "member_name"]
+    - ["insured_address", "policy_holder_address"]
+    - ["insured_phone", "insured_email"]
+
+    # Policy structure
+    - ["plan_name", "product_name", "policy_type"]     # health/motor/travel/life etc
+    - ["coverage_summary", "sum_insured", "coverage_amount"]
+    - ["deductible", "copay", "coinsurance"]           # common esp. health
+
+    # Payments
+    - ["premium_amount", "total_amount", "amount_paid"]
+    - ["currency_code"]
+    - ["payment_method", "transaction_id", "utr", "rrn"]
+
+    # Claim specifics (if claim docs)
+    - ["claim_amount", "approved_amount", "settled_amount", "rejected_amount"]
+    - ["claim_date", "loss_date", "incident_date"]
+    - ["reason_code", "remarks"]
+
+    # Compliance / tax
+    - ["tax_amount", "gstin", "vat_number", "tax_id"]
+
+  forbidden: []  # keep permissive; formats vary significantly
+
+validators:
+  # ----------------------------
+  # Policy number (generic)
+  # ----------------------------
+  - id: policy_number_generic
+    field: policy_number
+    rule: regex
+    severity: warning
+    params:
+      # typical alnum with separators, length bounded
+      regex: "^[A-Z0-9][A-Z0-9\\-_/]{5,40}$"
+
+  - id: claim_number_generic
+    field: claim_number
+    rule: regex
+    severity: warning
+    params:
+      regex: "^[A-Z0-9][A-Z0-9\\-_/]{4,40}$"
+
+  # ----------------------------
+  # Amount sanity
+  # ----------------------------
+  - id: premium_amount_range
+    field: premium_amount
+    rule: numeric_range
+    severity: warning
+    params:
+      min: 0
+      max: 100000000
+
+  - id: sum_insured_range
+    field: sum_insured
+    rule: numeric_range
+    severity: warning
+    params:
+      min: 0
+      max: 1000000000
+
+  - id: claim_amount_range
+    field: claim_amount
+    rule: numeric_range
+    severity: warning
+    params:
+      min: 0
+      max: 100000000
+
+  # ----------------------------
+  # Date sanity
+  # ----------------------------
+  - id: policy_period_order
+    field: policy_end_date
+    rule: date_after
+    severity: info
+    params:
+      after_field: policy_start_date
+
+hints:
+  extraction:
+    policy_type:
+      allowed_values:
+        - health
+        - motor
+        - travel
+        - life
+        - property
+        - liability
+        - marine
+        - other
+        - unknown
+    currency_code:
+      expected_format: "ISO_4217"
+    identifiers:
+      policy_number:
+        pattern: "alphanumeric_separators"
+      claim_number:
+        pattern: "alphanumeric_separators"
+
+  llm:
+    enabled: true
+    when_confidence_below: 0.55
+    prompt_stub: "domainpacks/prompts/insurance_intent_and_fields.md"
+
+audit:
+  rationale: >
+    Insurance documents usually revolve around stable identifiers (policy/claim),
+    a responsible entity (insurer/provider), a coverage period, and either premium
+    payment evidence or claim settlement details. This pack validates those
+    expectations while allowing wide layout variation across regions.
+  examples:
+    - "Policy schedule / certificate"
+    - "Premium payment receipt"
+    - "Renewal notice"
+    - "Claim intimation"
+    - "Claim settlement letter / EOB-style summary"

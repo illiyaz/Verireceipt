@@ -1,0 +1,156 @@
+# resources/domainpacks/hr_expense.yaml
+# Domain pack = expectations + validation hints (NOT keywords)
+# Language-specific keyword triggers live in langpacks/*.yaml
+
+id: hr_expense
+name: HR / Employee Expense / Reimbursement
+version: 1.0.0
+description: >
+  Employee expense, reimbursement, travel claims, petty cash, corporate card
+  statements, and HR-related payout documents. Designed for expense audits,
+  reimbursements, and employer verification across regions.
+
+applies_to:
+  intents:
+    # DocumentIntent v2
+    - reimbursement
+    - purchase
+    - proof_of_payment
+    - claim
+  doc_families:
+    - TRANSACTIONAL
+    - PAYMENT
+  doc_subtypes:
+    - EXPENSE_RECEIPT
+    - EXPENSE_REPORT
+    - PAYMENT_RECEIPT
+    - BANK_SLIP
+    - STATEMENT
+    - MISC
+  regions: []  # global default
+
+expectations:
+  # At least one group must match (OR)
+  required_any:
+    # Either employee identity or report/claim identifier
+    - ["employee_name", "employee_id", "claimant_name"]
+    - ["expense_report_id", "claim_id", "reference_number"]
+
+  # All groups must match (AND)
+  required_all:
+    # Some date anchor
+    - ["expense_date", "transaction_date", "submission_date"]
+    # Monetary evidence
+    - ["amount", "total_amount", "reimbursable_amount"]
+
+  preferred:
+    # Employee / org
+    - ["employee_name", "employee_id", "department"]
+    - ["employer_name", "company_name"]
+    - ["cost_center", "project_code"]
+
+    # Expense structure
+    - ["expense_category", "expense_type"]   # travel, meals, lodging, office, etc
+    - ["merchant_name", "vendor_name"]
+    - ["merchant_address"]
+
+    # Payment / settlement
+    - ["payment_method", "card_last4", "transaction_id", "utr", "rrn"]
+    - ["currency_code"]
+    - ["exchange_rate"]
+
+    # Travel-specific (optional)
+    - ["from_location", "to_location"]
+    - ["travel_start_date", "travel_end_date"]
+
+    # Compliance / policy
+    - ["policy_limit", "approved_amount", "approval_status"]
+    - ["approver_name", "approval_date"]
+
+    # Tax
+    - ["tax_amount", "gstin", "vat_number"]
+
+  forbidden: []  # HR receipts vary widely; keep permissive
+
+validators:
+  # ----------------------------
+  # Amount sanity
+  # ----------------------------
+  - id: expense_amount_range
+    field: amount
+    rule: numeric_range
+    severity: warning
+    params:
+      min: 0
+      max: 10000000
+
+  - id: reimbursable_amount_range
+    field: reimbursable_amount
+    rule: numeric_range
+    severity: warning
+    params:
+      min: 0
+      max: 10000000
+
+  # ----------------------------
+  # Currency sanity
+  # ----------------------------
+  - id: currency_code_format
+    field: currency_code
+    rule: enum
+    severity: info
+    params:
+      allowed: "ISO_4217"
+
+  # ----------------------------
+  # Date sanity
+  # ----------------------------
+  - id: expense_before_submission
+    field: submission_date
+    rule: date_after
+    severity: info
+    params:
+      after_field: expense_date
+
+hints:
+  extraction:
+    expense_category:
+      allowed_values:
+        - meals
+        - travel
+        - lodging
+        - fuel
+        - office_supplies
+        - telecom
+        - software
+        - miscellaneous
+        - unknown
+    payment_method:
+      allowed_values:
+        - cash
+        - credit_card
+        - debit_card
+        - bank_transfer
+        - upi
+        - corporate_card
+        - unknown
+    currency_code:
+      expected_format: "ISO_4217"
+
+  llm:
+    enabled: true
+    when_confidence_below: 0.6
+    prompt_stub: "domainpacks/prompts/hr_expense_intent_and_fields.md"
+
+audit:
+  rationale: >
+    HR expense documents must reliably establish who incurred the expense,
+    when it occurred, how much was spent, and whether it is reimbursable.
+    This pack emphasizes identity, amount, and timing while allowing
+    wide variation in merchant format and layout.
+  examples:
+    - "Employee meal receipt"
+    - "Travel expense claim"
+    - "Hotel invoice attached to expense report"
+    - "Corporate card statement line"
+    - "Petty cash voucher"

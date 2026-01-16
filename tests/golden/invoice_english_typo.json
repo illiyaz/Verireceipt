@@ -1,0 +1,53 @@
+{
+  "name": "invoice_english_typo",
+  "description": "English invoice with typo 'maximun' - R10 should fire (lang=en, conf>0.8)",
+  "input": {
+    "full_text": "INVOICE\n\nInvoice Number: INV-2024-5678\nDate: January 15, 2024\n\nBill To:\nGlobal Enterprises Inc\n456 Commerce Street\nNew York, NY 10001\n\nDescription          Quantity    Unit Price    Amount\nProfessional Services    40 hrs    $150.00    $6,000.00\nConsulting Fee           1         $2,500.00  $2,500.00\n\nSubtotal:                                      $8,500.00\nTax (8%):                                      $680.00\nMaximun Amount Due:                            $9,180.00\n\nPayment Terms: Net 30 days\nThank you for your business!",
+    "has_line_items": true,
+    "has_currency": true,
+    "currency_symbols": ["$"],
+    "merchant_candidate": "Global Enterprises Inc",
+    "lang_guess": "en",
+    "lang_confidence": 0.95,
+    "lang_source": "fasttext",
+    "doc_profile_confidence": 0.88,
+    "text_lines": [
+      "INVOICE",
+      "",
+      "Invoice Number: INV-2024-5678",
+      "Date: January 15, 2024",
+      "",
+      "Bill To:",
+      "Global Enterprises Inc",
+      "456 Commerce Street",
+      "New York, NY 10001",
+      "",
+      "Description          Quantity    Unit Price    Amount",
+      "Professional Services    40 hrs    $150.00    $6,000.00",
+      "Consulting Fee           1         $2,500.00  $2,500.00",
+      "",
+      "Subtotal:                                      $8,500.00",
+      "Tax (8%):                                      $680.00",
+      "Maximun Amount Due:                            $9,180.00",
+      "",
+      "Payment Terms: Net 30 days",
+      "Thank you for your business!"
+    ]
+  },
+  "expected": {
+    "label": "real",
+    "score_max": 0.05,
+    "rules_fired": ["R10_TEMPLATE_QUALITY"],
+    "rules_not_fired": [],
+    "evidence_required": {
+      "R10_TEMPLATE_QUALITY": {
+        "keyword_typos": [
+          {
+            "expected": "maximum",
+            "found": "maximun"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import threading
+import json
 
 # Thread-local storage for DB connections
 _thread_local = threading.local()
@@ -103,3 +104,118 @@ def close_connection():
     if hasattr(_thread_local, "conn"):
         _thread_local.conn.close()
         delattr(_thread_local, "conn")
+
+# ---------------------------------------------------------------------------
+# Geo / VAT knowledge queries
+# ---------------------------------------------------------------------------
+
+def _active_clause() -> str:
+    return "(effective_to IS NULL OR date(effective_to) >= date('now'))"
+
+
+def query_geo_profile(country_code: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch active geo profile for a country.
+    """
+    conn = get_connection()
+    cursor = conn.execute(
+        f"""
+        SELECT *
+        FROM geo_profiles
+        WHERE country_code = ?
+          AND {_active_clause()}
+        ORDER BY effective_from DESC
+        LIMIT 1
+        """,
+        (country_code,),
+    )
+    row = cursor.fetchone()
+    return dict(row) if row else None
+
+
+def query_vat_rules(country_code: str) -> List[Dict[str, Any]]:
+    """
+    Fetch active VAT/GST rules for a country.
+    """
+    conn = get_connection()
+    cursor = conn.execute(
+        f"""
+        SELECT *
+        FROM vat_rules
+        WHERE country_code = ?
+          AND {_active_clause()}
+        ORDER BY rate DESC
+        """,
+        (country_code,),
+    )
+    return [dict(r) for r in cursor.fetchall()]
+
+
+def query_currency_countries(currency: str) -> List[Dict[str, Any]]:
+    """
+    Fetch countries commonly associated with a currency.
+    """
+    conn = get_connection()
+    cursor = conn.execute(
+        f"""
+        SELECT *
+        FROM currency_country_map
+        WHERE currency = ?
+          AND {_active_clause()}
+        ORDER BY is_primary DESC, weight DESC
+        """,
+        (currency,),
+    )
+    return [dict(r) for r in cursor.fetchall()]
+
+
+def query_doc_expectations(
+    *,
+    country_code: str,
+    region: Optional[str],
+    doc_family: str,
+    doc_subtype: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Resolve document expectations with fallback:
+    COUNTRY → REGION → GLOBAL.
+    """
+    conn = get_connection()
+
+    def _fetch(scope: str, code: str) -> Optional[Dict[str, Any]]:
+        cur = conn.execute(
+            f"""
+            SELECT *
+            FROM doc_expectations_by_geo
+            WHERE geo_scope = ?
+              AND geo_code = ?
+              AND doc_family = ?
+              AND doc_subtype = ?
+              AND {_active_clause()}
+            ORDER BY effective_from DESC
+            LIMIT 1
+            """,
+            (scope, code, doc_family, doc_subtype),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    row = _fetch("COUNTRY", country_code)
+    if row:
+        return row
+
+    if region:
+        row = _fetch("REGION", region)
+        if row:
+            return row
+
+    return _fetch("GLOBAL", "*")
+
+# NOTE:
+# Tables expected by this module:
+# - geo_profiles
+# - vat_rules
+# - currency_country_map
+# - doc_expectations_by_geo
+#
+# These are bootstrapped by app.geo.bootstrap.bootstrap_geo_db

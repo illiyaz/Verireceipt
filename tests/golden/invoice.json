@@ -1,0 +1,31 @@
+{
+  "name": "Commercial Invoice – Happy Path",
+  "description": "Clean commercial invoice with subtotal, tax, shipping that reconcile",
+  "input": {
+    "doc_class": "COMMERCIAL_INVOICE",
+    "doc_subtype_guess": "COMMERCIAL_INVOICE",
+    "doc_family_guess": "INVOICE",
+    "doc_profile_confidence": 0.92,
+    "total_amount": 374.0,
+    "subtotal": 300.0,
+    "tax_amount": 54.0,
+    "shipping_amount": 20.0,
+    "discount_amount": null,
+    "has_line_items": false,
+    "is_credit_note": false,
+    "ocr_confidence": 0.80,
+    "has_date": true,
+    "merchant_candidate": "Acme Corp"
+  },
+  "expected": {
+    "decision": "real",
+    "score_max": 0.35,
+    "rules_fired": [],
+    "rules_not_fired": [
+      "R7_TOTAL_MISMATCH",
+      "R7B_INVOICE_TOTAL_RECONCILIATION",
+      "R7C_CREDIT_NOTE_RECONCILIATION"
+    ],
+    "notes": "Clean invoice with shipping should reconcile perfectly"
+  }
+}

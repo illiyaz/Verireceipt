@@ -30,6 +30,7 @@ def signal_pdf_producer_suspicious(
     
     if suspicious_producer:
         return SignalV1(
+            name="template.pdf_producer_suspicious",
             status="TRIGGERED",
             confidence=0.6,  # Medium confidence - producer alone isn't definitive
             evidence={
@@ -41,6 +42,7 @@ def signal_pdf_producer_suspicious(
         )
     
     return SignalV1(
+        name="template.pdf_producer_suspicious",
         status="NOT_TRIGGERED",
         confidence=0.8,
         evidence={
@@ -70,6 +72,7 @@ def signal_template_quality_low(
     # Gate on confidence
     if doc_profile_confidence < 0.55:
         return SignalV1(
+            name="template.quality_low",
             status="GATED",
             confidence=0.0,
             evidence={},
@@ -83,6 +86,7 @@ def signal_template_quality_low(
     # Trigger if quality score is low (< 0.6)
     if quality_score < 0.6:
         return SignalV1(
+            name="template.quality_low",
             status="TRIGGERED",
             confidence=0.7,
             evidence={
@@ -94,6 +98,7 @@ def signal_template_quality_low(
         )
     
     return SignalV1(
+        name="template.quality_low",
         status="NOT_TRIGGERED",
         confidence=0.8,
         evidence={

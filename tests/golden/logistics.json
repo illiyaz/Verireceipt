@@ -1,0 +1,28 @@
+{
+  "name": "Logistics Document – Safe Handling",
+  "description": "Shipping bill / delivery note that should not trigger invoice reconciliation",
+  "input": {
+    "doc_class": "SHIPPING_BILL",
+    "doc_subtype_guess": "DELIVERY_NOTE",
+    "doc_family_guess": "LOGISTICS",
+    "doc_profile_confidence": 0.78,
+    "total_amount": 1500.0,
+    "has_line_items": true,
+    "line_items_sum": 1500.0,
+    "is_credit_note": false,
+    "ocr_confidence": 0.70,
+    "has_date": true,
+    "merchant_candidate": "FedEx"
+  },
+  "expected": {
+    "decision": "real",
+    "score_max": 0.30,
+    "rules_fired": [],
+    "rules_not_fired": [
+      "R7_TOTAL_MISMATCH",
+      "R7B_INVOICE_TOTAL_RECONCILIATION",
+      "R7C_CREDIT_NOTE_RECONCILIATION"
+    ],
+    "notes": "Logistics docs should not trigger invoice reconciliation rules"
+  }
+}

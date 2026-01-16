@@ -1,0 +1,29 @@
+{
+  "name": "POS Receipt – Happy Path",
+  "description": "Clean POS receipt with line items that reconcile correctly",
+  "input": {
+    "doc_class": "POS_RECEIPT",
+    "doc_subtype_guess": "POS_RETAIL",
+    "doc_family_guess": "TRANSACTIONAL",
+    "doc_profile_confidence": 0.92,
+    "total_amount": 374.0,
+    "has_line_items": true,
+    "line_items_sum": 374.0,
+    "line_items_confidence": 0.85,
+    "total_mismatch": false,
+    "ocr_confidence": 0.80,
+    "has_date": true,
+    "merchant_candidate": "Target Store #1234"
+  },
+  "expected": {
+    "decision": "real",
+    "score_max": 0.20,
+    "rules_fired": [],
+    "rules_not_fired": [
+      "R7_TOTAL_MISMATCH",
+      "R7B_INVOICE_TOTAL_RECONCILIATION",
+      "R7C_CREDIT_NOTE_RECONCILIATION"
+    ],
+    "notes": "Clean POS receipt should have minimal score (no anomalies)"
+  }
+}

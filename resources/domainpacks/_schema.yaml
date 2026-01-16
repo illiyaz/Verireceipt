@@ -1,0 +1,187 @@
+# Domain Pack Schema
+# ------------------
+# This file defines the STRUCTURE of all domain packs.
+# Domain packs must NOT contain scoring logic or language-specific keywords.
+# They declare expectations and validation hints only.
+#
+# Domain packs are consumed by:
+# - heuristic rules
+# - LLM profilers (optional)
+# - audit / explainability output
+#
+# They MUST remain declarative.
+
+version: 1.0
+
+domainpack:
+
+  # ------------------
+  # Identity
+  # ------------------
+  id:
+    type: string
+    description: Stable identifier (e.g. telecom, healthcare)
+
+  name:
+    type: string
+    description: Human-readable name
+
+  version:
+    type: string
+    description: Domain pack version (semver recommended)
+
+  description:
+    type: string
+    optional: true
+
+
+  # ------------------
+  # Applicability
+  # ------------------
+  applies_to:
+    description: When this domain pack is relevant
+    fields:
+      intents:
+        type: list[string]
+        description: >
+          DocumentIntent.intent values this domain applies to
+          (purchase, reimbursement, claim, transport, proof_of_payment, etc)
+
+      doc_families:
+        type: list[string]
+        optional: true
+        description: Optional restriction by doc family
+
+      doc_subtypes:
+        type: list[string]
+        optional: true
+        description: Optional restriction by doc subtype
+
+      regions:
+        type: list[string]
+        optional: true
+        description: Optional geo restriction (ISO country/region codes)
+
+
+  # ------------------
+  # Field Expectations
+  # ------------------
+  expectations:
+    description: Declarative expectations about fields
+
+    required_any:
+      type: list[list[string]]
+      description: >
+        At least one group must be satisfied.
+        Each inner list represents interchangeable fields.
+      example:
+        - ["total_amount", "amount_due"]
+        - ["invoice_number", "bill_number"]
+
+    required_all:
+      type: list[list[string]]
+      description: >
+        All groups must be satisfied.
+        Each group may have interchangeable fields.
+
+    preferred:
+      type: list[list[string]]
+      description: >
+        Optional but common fields.
+        Missing these should not fail validation.
+
+    forbidden:
+      type: list[string]
+      optional: true
+      description: Fields that should never appear for this domain
+
+
+  # ------------------
+  # Validators
+  # ------------------
+  validators:
+    type: list[object]
+    description: Field-level validation hints
+
+    schema:
+      id:
+        type: string
+        description: Stable validator identifier
+
+      field:
+        type: string
+        description: Field name being validated
+
+      rule:
+        type: enum
+        values:
+          - regex
+          - numeric_range
+          - date_range
+          - checksum
+          - enum
+          - custom
+
+      severity:
+        type: enum
+        values:
+          - info
+          - warning
+          - hard_fail
+
+      params:
+        type: map[string, any]
+        description: Rule-specific parameters
+        example:
+          regex: "^[A-Z0-9-]+$"
+          min: 0
+          max: 100000
+          allowed_values: ["PAID", "UNPAID"]
+
+
+  # ------------------
+  # Domain Hints (Non-binding)
+  # ------------------
+  hints:
+    description: Soft guidance for extraction, profiling, and LLMs
+
+    extraction:
+      type: map[string, any]
+      optional: true
+      description: >
+        Field shape hints (NOT keywords)
+      example:
+        invoice_number:
+          pattern: alphanumeric
+          max_length: 32
+
+    llm:
+      optional: true
+      fields:
+        enabled:
+          type: boolean
+          description: Whether LLM profiling is allowed for this domain
+
+        when_confidence_below:
+          type: number
+          description: Confidence threshold to invoke LLM
+
+        prompt_stub:
+          type: string
+          optional: true
+          description: Reference to prompt template (not inline prompt)
+
+
+  # ------------------
+  # Audit & Explainability
+  # ------------------
+  audit:
+    optional: true
+    fields:
+      rationale:
+        type: string
+        description: Why this domain exists / how it is used
+
+      examples:
+        type: list[string]
+        description: Example document types for humans

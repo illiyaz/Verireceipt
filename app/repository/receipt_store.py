@@ -1,3 +1,8 @@
+#
+# NOTE:
+# This repository intentionally stores geo/VAT decisions as JSON evidence
+# inside Analysis.audit_events for explainability and ML training.
+#
 # app/repository/receipt_store.py
 """
 Repository layer for storing VeriReceipt analyses and feedback.
@@ -294,9 +299,18 @@ class DbReceiptStore(ReceiptStore):
             features = decision.features
             
             # Serialize audit_events and events to JSON
-            audit_events_json = json.dumps([asdict(e) for e in decision.audit_events]) if decision.audit_events else None
-            events_json = json.dumps(decision.events) if decision.events else None
-            
+            audit_events_json = (
+                json.dumps([asdict(e) for e in decision.audit_events])
+                if decision.audit_events
+                else None
+            )
+
+            events_json = (
+                json.dumps(decision.events, ensure_ascii=False)
+                if decision.events
+                else None
+            )
+
             analysis = db_models.Analysis(
                 receipt_id=receipt.id,
                 engine_label=decision.label,
@@ -324,6 +338,7 @@ class DbReceiptStore(ReceiptStore):
                     **(features.layout_features if features else {}),
                     **(features.forensic_features if features else {}),
                 } if features is not None else None,
+                geo_country=decision.geo_country if hasattr(decision, "geo_country") else None,
             )
 
             session.add(analysis)

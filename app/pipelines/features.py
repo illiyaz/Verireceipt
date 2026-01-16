@@ -28,7 +28,42 @@ from app.signals import (
     signal_merchant_confidence_low,
 )
 from app.telemetry.address_metrics import record_address_features
+
 logger = logging.getLogger(__name__)
+
+
+# --- Helper: Normalize detector output to SignalV1 --------------------------------
+def normalize_signal(name: str, raw) -> SignalV1:
+    """
+    Normalize any detector output into the unified SignalV1 contract.
+
+    Accepts:
+    - SignalV1 (returned as-is)
+    - dict-like legacy outputs
+    - None or unknown types (safely mapped to UNKNOWN)
+
+    This adapter allows incremental migration of detectors
+    without breaking the feature pipeline.
+    """
+    if isinstance(raw, SignalV1):
+        return raw
+
+    if isinstance(raw, dict):
+        return SignalV1(
+            name=name,
+            status=raw.get("status", "UNKNOWN"),
+            confidence=float(raw.get("confidence", 0.0)),
+            evidence=raw.get("evidence", []) or [],
+            interpretation=raw.get("interpretation"),
+        )
+
+    return SignalV1(
+        name=name,
+        status="UNKNOWN",
+        confidence=0.0,
+        evidence=[],
+        interpretation=None,
+    )
 
 
 # NOTE:
@@ -1536,17 +1571,6 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     # Compute merchant confidence (heuristic scoring)
     merchant_confidence = _compute_merchant_confidence(merchant_candidate or "", lines, full_text)
     
-    # Emit merchant signals
-    try:
-        signals["merchant.extraction_weak"] = signal_merchant_extraction_weak(
-            merchant_candidate, merchant_confidence, conf
-        ).dict()
-        signals["merchant.confidence_low"] = signal_merchant_confidence_low(
-            merchant_confidence
-        ).dict()
-    except Exception as e:
-        logger.warning(f"Failed to emit merchant signals: {e}")
-    
     # Safety clamp: never treat low-confidence subtype as truth
     try:
         conf = float(doc_subtype_confidence) if doc_subtype_confidence is not None else 0.0
@@ -1555,9 +1579,6 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     
     # NOTE: conf must be computed before any address-derived features
     # (V2.1 consistency + V2.2 multi-address both require doc_profile_confidence)
-    
-    # Initialize unified signals dict
-    signals = {}
     
     # Address validation (geo-agnostic, structure-based)
     address_profile = validate_address(full_text)
@@ -1576,14 +1597,6 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         doc_profile_confidence=conf,
     )
     text_features["multi_address_profile"] = multi_address_profile
-    
-    # Emit unified signals (V1 contract)
-    try:
-        signals["addr.structure"] = signal_addr_structure(address_profile).dict()
-        signals["addr.merchant_consistency"] = signal_addr_merchant_consistency(merchant_address_consistency).dict()
-        signals["addr.multi_address"] = signal_addr_multi_address(multi_address_profile).dict()
-    except Exception as e:
-        logger.warning(f"Failed to emit address signals: {e}")
     
     # Optional: Record address telemetry (controlled by ENABLE_ADDRESS_TELEMETRY env var)
     import os
@@ -1652,14 +1665,6 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         image_height = raw.images[0].height
 
     suspicious_producer = _check_suspicious_producer(meta)
-    
-    # Emit PDF/template signals (early, before conf is computed)
-    try:
-        signals["template.pdf_producer_suspicious"] = signal_pdf_producer_suspicious(
-            meta, suspicious_producer
-        ).dict()
-    except Exception as e:
-        logger.warning(f"Failed to emit PDF producer signal: {e}")
     
     file_features: Dict[str, Any] = {
         "file_size_bytes": raw.file_size_bytes,
@@ -1803,24 +1808,6 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         )
     except Exception:
         total_mismatch = False
-    
-    # Emit amount signals
-    try:
-        signals["amount.total_mismatch"] = signal_amount_total_mismatch(
-            total_amount, items_sum, has_line_items, total_mismatch, conf
-        ).dict()
-        signals["amount.missing"] = signal_amount_missing(
-            total_amount, has_currency, doc_subtype_guess_raw, conf
-        ).dict()
-        # Semantic override signal (if semantic amounts were used)
-        if 'semantic_amounts' in locals() and semantic_amounts:
-            signals["amount.semantic_override"] = signal_amount_semantic_override(
-                semantic_amounts, 
-                text_features.get("total_amount"),  # Original before override
-                semantic_amounts.total_amount
-            ).dict()
-    except Exception as e:
-        logger.warning(f"Failed to emit amount signals: {e}")
 
     # Extract all dates for conflict detection
     all_dates = _extract_all_dates(full_text)
@@ -2077,11 +2064,83 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         doc_profile["lang_confidence"] = 0.0
         doc_profile["lang_source"] = "fallback"
 
+    # ------------------------------------------------------------------
+    # Unified Signal Emission (V1)
+    # ------------------------------------------------------------------
+    unified_signals: Dict[str, SignalV1] = {}
+
+    # --- Address signals ---
+    try:
+        unified_signals["addr.structure"] = normalize_signal(
+            "addr.structure",
+            signal_addr_structure(address_profile),
+        )
+        unified_signals["addr.merchant_consistency"] = normalize_signal(
+            "addr.merchant_consistency",
+            signal_addr_merchant_consistency(merchant_address_consistency),
+        )
+        unified_signals["addr.multi_address"] = normalize_signal(
+            "addr.multi_address",
+            signal_addr_multi_address(multi_address_profile),
+        )
+    except Exception:
+        logger.exception("Address signal emission failed")
+
+    # --- Amount signals ---
+    try:
+        unified_signals["amount.total_mismatch"] = normalize_signal(
+            "amount.total_mismatch",
+            signal_amount_total_mismatch(
+                total_amount, items_sum, has_line_items, total_mismatch, conf
+            ),
+        )
+        unified_signals["amount.missing"] = normalize_signal(
+            "amount.missing",
+            signal_amount_missing(
+                total_amount, has_currency, doc_subtype_guess_raw, conf
+            ),
+        )
+        # Semantic override signal (if semantic amounts were used)
+        if semantic_amounts:
+            unified_signals["amount.semantic_override"] = normalize_signal(
+                "amount.semantic_override",
+                signal_amount_semantic_override(
+                    semantic_amounts,
+                    text_features.get("total_amount"),
+                    semantic_amounts.total_amount,
+                ),
+            )
+    except Exception:
+        logger.exception("Amount signal emission failed")
+
+    # --- Template / PDF signals ---
+    try:
+        unified_signals["template.pdf_producer_suspicious"] = normalize_signal(
+            "template.pdf_producer_suspicious",
+            signal_pdf_producer_suspicious(raw.pdf_metadata or {}, suspicious_producer),
+        )
+    except Exception:
+        logger.exception("Template signal emission failed")
+
+    # --- Merchant signals ---
+    try:
+        unified_signals["merchant.extraction_weak"] = normalize_signal(
+            "merchant.extraction_weak",
+            signal_merchant_extraction_weak(merchant_candidate, merchant_confidence, conf),
+        )
+        unified_signals["merchant.confidence_low"] = normalize_signal(
+            "merchant.confidence_low",
+            signal_merchant_confidence_low(merchant_confidence),
+        )
+    except Exception:
+        logger.exception("Merchant signal emission failed")
+
     return ReceiptFeatures(
         file_features=file_features,
         text_features=text_features,
         layout_features=layout_features,
         forensic_features=forensic_features,
         document_intent=document_intent,
-        signals=signals,
+        signals=unified_signals,
+        signal_version="v1",
     )

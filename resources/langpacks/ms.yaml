@@ -1,0 +1,265 @@
+# Malay language pack
+# Extends common.yaml with Malay-specific keywords and patterns
+
+id: ms
+version: 1.0.0
+name: Malay
+scripts: ["latin"]
+locales: ["ms", "ms-MY", "ms-SG", "ms-BN"]
+
+keywords:
+  doc_titles:
+    - "invois"
+    - "resit"
+    - "bil"
+    - "invois cukai"
+    - "invois komersial"
+    - "sebut harga"
+  
+  invoice:
+    - "invois"
+    - "invois cukai"
+    - "invois jualan"
+    - "invois perkhidmatan"
+    - "invois perunding"
+    - "invois eksport"
+    - "invois import"
+  
+  receipt:
+    - "resit"
+    - "resit pembayaran"
+    - "resit tunai"
+    - "resit kad kredit"
+    - "resit bank"
+    - "surat terima"
+  
+  tax_invoice:
+    - "invois cukai"
+    - "invois GST"
+    - "invois SST"
+    - "invois cukai jualan"
+  
+  ecommerce:
+    - "pesanan"
+    - "pesanan belian"
+    - "pesanan dalam talian"
+    - "pesanan e-dagang"
+    - "pesanan digital"
+    - "pesanan penghantaran"
+  
+  fuel:
+    - "minyak"
+    - "petrol"
+    - "diesel"
+    - "stesen minyak"
+    - "stesen perkhidmatan"
+    - "pengisian minyak"
+  
+  parking:
+    - "parking"
+    - "caj parking"
+    - "tiket parking"
+    - "valet parking"
+    - "garaj"
+    - "tempat letak kereta"
+    - "parking bulanan"
+    - "parking harian"
+  
+  hotel_folio:
+    - "hotel"
+    - "bilik"
+    - "penginapan"
+    - "bil hotel"
+    - "caj bilik"
+    - "invois hotel"
+  
+  utility:
+    - "elektrik"
+    - "air"
+    - "gas"
+    - "utiliti"
+    - "kuasa"
+    - "bil elektrik"
+    - "bil air"
+    - "bil gas"
+  
+  telecom:
+    - "mobail"
+    - "telefon"
+    - "telekomunikasi"
+    - "internet"
+    - "jalur lebar"
+    - "bil mobail"
+    - "bil telefon"
+    - "bil internet"
+    - "pelan data"
+    - "topup"
+  
+  commercial_invoice:
+    - "invois komersial"
+    - "invois eksport"
+    - "invois import"
+    - "invois perdagangan"
+    - "invois kastam"
+  
+  air_waybill:
+    - "invois udara"
+    - "AWB"
+    - "kargo udara"
+    - "penghantaran udara"
+  
+  shipping_bill:
+    - "bil penghantaran"
+    - "dokumen eksport"
+    - "kastam"
+    - "pelabuhan"
+    - "kapal"
+    - "pengisytiharan eksport"
+  
+  bill_of_lading:
+    - "bil muatan"
+    - "B/L"
+    - "kontena"
+    - "kapal"
+    - "pelabuhan"
+  
+  total:
+    - "jumlah"
+    - "jumlah keseluruhan"
+    - "jumlah perlu dibayar"
+    - "jumlah akhir"
+  
+  subtotal:
+    - "jumlah"
+    - "jumlah bersih"
+    - "jumlah sebelum cukai"
+  
+  tax:
+    - "cukai"
+    - "GST"
+    - "SST"
+    - "cukai jualan"
+    - "cukai perkhidmatan"
+    - "jumlah cukai"
+  
+  date:
+    - "tarikh"
+    - "tarikh invois"
+    - "tarikh resit"
+    - "tarikh dikeluarkan"
+    - "tarikh transaksi"
+    - "tarikh pembelian"
+  
+  amount:
+    - "jumlah"
+    - "harga"
+    - "kos"
+    - "caj"
+    - "kadar"
+  
+  logistics:
+    - "pengeksport"
+    - "penghantar"
+    - "penerima"
+    - "pengimport"
+    - "kargo"
+    - "barangan"
+    - "penghantaran"
+    - "pelabuhan"
+    - "kapal"
+    - "kontena"
+    - "kastam"
+    - "gudang"
+    - "logistik"
+
+labels:
+  structural:
+    - "invois"
+    - "resit"
+    - "bil"
+    - "tarikh"
+    - "jumlah"
+    - "cukai"
+    - "jumlah"
+    - "keterangan"
+    - "kuantiti"
+    - "harga unit"
+    - "pesanan"
+    - "pelanggan"
+    - "alamat"
+    - "telefon"
+    - "emel"
+    - "no cukai"
+    - "no invois"
+    - "no resit"
+    - "no pesanan"
+    - "no akaun"
+  
+  next_line_preference:
+    - "bil kepada"
+    - "hantar kepada"
+    - "pelanggan"
+    - "ahli"
+    - "pemegang akaun"
+    - "pembayar"
+    - "pembeli"
+
+company:
+  suffixes:
+    - "sdn bhd"
+    - "berhad"
+    - "sendirian berhad"
+    - "syarikat"
+    - "perusahaan"
+    - "kedai"
+    - "kilang"
+  
+  prefixes:
+    - "syarikat"
+    - "encik"
+    - "puan"
+    - "cik"
+    - "dr"
+    - "tuan"
+
+address:
+  keywords:
+    - "alamat"
+    - "jalan"
+    - "lorong"
+    - "lebuhraya"
+    - "bangunan"
+    - "tingkat"
+    - "unit"
+    - "poskod"
+    - "alamat penghantaran"
+    - "alamat bil"
+  
+  postal_code_patterns:
+    - "\\b\\d{5}\\b"          # Malaysian 5-digit postal codes
+
+currency:
+  symbols:
+    - "RM"
+    - "RM "
+    - "$"
+    - "€"
+    - "£"
+    - "¥"
+    - "₩"
+    - "฿"
+    - "₫"
+  
+  codes:
+    - "MYR"
+    - "USD"
+    - "EUR"
+    - "GBP"
+    - "JPY"
+    - "KRW"
+    - "THB"
+    - "SGD"
+    - "BND"
+    - "IDR"
+    - "PHP"
+    - "VND"

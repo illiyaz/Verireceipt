@@ -1,0 +1,27 @@
+{
+  "name": "Unknown Document – Safety Net",
+  "description": "CRITICAL: Unknown/low-confidence document must NOT trigger any rules. This prevents 90% of future false positives.",
+  "input": {
+    "doc_class": "UNKNOWN",
+    "doc_subtype_guess": "UNKNOWN",
+    "doc_family_guess": "UNKNOWN",
+    "doc_profile_confidence": 0.42,
+    "total_amount": null,
+    "has_line_items": false,
+    "is_credit_note": false,
+    "ocr_confidence": 0.35,
+    "has_date": false,
+    "merchant_candidate": null
+  },
+  "expected": {
+    "decision": "real",
+    "score_max": 0.20,
+    "rules_fired": [],
+    "rules_not_fired": [
+      "R7_TOTAL_MISMATCH",
+      "R7B_INVOICE_TOTAL_RECONCILIATION",
+      "R7C_CREDIT_NOTE_RECONCILIATION"
+    ],
+    "notes": "🚨 CRITICAL: If ANY rule fires here, the system is broken. DO NOT MERGE. This prevents 90% of future false positives."
+  }
+}

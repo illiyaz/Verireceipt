@@ -1,0 +1,60 @@
+{
+  "test_id": "pos_restaurant_india_basic",
+  "description": "Basic Indian POS restaurant receipt with GST, INR currency, and line items",
+  "category": "pos_restaurant",
+  "region": "IN",
+  "expected": {
+    "doc_family": "TRANSACTIONAL",
+    "doc_subtype": "POS_RESTAURANT",
+    "doc_intent": "PURCHASE",
+    "doc_profile_confidence_min": 0.6,
+    "fraud_label": "genuine",
+    "fraud_score_max": 0.3
+  },
+  "key_features": {
+    "merchant_name": "Present (ALL CAPS near top)",
+    "currency": "INR",
+    "gst": "Present (CGST/SGST/IGST)",
+    "line_items": "Present with qty × price",
+    "pos_words": "Bill, Qty, Amount, Total",
+    "invoice_block": "Absent (no Invoice No, Customer GSTIN)"
+  },
+  "test_assertions": [
+    {
+      "field": "doc_family_guess",
+      "operator": "equals",
+      "value": "TRANSACTIONAL"
+    },
+    {
+      "field": "doc_subtype_guess",
+      "operator": "equals",
+      "value": "POS_RESTAURANT"
+    },
+    {
+      "field": "document_intent.intent",
+      "operator": "equals",
+      "value": "purchase"
+    },
+    {
+      "field": "doc_profile_confidence",
+      "operator": ">=",
+      "value": 0.6
+    },
+    {
+      "field": "fraud_score",
+      "operator": "<=",
+      "value": 0.3
+    },
+    {
+      "field": "label",
+      "operator": "equals",
+      "value": "genuine"
+    }
+  ],
+  "notes": [
+    "This is a golden test to prevent regression on POS restaurant detection",
+    "POS heuristic should trigger with ≥3 signals",
+    "R9B should be downgraded when merchant/currency/table present",
+    "LLM classifier should NOT be needed (heuristic confidence should be sufficient)"
+  ]
+}

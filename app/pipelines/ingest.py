@@ -11,8 +11,15 @@ from app.pipelines.metadata import extract_pdf_metadata, extract_image_metadata
 from app.pipelines.ocr import run_ocr_on_images
 
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".heic", ".heif"}
 PDF_EXTS = {".pdf"}
+
+# Register HEIC/HEIF support for Apple images
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except ImportError:
+    pass  # HEIC support not available
 
 
 def _load_images_from_pdf(path: str, dpi: int = 300) -> List[Image.Image]:
@@ -108,11 +115,21 @@ def ingest_receipt(inp: ReceiptInput) -> ReceiptRaw:
     )
 
 
-def ingest_and_ocr(inp: ReceiptInput) -> ReceiptRaw:
+def ingest_and_ocr(inp, preprocess: bool = True) -> ReceiptRaw:
     """
-    Ingests a receipt and runs OCR, returning a populated ReceiptRaw.
+    Full ingestion + OCR pipeline with preprocessing and confidence scoring.
+    Returns a ReceiptRaw with OCR text and metadata populated.
     """
+    if isinstance(inp, str):
+        inp = ReceiptInput(file_path=inp)
+    
     raw = ingest_receipt(inp)
-    ocr_texts = run_ocr_on_images(raw.images)
+    ocr_texts, ocr_metadata = run_ocr_on_images(raw.images, preprocess=preprocess)
     raw.ocr_text_per_page = ocr_texts
+    
+    # Store OCR metadata in pdf_metadata for now (could add dedicated field)
+    if raw.pdf_metadata is None:
+        raw.pdf_metadata = {}
+    raw.pdf_metadata["ocr_metadata"] = ocr_metadata
+    
     return raw

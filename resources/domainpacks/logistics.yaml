@@ -1,0 +1,174 @@
+# resources/domainpacks/logistics.yaml
+# Domain pack = expectations + validation hints (NOT keywords)
+# Language-specific keyword triggers live in langpacks/*.yaml
+
+id: logistics
+name: Logistics / Shipping / Freight
+version: 1.0.0
+description: >
+  Logistics and shipping documents: shipping bills, airway bills, bills of lading,
+  courier receipts, delivery notes, freight invoices, customs-related transport docs.
+  Used to validate structural completeness across geographies and carriers.
+
+applies_to:
+  intents:
+    # DocumentIntent v2
+    - transport
+    - proof_of_delivery
+    - proof_of_payment
+    - reimbursement
+    - purchase
+  doc_families:
+    - LOGISTICS
+    - TRANSACTIONAL
+    - PAYMENT
+  doc_subtypes:
+    - SHIPPING_BILL
+    - BILL_OF_LADING
+    - AIR_WAYBILL
+    - DELIVERY_NOTE
+    - SHIPPING_INVOICE
+    - COMMERCIAL_INVOICE
+    - PAYMENT_RECEIPT
+  regions: []  # global by default
+
+expectations:
+  # At least one group must match (OR)
+  required_any:
+    # Shipment identifier is critical
+    - ["tracking_number", "awb_number", "bl_number", "consignment_number", "shipment_id"]
+    # Parties involved
+    - ["shipper_name", "consignor_name"]
+    - ["consignee_name", "receiver_name"]
+
+  # All groups must match (AND)
+  required_all:
+    # Some date related to movement or issuance
+    - ["shipment_date", "pickup_date", "issue_date", "delivery_date"]
+    # Origin & destination are core to logistics
+    - ["origin_location", "destination_location"]
+
+  preferred:
+    - ["carrier_name", "logistics_provider", "courier_name"]
+    - ["origin_address", "destination_address"]
+    - ["package_count", "piece_count"]
+    - ["gross_weight", "net_weight", "chargeable_weight"]
+    - ["weight_unit"]
+    - ["dimensions", "volume"]
+    - ["freight_amount", "total_amount", "amount_paid"]
+    - ["currency_code"]
+    - ["service_level", "shipping_mode"]     # air / sea / road / rail
+    - ["incoterms"]
+    - ["customs_reference", "shipping_bill_number"]
+    - ["vehicle_number", "container_number"]
+    - ["payment_method", "utr", "rrn"]
+
+  forbidden: []  # logistics docs vary widely; do not hard-ban fields
+
+validators:
+  # ----------------------------
+  # Tracking / AWB / BL numbers
+  # ----------------------------
+  - id: tracking_number_generic
+    field: tracking_number
+    rule: regex
+    severity: warning
+    params:
+      regex: "^[A-Z0-9][A-Z0-9\\-]{6,40}$"
+
+  - id: awb_number_generic
+    field: awb_number
+    rule: regex
+    severity: warning
+    params:
+      # IATA AWB often 11 digits, but keep flexible
+      regex: "^\\d{8,14}$"
+
+  - id: bl_number_generic
+    field: bl_number
+    rule: regex
+    severity: warning
+    params:
+      regex: "^[A-Z0-9][A-Z0-9\\-_/]{6,40}$"
+
+  # ----------------------------
+  # Weight sanity checks
+  # ----------------------------
+  - id: gross_weight_range
+    field: gross_weight
+    rule: numeric_range
+    severity: warning
+    params:
+      min: 0
+      max: 100000
+
+  - id: chargeable_weight_range
+    field: chargeable_weight
+    rule: numeric_range
+    severity: warning
+    params:
+      min: 0
+      max: 100000
+
+  # ----------------------------
+  # Date sanity
+  # ----------------------------
+  - id: shipment_delivery_date_order
+    field: delivery_date
+    rule: date_after
+    severity: info
+    params:
+      after_field: shipment_date
+
+  # ----------------------------
+  # Amount sanity
+  # ----------------------------
+  - id: freight_amount_range
+    field: freight_amount
+    rule: numeric_range
+    severity: warning
+    params:
+      min: 0
+      max: 10000000
+
+hints:
+  extraction:
+    shipping_mode:
+      allowed_values: ["air", "sea", "road", "rail", "courier", "multimodal", "unknown"]
+    service_level:
+      allowed_values: ["express", "standard", "economy", "priority", "charter", "unknown"]
+    incoterms:
+      allowed_values:
+        - EXW
+        - FCA
+        - CPT
+        - CIP
+        - DAP
+        - DPU
+        - DDP
+        - FOB
+        - CFR
+        - CIF
+    weight_unit:
+      allowed_values: ["kg", "g", "lb", "ton", "cbm"]
+    tracking_number:
+      pattern: "alphanumeric_hyphen"
+    container_number:
+      pattern: "iso_container"
+
+  llm:
+    enabled: true
+    when_confidence_below: 0.55
+    prompt_stub: "domainpacks/prompts/logistics_intent_and_fields.md"
+
+audit:
+  rationale: >
+    Logistics documents are structurally defined by movement of goods rather than payment alone.
+    This pack emphasizes shipment identifiers, parties, origin/destination, dates, and weights,
+    while remaining permissive to accommodate courier receipts, freight invoices, and customs docs.
+  examples:
+    - "Air Waybill (AWB)"
+    - "Bill of Lading (B/L)"
+    - "Courier shipment receipt"
+    - "Delivery note / POD"
+    - "Freight invoice with transport charges"
