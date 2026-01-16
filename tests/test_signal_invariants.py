@@ -19,35 +19,8 @@ from app.signals import (
 )
 
 
-# Registry of all signals that should be emitted
-SIGNAL_REGISTRY = {
-    # Address signals
-    "addr.structure",
-    "addr.merchant_consistency",
-    "addr.multi_address",
-    # Amount signals
-    "amount.total_mismatch",
-    "amount.missing",
-    "amount.semantic_override",
-    # Template signals
-    "template.pdf_producer_suspicious",
-    "template.quality_low",
-    # Merchant signals
-    "merchant.extraction_weak",
-    "merchant.confidence_low",
-    # Date signals
-    "date.missing",
-    "date.future",
-    "date.gap_suspicious",
-    # OCR signals
-    "ocr.confidence_low",
-    "ocr.text_sparse",
-    "ocr.language_mismatch",
-    # Language signals
-    "language.detection_low_confidence",
-    "language.script_mismatch",
-    "language.mixed_scripts",
-}
+# Registry    # Expected signal registry (should match SignalRegistry.SIGNALS)
+SIGNAL_REGISTRY = SignalRegistry.get_all_names()
 
 
 class TestSignalInvariants:
@@ -163,9 +136,14 @@ class TestSignalInvariants:
 
     def test_signal_name_format(self):
         """
-        Test that all signal names follow the format: domain.signal_name
+        Test that all emitted signals are in the central registry.
         """
-        for signal_name in SIGNAL_REGISTRY:
+        from app.schemas.receipt import SignalRegistry
+        
+        for signal_name in SignalRegistry.get_all_names():
+            assert SignalRegistry.is_allowed(signal_name), (
+                f"Signal '{signal_name}' in registry but not allowed"
+            )
             parts = signal_name.split(".")
             assert len(parts) == 2, (
                 f"Signal name '{signal_name}' must follow format 'domain.signal_name'"

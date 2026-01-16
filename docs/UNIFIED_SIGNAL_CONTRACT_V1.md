@@ -470,21 +470,49 @@ The `SignalRegistry` is a static registry of all allowed signal names in the Uni
 Located in `app/schemas/receipt.py`:
 
 ```python
+@dataclass(frozen=True)
+class SignalSpec:
+    """Formal specification for a signal (immutable)."""
+    name: str
+    domain: str
+    version: str
+    severity: str  # "weak" | "medium" | "strong"
+    gated_by: List[str]  # Conditions that gate this signal
+    privacy: str  # "safe" | "derived"
+    description: str
+
+
 class SignalRegistry:
-    ALLOWED_SIGNALS = {
-        "addr.structure", "addr.merchant_consistency", "addr.multi_address",
-        "amount.total_mismatch", "amount.missing", "amount.semantic_override",
-        "template.pdf_producer_suspicious", "template.quality_low",
-        "merchant.extraction_weak", "merchant.confidence_low",
-        "date.missing", "date.future", "date.gap_suspicious",
-        "ocr.confidence_low", "ocr.text_sparse", "ocr.language_mismatch",
-        "language.detection_low_confidence", "language.script_mismatch", "language.mixed_scripts",
+    SIGNALS: Dict[str, SignalSpec] = {
+        "addr.structure": SignalSpec(
+            name="addr.structure",
+            domain="address",
+            version="v1",
+            severity="weak",
+            gated_by=["doc_profile_confidence"],
+            privacy="safe",
+            description="Address structure validation",
+        ),
+        # ... 18 more signals
     }
     
     @classmethod
     def is_allowed(cls, name: str) -> bool:
-        return name in cls.ALLOWED_SIGNALS
+        return name in cls.SIGNALS
+    
+    @classmethod
+    def get_spec(cls, name: str) -> Optional[SignalSpec]:
+        return cls.SIGNALS.get(name)
+    
+    @classmethod
+    def get_by_domain(cls, domain: str) -> List[SignalSpec]:
+        return [s for s in cls.SIGNALS.values() if s.domain == domain]
 ```
+
+**Key features:**
+- **Immutable specs** (frozen dataclass) - no runtime modification
+- **Rich metadata** - domain, version, severity, gating, privacy
+- **Machine-checkable** - CI enforces all invariants
 
 ### Enforcement
 
