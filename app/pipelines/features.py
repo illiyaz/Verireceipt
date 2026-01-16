@@ -770,6 +770,81 @@ def _extract_city_and_pin(text: str) -> tuple:
     return (city, pin_code)
 
 
+def _compute_merchant_confidence(merchant_name: str, lines: List[str], full_text: str) -> float:
+    """
+    Compute confidence score for extracted merchant name.
+    
+    Heuristic scoring:
+    - Strong (0.8-1.0): In header/top 10 lines + has business suffix + tax context nearby
+    - Medium (0.6-0.79): Appears once in top 10 lines OR has business suffix
+    - Low (0.0-0.59): Scattered, footer-only, or weak signals
+    
+    Returns:
+        float: Confidence score 0.0-1.0
+    """
+    if not merchant_name or not merchant_name.strip():
+        return 0.0
+    
+    merchant_norm = merchant_name.strip().lower()
+    score = 0.4  # Base score (conservative)
+    
+    # 1. Position scoring (top 10 lines = header)
+    found_in_header = False
+    line_positions = []
+    for i, line in enumerate(lines[:10]):
+        if merchant_norm in (line or "").lower():
+            found_in_header = True
+            line_positions.append(i)
+            break
+    
+    if found_in_header:
+        score += 0.15
+        # Bonus for very top (lines 0-2)
+        if line_positions and line_positions[0] <= 2:
+            score += 0.1
+    
+    # 2. Business suffix detection
+    business_suffixes = [
+        "inc", "llc", "ltd", "corp", "corporation", "company", "co",
+        "pvt", "private", "limited", "gmbh", "sa", "srl", "pty",
+        "llp", "logistics", "services", "solutions", "industries"
+    ]
+    has_business_suffix = any(suffix in merchant_norm for suffix in business_suffixes)
+    if has_business_suffix:
+        score += 0.2
+    
+    # 3. Tax context nearby (GST/VAT/TIN within 5 lines)
+    tax_indicators = ["gst", "gstin", "vat", "tin", "tax id", "tax no", "pan"]
+    has_tax_context = False
+    if line_positions:
+        start_idx = max(0, line_positions[0] - 2)
+        end_idx = min(len(lines), line_positions[0] + 5)
+        nearby_text = " ".join(lines[start_idx:end_idx]).lower()
+        has_tax_context = any(ind in nearby_text for ind in tax_indicators)
+    
+    if has_tax_context:
+        score += 0.2
+    
+    # 4. Penalty for scattered appearances (appears in multiple distant locations)
+    all_positions = []
+    for i, line in enumerate(lines):
+        if merchant_norm in (line or "").lower():
+            all_positions.append(i)
+    
+    if len(all_positions) > 1:
+        # Check if scattered (gap > 10 lines)
+        max_gap = max(all_positions) - min(all_positions)
+        if max_gap > 10:
+            score -= 0.3
+    
+    # 5. Penalty for footer-only (appears only after line 30)
+    if all_positions and min(all_positions) > 30:
+        score -= 0.4
+    
+    # Clamp to [0.0, 1.0]
+    return max(0.0, min(1.0, score))
+
+
 def _looks_like_company_name(line: str, packs=None) -> bool:
     """Check if a line looks like a plausible company name."""
     if not line or len(line.strip()) < 3:
@@ -1442,6 +1517,9 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     # Merchant candidate (needed for bias calculation)
     merchant_candidate = _guess_merchant_line(lines)
     
+    # Compute merchant confidence (heuristic scoring)
+    merchant_confidence = _compute_merchant_confidence(merchant_candidate or "", lines, full_text)
+    
     # Safety clamp: never treat low-confidence subtype as truth
     try:
         conf = float(doc_subtype_confidence) if doc_subtype_confidence is not None else 0.0
@@ -1457,7 +1535,7 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     # V2.1: Merchant-address consistency assessment (feature-only, no scoring impact)
     merchant_address_consistency = assess_merchant_address_consistency(
         merchant_name=merchant_candidate,
-        merchant_confidence=0.8,  # TODO: Extract actual merchant confidence when available
+        merchant_confidence=merchant_confidence,
         address_profile=address_profile,
         doc_profile_confidence=conf,
     )
