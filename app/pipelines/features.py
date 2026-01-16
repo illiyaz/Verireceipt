@@ -1448,6 +1448,9 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     except (TypeError, ValueError):
         conf = 0.0
     
+    # NOTE: conf must be computed before any address-derived features
+    # (V2.1 consistency + V2.2 multi-address both require doc_profile_confidence)
+    
     # Address validation (geo-agnostic, structure-based)
     address_profile = validate_address(full_text)
     
