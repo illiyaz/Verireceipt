@@ -34,6 +34,7 @@ def signal_amount_total_mismatch(
     # Gate on confidence
     if doc_profile_confidence < 0.55:
         return SignalV1(
+            name="amount.total_mismatch",
             status="GATED",
             confidence=0.0,
             evidence={},
