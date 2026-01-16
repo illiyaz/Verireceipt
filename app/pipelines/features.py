@@ -1442,6 +1442,12 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     # Merchant candidate (needed for bias calculation)
     merchant_candidate = _guess_merchant_line(lines)
     
+    # Safety clamp: never treat low-confidence subtype as truth
+    try:
+        conf = float(doc_subtype_confidence) if doc_subtype_confidence is not None else 0.0
+    except (TypeError, ValueError):
+        conf = 0.0
+    
     # Address validation (geo-agnostic, structure-based)
     address_profile = validate_address(full_text)
     
@@ -1456,14 +1462,8 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     # V2.2: Multi-address detection (feature-only)
     multi_address_profile = detect_multi_address_profile(
         text=full_text,
-        doc_profile_confidence=float(doc_profile.get("confidence", 0.0) or 0.0),
+        doc_profile_confidence=conf,
     )
-    
-    # Safety clamp: never treat low-confidence subtype as truth
-    try:
-        conf = float(doc_subtype_confidence) if doc_subtype_confidence is not None else 0.0
-    except (TypeError, ValueError):
-        conf = 0.0
     
     # MERCHANT-PRESENT BIAS: Add small positive prior toward TRANSACTIONAL
     # If merchant + currency + table exist, boost confidence slightly

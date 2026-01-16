@@ -18,7 +18,7 @@ Scoring Rubric:
 - Building/unit (apt, suite, unit, floor, fl, #): +1
 - City/locality token (alphabetic word >3 chars): +1
 - Postal-like token (alphanumeric 4-8 chars): +1
-- Country/state word (explicit word): +2
+- Country/state word (explicit word): +1
 
 Confidence Gates:
 - Score < 3: NOT_AN_ADDRESS

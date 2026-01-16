@@ -33,7 +33,7 @@
 | **Building/unit** | apt, suite, unit, floor, fl, # | +1 |
 | **City/locality tokens** | Alphabetic words >3 chars | +1 to +2 |
 | **Postal-like token** | Alphanumeric 4-8 chars | +1 |
-| **Country/state word** | Explicit location mention | +2 |
+| **Country/state word** | Explicit location mention | +1 |
 
 ⚠️ **Postal code is weak, never decisive.**
 
