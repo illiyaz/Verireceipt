@@ -190,12 +190,13 @@ def detect_multi_address_profile(
         }
     """
     # Confidence gating to avoid false positives on uncertain doc types
-    if (doc_profile_confidence or 0.0) < 0.55:
+    if doc_profile_confidence < 0.55:
         return {
             "status": "UNKNOWN",
             "count": 0,
             "address_types": [],
-            "evidence": ["gated:doc_profile_confidence"],
+            "evidence": ["gated_low_doc_confidence"],
+            "candidates_preview": [],
         }
 
     if not text or len(text.strip()) < 50:
@@ -204,6 +205,7 @@ def detect_multi_address_profile(
             "count": 0,
             "address_types": [],
             "evidence": ["insufficient_text"],
+            "candidates_preview": [],
         }
 
     norm = text.replace("\r", "\n")
@@ -228,17 +230,27 @@ def detect_multi_address_profile(
 
     if len(candidates) < 2:
         if len(candidates) == 1:
+            prof = candidates[0]
+            raw_text = prof.get("address_raw_text", "")
+            preview = raw_text[:50] + "..." if len(raw_text) > 50 else raw_text
+            
             return {
                 "status": "SINGLE",
                 "count": 1,
-                "address_types": [candidates[0].get("address_type", "UNKNOWN")],
+                "address_types": [prof.get("address_type", "UNKNOWN")],
                 "evidence": ["one_address_candidate"],
+                "candidates_preview": [{
+                    "type": prof.get("address_type", "UNKNOWN"),
+                    "confidence": prof.get("address_classification", "UNKNOWN"),
+                    "preview": preview,
+                }],
             }
         return {
             "status": "UNKNOWN",
             "count": 0,
             "address_types": [],
             "evidence": ["no_address_candidates"],
+            "candidates_preview": [],
         }
 
     # Distinctness grouping (greedy clustering)
@@ -258,25 +270,52 @@ def detect_multi_address_profile(
 
     if distinct_count >= 2:
         evidence: List[str] = []
+        distinctness_basis: List[str] = []
+        
         postals = [g["sig"].get("postal") for g in groups if g["sig"].get("postal")]
         if len(set(postals)) >= 2:
             evidence.append("distinct_postal_tokens")
+            distinctness_basis.append("postal_tokens")
         if len(set(types)) >= 2:
             evidence.append("distinct_address_types")
+            distinctness_basis.append("address_type")
+        
+        # V2.2: Add candidates_preview for debugging (truncated text)
+        candidates_preview = []
+        for g in groups[:5]:  # Limit to top 5 for brevity
+            prof = g["profile"]
+            raw_text = prof.get("address_raw_text", "")
+            preview = raw_text[:50] + "..." if len(raw_text) > 50 else raw_text
+            candidates_preview.append({
+                "type": prof.get("address_type", "UNKNOWN"),
+                "confidence": prof.get("address_classification", "UNKNOWN"),
+                "preview": preview,
+            })
 
         return {
             "status": "MULTIPLE",
             "count": distinct_count,
             "address_types": types,
             "evidence": evidence or ["multiple_distinct_address_blocks"],
+            "distinctness_basis": distinctness_basis or ["structural_separation"],
+            "candidates_preview": candidates_preview,
         }
 
     # Multiple candidates but none distinct => repeated address
+    prof = groups[0]["profile"]
+    raw_text = prof.get("address_raw_text", "")
+    preview = raw_text[:50] + "..." if len(raw_text) > 50 else raw_text
+    
     return {
         "status": "SINGLE",
         "count": 1,
         "address_types": types[:1],
         "evidence": ["repeated_address_blocks"],
+        "candidates_preview": [{
+            "type": prof.get("address_type", "UNKNOWN"),
+            "confidence": prof.get("address_classification", "UNKNOWN"),
+            "preview": preview,
+        }],
     }
 
 

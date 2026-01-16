@@ -302,15 +302,36 @@ Returns `UNKNOWN` if:
    - Different address types (`PO_BOX` vs `STANDARD`)
    - Low locality token overlap
 
-### **Output Format**
-```json
-"multi_address_profile": {
-  "status": "SINGLE | MULTIPLE | UNKNOWN",
-  "count": 0,
-  "address_types": ["STANDARD", "PO_BOX"],
-  "evidence": ["distinct_postal_tokens"]
+### **V2.2 Output Schema
+
+```python
+{
+  "status": "SINGLE" | "MULTIPLE" | "UNKNOWN",
+  "count": int,
+  "address_types": ["STANDARD" | "PO_BOX" | "UNKNOWN", ...],
+  "evidence": [str, ...],
+  "distinctness_basis": [str, ...],  # Why addresses are distinct
+  "candidates_preview": [            # Debug preview (truncated)
+    {
+      "type": "STANDARD" | "PO_BOX",
+      "confidence": "PLAUSIBLE_ADDRESS" | "STRONG_ADDRESS",
+      "preview": "123 Main St..."  # First 50 chars
+    }
+  ]
 }
 ```
+
+### **New Fields (V2.2 Schema Upgrade):**
+
+- **`distinctness_basis`**: Explains why addresses were deemed distinct
+  - `"postal_tokens"` - Different postal codes detected
+  - `"address_type"` - Different types (STANDARD vs PO_BOX)
+  - `"structural_separation"` - Separated by document structure
+  
+- **`candidates_preview`**: Debug-only field showing detected addresses
+  - Limited to top 5 candidates
+  - Text truncated to 50 chars (no PII leakage)
+  - Useful for human review tooling and labeling pipelines
 
 ### **Safety Guarantees**
 - ❌ No fraud scoring impact
