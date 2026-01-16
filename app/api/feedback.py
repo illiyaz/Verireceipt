@@ -7,7 +7,7 @@ All data stays local - privacy-first design.
 
 from fastapi import APIRouter, HTTPException
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 from app.models.feedback import (
@@ -22,6 +22,11 @@ from app.models.feedback import (
 from app.repository.feedback_store import get_feedback_store
 from app.pipelines.learning import learn_from_feedback
 
+# NEW: Import LabelV1 schema
+from app.schemas.labels import DocumentLabelV1, AnnotatorJudgment
+from pathlib import Path
+import json
+
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
@@ -32,10 +37,10 @@ async def submit_feedback(
     session_id: Optional[str] = None
 ):
     """
-    Submit user feedback on a receipt analysis.
+    LEGACY: Submit user feedback on a receipt analysis.
     
-    This is the primary endpoint for collecting corrections.
-    The system learns from this feedback to improve accuracy.
+    Use /submit/structured for new ML-ready labels.
+    This endpoint is kept for backward compatibility.
     """
     try:
         store = get_feedback_store()
@@ -79,6 +84,89 @@ async def submit_feedback(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save feedback: {str(e)}")
+
+
+@router.post("/submit/structured", response_model=FeedbackResponse)
+async def submit_structured_feedback(
+    doc_id: str,
+    judgment: AnnotatorJudgment,
+    session_id: Optional[str] = None
+):
+    """
+    NEW: Submit structured feedback using LabelV1 schema.
+    
+    This endpoint produces ML-ready labels with:
+    - Structured fraud types and decision reasons
+    - Evidence strength assessment
+    - Signal reviews
+    - Field-level validation
+    
+    Args:
+        doc_id: Document identifier
+        judgment: Structured annotator judgment
+        session_id: Optional session ID
+    
+    Returns:
+        Feedback response with validation results
+    """
+    try:
+        # Create DocumentLabelV1
+        label = DocumentLabelV1(
+            label_version="v1",
+            doc_id=doc_id,
+            source_batch="api_structured",
+            created_at=datetime.now(timezone.utc),
+            tool_version="api_v1.0",
+            annotator_judgments=[judgment],
+            metadata={
+                "session_id": session_id,
+                "submitted_via": "api"
+            }
+        )
+        
+        # Save to JSONL
+        labels_file = Path("data/labels/v1/labels.jsonl")
+        labels_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(labels_file, 'a') as f:
+            f.write(label.model_dump_json() + '\n')
+        
+        # Also save to legacy feedback store for compatibility
+        from app.ml.feedback_adapter import FeedbackToLabelAdapter
+        adapter = FeedbackToLabelAdapter()
+        
+        # Convert back to legacy format for learning system
+        legacy_verdict_map = {
+            "GENUINE": CorrectVerdict.REAL,
+            "FRAUDULENT": CorrectVerdict.FAKE,
+            "INCONCLUSIVE": CorrectVerdict.SUSPICIOUS
+        }
+        
+        legacy_feedback = ReceiptFeedback(
+            feedback_id=f"fb_{uuid.uuid4().hex[:12]}",
+            receipt_id=doc_id,
+            system_verdict="unknown",
+            system_confidence=0.0,
+            correct_verdict=legacy_verdict_map.get(judgment.doc_outcome, CorrectVerdict.UNCERTAIN),
+            feedback_type=FeedbackType.VERDICT_CORRECTION,
+            user_notes=judgment.notes,
+            missed_indicators=judgment.decision_reasons if judgment.doc_outcome == "FRAUDULENT" else [],
+            session_id=session_id
+        )
+        
+        store = get_feedback_store()
+        store.save_feedback(legacy_feedback)
+        
+        return FeedbackResponse(
+            success=True,
+            feedback_id=label.doc_id,
+            message="Structured feedback saved successfully! Ready for ML training.",
+            rules_updated=0,
+            new_patterns_learned=[]
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save structured feedback: {str(e)}")
 
 
 @router.get("/stats", response_model=FeedbackStats)
