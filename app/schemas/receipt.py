@@ -62,9 +62,25 @@ class SignalV1(BaseModel):
     gating_reason: Optional[str] = Field(None, description="Why signal was gated")
 
 
+@dataclass(frozen=True)
+class SignalSpec:
+    """
+    Formal specification for a signal in the registry.
+    
+    Immutable (frozen) to prevent runtime modification.
+    """
+    name: str
+    domain: str
+    version: str
+    severity: str  # "weak" | "medium" | "strong"
+    gated_by: List[str]  # Conditions that gate this signal
+    privacy: str  # "safe" | "derived"
+    description: str
+
+
 class SignalRegistry:
     """
-    Static registry of all allowed signal names for Unified Signal Contract (V1).
+    Static registry of all allowed signals for Unified Signal Contract (V1).
     
     Purpose:
     - Contract enforcement (prevents typos like addr.multiAddr)
@@ -76,52 +92,227 @@ class SignalRegistry:
     - Static in V1 (no dynamic registration)
     - Hard fail on unregistered signals
     - CI-enforced completeness
+    - Formal spec with metadata
+    
+    Invariants enforced:
+    - dict_key == signal.name (telemetry joins, ML features)
+    - domain prefix (addr.*) (grouping, dashboards)
+    - versioned (future migration)
+    - known status set (GATED ≠ NOT_TRIGGERED)
+    - privacy class (prevents PII leaks)
     """
     
-    ALLOWED_SIGNALS = {
+    SIGNALS: Dict[str, SignalSpec] = {
         # Address signals
-        "addr.structure",
-        "addr.merchant_consistency",
-        "addr.multi_address",
+        "addr.structure": SignalSpec(
+            name="addr.structure",
+            domain="address",
+            version="v1",
+            severity="weak",
+            gated_by=["doc_profile_confidence"],
+            privacy="safe",
+            description="Address structure validation (STRONG_ADDRESS, WEAK_ADDRESS, etc.)",
+        ),
+        "addr.merchant_consistency": SignalSpec(
+            name="addr.merchant_consistency",
+            domain="address",
+            version="v1",
+            severity="medium",
+            gated_by=["doc_profile_confidence"],
+            privacy="safe",
+            description="Merchant name and address consistency check",
+        ),
+        "addr.multi_address": SignalSpec(
+            name="addr.multi_address",
+            domain="address",
+            version="v1",
+            severity="medium",
+            gated_by=["doc_profile_confidence"],
+            privacy="safe",
+            description="Multiple distinct addresses detected in document",
+        ),
         
         # Amount signals
-        "amount.total_mismatch",
-        "amount.missing",
-        "amount.semantic_override",
+        "amount.total_mismatch": SignalSpec(
+            name="amount.total_mismatch",
+            domain="amount",
+            version="v1",
+            severity="strong",
+            gated_by=["doc_profile_confidence"],
+            privacy="safe",
+            description="Total amount doesn't match line items sum",
+        ),
+        "amount.missing": SignalSpec(
+            name="amount.missing",
+            domain="amount",
+            version="v1",
+            severity="medium",
+            gated_by=["doc_profile_confidence"],
+            privacy="safe",
+            description="Expected total amount is missing",
+        ),
+        "amount.semantic_override": SignalSpec(
+            name="amount.semantic_override",
+            domain="amount",
+            version="v1",
+            severity="weak",
+            gated_by=[],
+            privacy="safe",
+            description="Semantic LLM corrected total amount",
+        ),
         
         # Template / PDF signals
-        "template.pdf_producer_suspicious",
-        "template.quality_low",
+        "template.pdf_producer_suspicious": SignalSpec(
+            name="template.pdf_producer_suspicious",
+            domain="template",
+            version="v1",
+            severity="weak",
+            gated_by=[],
+            privacy="safe",
+            description="PDF created by suspicious producer (online converter, editor)",
+        ),
+        "template.quality_low": SignalSpec(
+            name="template.quality_low",
+            domain="template",
+            version="v1",
+            severity="weak",
+            gated_by=["doc_profile_confidence"],
+            privacy="safe",
+            description="Low template quality score",
+        ),
         
         # Merchant signals
-        "merchant.extraction_weak",
-        "merchant.confidence_low",
+        "merchant.extraction_weak": SignalSpec(
+            name="merchant.extraction_weak",
+            domain="merchant",
+            version="v1",
+            severity="weak",
+            gated_by=["doc_profile_confidence"],
+            privacy="safe",
+            description="Weak merchant name extraction",
+        ),
+        "merchant.confidence_low": SignalSpec(
+            name="merchant.confidence_low",
+            domain="merchant",
+            version="v1",
+            severity="weak",
+            gated_by=[],
+            privacy="safe",
+            description="Merchant extraction confidence below threshold",
+        ),
         
         # Date signals
-        "date.missing",
-        "date.future",
-        "date.gap_suspicious",
+        "date.missing": SignalSpec(
+            name="date.missing",
+            domain="date",
+            version="v1",
+            severity="medium",
+            gated_by=["doc_profile_confidence"],
+            privacy="safe",
+            description="Expected date is missing",
+        ),
+        "date.future": SignalSpec(
+            name="date.future",
+            domain="date",
+            version="v1",
+            severity="strong",
+            gated_by=["doc_profile_confidence"],
+            privacy="safe",
+            description="Date is in the future",
+        ),
+        "date.gap_suspicious": SignalSpec(
+            name="date.gap_suspicious",
+            domain="date",
+            version="v1",
+            severity="medium",
+            gated_by=["doc_profile_confidence"],
+            privacy="safe",
+            description="Suspicious gap between issue and due dates",
+        ),
         
         # OCR signals
-        "ocr.confidence_low",
-        "ocr.text_sparse",
-        "ocr.language_mismatch",
+        "ocr.confidence_low": SignalSpec(
+            name="ocr.confidence_low",
+            domain="ocr",
+            version="v1",
+            severity="weak",
+            gated_by=[],
+            privacy="safe",
+            description="OCR confidence below threshold",
+        ),
+        "ocr.text_sparse": SignalSpec(
+            name="ocr.text_sparse",
+            domain="ocr",
+            version="v1",
+            severity="medium",
+            gated_by=["doc_profile_confidence"],
+            privacy="safe",
+            description="Insufficient text extraction",
+        ),
+        "ocr.language_mismatch": SignalSpec(
+            name="ocr.language_mismatch",
+            domain="ocr",
+            version="v1",
+            severity="weak",
+            gated_by=["doc_profile_confidence"],
+            privacy="safe",
+            description="Detected language doesn't match expected",
+        ),
         
         # Language signals
-        "language.detection_low_confidence",
-        "language.script_mismatch",
-        "language.mixed_scripts",
+        "language.detection_low_confidence": SignalSpec(
+            name="language.detection_low_confidence",
+            domain="language",
+            version="v1",
+            severity="weak",
+            gated_by=[],
+            privacy="safe",
+            description="Language detection confidence below threshold",
+        ),
+        "language.script_mismatch": SignalSpec(
+            name="language.script_mismatch",
+            domain="language",
+            version="v1",
+            severity="medium",
+            gated_by=["doc_profile_confidence"],
+            privacy="safe",
+            description="Detected script doesn't match language",
+        ),
+        "language.mixed_scripts": SignalSpec(
+            name="language.mixed_scripts",
+            domain="language",
+            version="v1",
+            severity="medium",
+            gated_by=["doc_profile_confidence"],
+            privacy="safe",
+            description="Multiple scripts detected (potential fraud indicator)",
+        ),
     }
     
     @classmethod
     def is_allowed(cls, name: str) -> bool:
         """Check if a signal name is registered."""
-        return name in cls.ALLOWED_SIGNALS
+        return name in cls.SIGNALS
+    
+    @classmethod
+    def get_spec(cls, name: str) -> Optional[SignalSpec]:
+        """Get the formal specification for a signal."""
+        return cls.SIGNALS.get(name)
     
     @classmethod
     def count(cls) -> int:
         """Return the number of registered signals."""
-        return len(cls.ALLOWED_SIGNALS)
+        return len(cls.SIGNALS)
+    
+    @classmethod
+    def get_by_domain(cls, domain: str) -> List[SignalSpec]:
+        """Get all signals for a specific domain."""
+        return [spec for spec in cls.SIGNALS.values() if spec.domain == domain]
+    
+    @classmethod
+    def get_all_names(cls) -> List[str]:
+        """Get all registered signal names."""
+        return list(cls.SIGNALS.keys())
 
 
 @dataclass
