@@ -98,7 +98,7 @@ class TestSignalInvariants:
         ]
         
         for signal_name in emitted_signals:
-            assert signal_name in SIGNAL_REGISTRY, (
+            assert signal_name in self.SIGNAL_REGISTRY, (
                 f"Signal '{signal_name}' is emitted but not registered in SIGNAL_REGISTRY. "
                 f"Add it to the registry to prevent typos and ensure documentation."
             )

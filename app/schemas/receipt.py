@@ -209,7 +209,7 @@ class SignalRegistry:
             severity="medium",
             gated_by=["doc_profile_confidence"],
             privacy="safe",
-            description="Expected date is missing",
+            description="Required date field not found in document (invoice date, due date, etc.)",
         ),
         "date.future": SignalSpec(
             name="date.future",
@@ -218,7 +218,7 @@ class SignalRegistry:
             severity="strong",
             gated_by=["doc_profile_confidence"],
             privacy="safe",
-            description="Date is in the future",
+            description="Document contains timestamp that occurs after current system time",
         ),
         "date.gap_suspicious": SignalSpec(
             name="date.gap_suspicious",
@@ -227,7 +227,7 @@ class SignalRegistry:
             severity="medium",
             gated_by=["doc_profile_confidence"],
             privacy="safe",
-            description="Suspicious gap between issue and due dates",
+            description="Unusual time interval detected between invoice issuance and payment deadline",
         ),
         
         # OCR signals
