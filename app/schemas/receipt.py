@@ -178,7 +178,7 @@ class SignalRegistry:
             severity="weak",
             gated_by=["doc_profile_confidence"],
             privacy="safe",
-            description="Low template quality score",
+            description="Document template has poor formatting or structure quality indicators",
         ),
         
         # Merchant signals

@@ -4,8 +4,7 @@ Test signal contract invariants.
 Critical invariants that must hold for telemetry, learned rules, and feature joins.
 """
 
-import pytest
-from app.schemas.receipt import SignalV1
+from app.schemas.receipt import SignalV1, SignalRegistry
 from app.signals import (
     signal_addr_structure,
     signal_addr_merchant_consistency,
@@ -20,11 +19,10 @@ from app.signals import (
 
 
 # Registry    # Expected signal registry (should match SignalRegistry.SIGNALS)
-SIGNAL_REGISTRY = SignalRegistry.get_all_names()
-
-
 class TestSignalInvariants:
     """Test critical signal contract invariants."""
+
+    SIGNAL_REGISTRY = SignalRegistry.get_all_names()
 
     def test_signal_key_matches_name(self):
         """
