@@ -5,7 +5,7 @@ import logging
 from dataclasses import asdict
 from typing import Dict, Any, List, Tuple, Optional
 from app.pipelines.language_id import identify_language
-from app.schemas.receipt import ReceiptRaw, ReceiptFeatures
+from app.schemas.receipt import ReceiptRaw, ReceiptFeatures, SignalV1
 from app.pipelines.geo_detection import detect_geo_and_profile
 from app.pipelines.lang import LangPackLoader, ScriptDetector, LangPackRouter, TextNormalizer
 from app.pipelines.document_intent import resolve_document_intent, IntentSource
@@ -14,6 +14,18 @@ from app.address import (
     validate_address,
     assess_merchant_address_consistency,
     detect_multi_address_profile,
+)
+from app.signals import (
+    signal_addr_structure,
+    signal_addr_merchant_consistency,
+    signal_addr_multi_address,
+    signal_amount_total_mismatch,
+    signal_amount_missing,
+    signal_amount_semantic_override,
+    signal_pdf_producer_suspicious,
+    signal_template_quality_low,
+    signal_merchant_extraction_weak,
+    signal_merchant_confidence_low,
 )
 from app.telemetry.address_metrics import record_address_features
 logger = logging.getLogger(__name__)
@@ -1524,6 +1536,17 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     # Compute merchant confidence (heuristic scoring)
     merchant_confidence = _compute_merchant_confidence(merchant_candidate or "", lines, full_text)
     
+    # Emit merchant signals
+    try:
+        signals["merchant.extraction_weak"] = signal_merchant_extraction_weak(
+            merchant_candidate, merchant_confidence, conf
+        ).dict()
+        signals["merchant.confidence_low"] = signal_merchant_confidence_low(
+            merchant_confidence
+        ).dict()
+    except Exception as e:
+        logger.warning(f"Failed to emit merchant signals: {e}")
+    
     # Safety clamp: never treat low-confidence subtype as truth
     try:
         conf = float(doc_subtype_confidence) if doc_subtype_confidence is not None else 0.0
@@ -1532,6 +1555,9 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     
     # NOTE: conf must be computed before any address-derived features
     # (V2.1 consistency + V2.2 multi-address both require doc_profile_confidence)
+    
+    # Initialize unified signals dict
+    signals = {}
     
     # Address validation (geo-agnostic, structure-based)
     address_profile = validate_address(full_text)
@@ -1550,6 +1576,14 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         doc_profile_confidence=conf,
     )
     text_features["multi_address_profile"] = multi_address_profile
+    
+    # Emit unified signals (V1 contract)
+    try:
+        signals["addr.structure"] = signal_addr_structure(address_profile).dict()
+        signals["addr.merchant_consistency"] = signal_addr_merchant_consistency(merchant_address_consistency).dict()
+        signals["addr.multi_address"] = signal_addr_multi_address(multi_address_profile).dict()
+    except Exception as e:
+        logger.warning(f"Failed to emit address signals: {e}")
     
     # Optional: Record address telemetry (controlled by ENABLE_ADDRESS_TELEMETRY env var)
     import os
@@ -1610,7 +1644,6 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     producer_lower = str(producer).lower()
 
     suspicious_producer = any(p in producer_lower for p in SUSPICIOUS_PRODUCERS)
-    
     # Get image dimensions from first page
     image_width = None
     image_height = None
@@ -1618,6 +1651,16 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         image_width = raw.images[0].width
         image_height = raw.images[0].height
 
+    suspicious_producer = _check_suspicious_producer(meta)
+    
+    # Emit PDF/template signals (early, before conf is computed)
+    try:
+        signals["template.pdf_producer_suspicious"] = signal_pdf_producer_suspicious(
+            meta, suspicious_producer
+        ).dict()
+    except Exception as e:
+        logger.warning(f"Failed to emit PDF producer signal: {e}")
+    
     file_features: Dict[str, Any] = {
         "file_size_bytes": raw.file_size_bytes,
         "num_pages": raw.num_pages,
@@ -1760,6 +1803,24 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         )
     except Exception:
         total_mismatch = False
+    
+    # Emit amount signals
+    try:
+        signals["amount.total_mismatch"] = signal_amount_total_mismatch(
+            total_amount, items_sum, has_line_items, total_mismatch, conf
+        ).dict()
+        signals["amount.missing"] = signal_amount_missing(
+            total_amount, has_currency, doc_subtype_guess_raw, conf
+        ).dict()
+        # Semantic override signal (if semantic amounts were used)
+        if 'semantic_amounts' in locals() and semantic_amounts:
+            signals["amount.semantic_override"] = signal_amount_semantic_override(
+                semantic_amounts, 
+                text_features.get("total_amount"),  # Original before override
+                semantic_amounts.total_amount
+            ).dict()
+    except Exception as e:
+        logger.warning(f"Failed to emit amount signals: {e}")
 
     # Extract all dates for conflict detection
     all_dates = _extract_all_dates(full_text)
@@ -2022,4 +2083,5 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         layout_features=layout_features,
         forensic_features=forensic_features,
         document_intent=document_intent,
+        signals=signals,
     )

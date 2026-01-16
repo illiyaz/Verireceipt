@@ -23,7 +23,8 @@ These are ILLUSTRATIVE examples for:
 DO NOT operationalize without extensive testing and review.
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+from app.schemas.receipt import SignalV1
 
 
 # ============================================================================
@@ -35,35 +36,34 @@ def rule_addr_multi_and_mismatch(
     doc_profile_confidence: float,
     multi_address_profile: Dict[str, Any],
     merchant_address_consistency: Dict[str, Any],
+    sig_multi: Optional[Dict[str, Any]] = None,
+    sig_cons: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     RULE: Multiple addresses + merchant-address mismatch in high-confidence invoice.
     
     Signal Combination:
-    - Document is classified as INVOICE with high confidence
-    - Multiple distinct addresses detected (bill-to, ship-to, etc.)
-    - Merchant name doesn't match any detected address
     
-    Risk Hypothesis:
-    - Legitimate: B2B invoices often have multiple addresses
-    - Suspicious: When combined with other fraud signals (editing, template anomalies)
-    
-    Usage:
-    - Emit as "address_anomaly_cluster" flag
-    - Combine with PDF metadata, template quality, etc.
-    - NEVER use alone to mark fraud
-    
-    Returns:
-        Dict with status and evidence (no scoring)
+    Prefers unified signals if available, falls back to legacy features.
+    Returns structured evidence (no scoring).
     """
-    # Confidence gate
+    # Gate on confidence
     if doc_profile_confidence < 0.8:
         return {"status": "GATED", "reason": "doc_profile_confidence < 0.8"}
     
-    # Check conditions
+    # Check conditions (prefer signals)
     is_invoice = doc_subtype in {"INVOICE", "TAX_INVOICE", "VAT_INVOICE", "COMMERCIAL_INVOICE"}
-    has_multiple_addresses = multi_address_profile.get("status") == "MULTIPLE"
-    has_mismatch = merchant_address_consistency.get("status") in {"WEAK_MISMATCH", "MISMATCH"}
+    
+    # Use signals if available, otherwise fall back to legacy
+    if sig_multi:
+        has_multiple_addresses = sig_multi.get("status") == "TRIGGERED"
+    else:
+        has_multiple_addresses = multi_address_profile.get("status") == "MULTIPLE"
+    
+    if sig_cons:
+        has_mismatch = sig_cons.get("status") == "TRIGGERED"
+    else:
+        has_mismatch = merchant_address_consistency.get("status") in {"WEAK_MISMATCH", "MISMATCH"}
     
     if is_invoice and has_multiple_addresses and has_mismatch:
         return {
@@ -367,29 +367,31 @@ def evaluate_address_rules(
     text_features: Dict[str, Any],
     doc_profile: Dict[str, Any],
     file_features: Dict[str, Any],
+    signals: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Evaluate all reference address rules.
+    Evaluate all address reference rules.
     
-    ⚠️ ILLUSTRATIVE ONLY - NOT FOR PRODUCTION ⚠️
-    
-    This demonstrates how to:
-    - Extract features from pipeline output
-    - Call reference rules
-    - Collect triggered rules
-    - Emit structured evidence
+    This demonstrates how to combine address features safely.
+    Prefers unified signals (V1 contract) if available, falls back to legacy features.
     
     Args:
-        text_features: Output from features.py
-        doc_profile: Document profile from geo_detection
-        file_features: File metadata features
+        text_features: Text features from pipeline
+        doc_profile: Document profile
+        file_features: File features
+        signals: Optional unified signals dict (V1 contract)
     
     Returns:
-        List of triggered rules with evidence
+        List of triggered rules with structured evidence
     """
     triggered_rules = []
     
-    # Extract features
+    # Extract unified signals (preferred) or fall back to legacy features
+    sig_multi = signals.get("addr.multi_address") if signals else None
+    sig_cons = signals.get("addr.merchant_consistency") if signals else None
+    sig_struct = signals.get("addr.structure") if signals else None
+    
+    # Extract features (legacy format - for backward compatibility)
     address_profile = text_features.get("address_profile", {})
     merchant_address_consistency = text_features.get("merchant_address_consistency", {})
     multi_address_profile = text_features.get("multi_address_profile", {})

@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Any, Optional
 from PIL import Image
+from pydantic import BaseModel, Field
 
 import uuid
 from datetime import datetime, timezone
@@ -33,6 +34,32 @@ class ReceiptRaw:
     num_pages: int
 
 
+class SignalV1(BaseModel):
+    """
+    Unified Signal Contract (v1)
+    
+    Privacy-safe, confidence-aware signal for fraud detection.
+    
+    Design Principles:
+    - No raw text or PII
+    - Confidence-gated (signals suppressed if confidence too low)
+    - Structured evidence (machine-readable)
+    - Human-readable interpretation
+    
+    Fields:
+    - status: Signal state (TRIGGERED, NOT_TRIGGERED, GATED, UNKNOWN)
+    - confidence: Signal confidence [0.0-1.0]
+    - evidence: Structured, privacy-safe evidence (no raw text)
+    - interpretation: Human-readable explanation
+    - gating_reason: Why signal was gated (if status=GATED)
+    """
+    status: str = Field(..., description="TRIGGERED | NOT_TRIGGERED | GATED | UNKNOWN")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Signal confidence [0.0-1.0]")
+    evidence: Dict[str, Any] = Field(default_factory=dict, description="Structured evidence (no PII)")
+    interpretation: Optional[str] = Field(None, description="Human-readable explanation")
+    gating_reason: Optional[str] = Field(None, description="Why signal was gated")
+
+
 @dataclass
 class ReceiptFeatures:
     """
@@ -43,6 +70,8 @@ class ReceiptFeatures:
     text_features: Dict[str, Any]
     layout_features: Dict[str, Any]
     forensic_features: Dict[str, Any]
+    document_intent: Dict[str, Any] = field(default_factory=dict)
+    signals: Dict[str, Any] = field(default_factory=dict)  # Unified signals (SignalV1)
 
 
 

@@ -28,7 +28,8 @@ Confidence Gates:
 """
 
 import re
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Tuple
+from app.schemas.receipt import SignalV1
 
 # Universal street indicators (English-based, expandable)
 STREET_KEYWORDS = [
@@ -419,9 +420,8 @@ def _empty_result() -> Dict[str, Any]:
         "address_score": 0,
         "address_classification": "NOT_AN_ADDRESS",
         "address_evidence": [],
-        # V2.1 fields
-        "address_raw_text": "",
         "address_type": "UNKNOWN",
+        "address_raw_text": "",
     }
 
 
