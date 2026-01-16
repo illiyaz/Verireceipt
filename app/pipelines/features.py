@@ -10,7 +10,7 @@ from app.pipelines.geo_detection import detect_geo_and_profile
 from app.pipelines.lang import LangPackLoader, ScriptDetector, LangPackRouter, TextNormalizer
 from app.pipelines.document_intent import resolve_document_intent, IntentSource
 from app.pipelines.domain_validation import infer_domain_from_domainpacks, validate_domain_pack
-from app.address.validate import validate_address, assess_merchant_address_consistency
+from app.address.validate import validate_address, assess_merchant_address_consistency, detect_multi_address_profile
 
 logger = logging.getLogger(__name__)
 
@@ -1453,6 +1453,12 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         doc_profile_confidence=conf,
     )
     
+    # V2.2: Multi-address detection (feature-only)
+    multi_address_profile = detect_multi_address_profile(
+        text=full_text,
+        doc_profile_confidence=float(doc_profile.get("confidence", 0.0) or 0.0),
+    )
+    
     # Safety clamp: never treat low-confidence subtype as truth
     try:
         conf = float(doc_subtype_confidence) if doc_subtype_confidence is not None else 0.0
@@ -1718,6 +1724,8 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         "address_profile": address_profile,
         # V2.1: Merchant-address consistency (feature-only)
         "merchant_address_consistency": merchant_address_consistency,
+        # V2.2: Multi-address detection (feature-only)
+        "multi_address_profile": multi_address_profile,
         # NEW: Language pack routing information
         **lang_pack_info,
     }

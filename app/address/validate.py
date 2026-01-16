@@ -22,13 +22,13 @@ Scoring Rubric:
 
 Confidence Gates:
 - Score < 3: NOT_AN_ADDRESS
-- Score 3-4: WEAK_ADDRESS
-- Score 5-6: PLAUSIBLE_ADDRESS
-- Score >= 7: STRONG_ADDRESS
+- Score = 3: WEAK_ADDRESS
+- Score 4-5: PLAUSIBLE_ADDRESS
+- Score >= 6: STRONG_ADDRESS
 """
 
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 # Universal street indicators (English-based, expandable)
 STREET_KEYWORDS = [
@@ -51,6 +51,233 @@ LOCATION_KEYWORDS = [
     "singapore", "malaysia", "thailand", "indonesia",
     "california", "texas", "ontario", "delhi", "mumbai"
 ]
+
+# --- V2.2: Multi-address detection (feature-only) ---------------------------
+
+# Conservative limits to keep runtime bounded
+_MAX_BLOCK_CHARS = 250
+_MAX_CANDIDATES = 6
+
+
+def _chunk_lines_windows(lines: List[str], window_sizes: List[int]) -> List[str]:
+    """Create sliding windows of N lines (joined) to discover address-like blocks."""
+    out: List[str] = []
+    clean_lines = [ln.strip() for ln in lines if ln and ln.strip()]
+    for w in window_sizes:
+        if w <= 0:
+            continue
+        for i in range(0, max(0, len(clean_lines) - w + 1)):
+            block = "\n".join(clean_lines[i : i + w]).strip()
+            if block:
+                out.append(block)
+    return out
+
+
+def _dedupe_blocks(blocks: List[str]) -> List[str]:
+    """Dedupe blocks using a normalized key; keep order."""
+    seen = set()
+    out: List[str] = []
+    for b in blocks:
+        key = re.sub(r"\s+", " ", (b or "").strip().lower())
+        key = key[:_MAX_BLOCK_CHARS]
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append((b or "")[:_MAX_BLOCK_CHARS])
+    return out
+
+
+def _address_signature(address_profile: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a light-weight signature for distinctness checks."""
+    raw = (address_profile.get("address_raw_text") or "").lower()
+
+    # Postal-like token (weak but useful for distinctness)
+    postal = None
+    m = re.search(r"\b[a-z0-9]{4,8}\b", raw)
+    if m:
+        postal = m.group(0)
+
+    # Street keyword present in evidence (preferred) else regex fallback
+    street_kw = None
+    for ev in address_profile.get("address_evidence", []) or []:
+        if ev.startswith("street_keyword:"):
+            street_kw = ev.split(":", 1)[1]
+            break
+    if street_kw is None:
+        for kw in STREET_KEYWORDS:
+            if re.search(rf"\b{kw}\b", raw):
+                street_kw = kw
+                break
+
+    # Locality tokens set (coarse)
+    locality_tokens = {
+        t.lower()
+        for t in re.findall(r"\b[a-zA-Z]{4,}\b", raw)
+        if t.lower()
+        not in {
+            "street",
+            "road",
+            "avenue",
+            "boulevard",
+            "lane",
+            "drive",
+            "suite",
+            "apartment",
+            "building",
+        }
+    }
+
+    return {
+        "postal": postal,
+        "street_kw": street_kw,
+        "locality": locality_tokens,
+        "address_type": address_profile.get("address_type", "UNKNOWN"),
+    }
+
+
+def _is_distinct(sig_a: Dict[str, Any], sig_b: Dict[str, Any]) -> bool:
+    """Conservative distinctness heuristic for two address candidates."""
+    if not sig_a or not sig_b:
+        return False
+
+    # Address type difference is a strong separator (PO_BOX vs STANDARD)
+    if sig_a.get("address_type") != sig_b.get("address_type"):
+        return True
+
+    # Different postal-like tokens strongly suggest distinct addresses
+    pa, pb = sig_a.get("postal"), sig_b.get("postal")
+    if pa and pb and pa != pb:
+        return True
+
+    # Different street keywords can be a separator (weak-ish)
+    sa, sb = sig_a.get("street_kw"), sig_b.get("street_kw")
+    if sa and sb and sa != sb:
+        la, lb = sig_a.get("locality", set()), sig_b.get("locality", set())
+        inter = len(la & lb)
+        union = len(la | lb) or 1
+        if (inter / union) < 0.5:
+            return True
+
+    # Low locality overlap suggests distinct locations
+    la, lb = sig_a.get("locality", set()), sig_b.get("locality", set())
+    if la and lb:
+        inter = len(la & lb)
+        union = len(la | lb) or 1
+        if (inter / union) < 0.4:
+            return True
+
+    return False
+
+
+def detect_multi_address_profile(
+    text: str,
+    doc_profile_confidence: float,
+    max_candidates: int = _MAX_CANDIDATES,
+) -> Dict[str, Any]:
+    """V2.2 Multi-address detection (feature-only).
+
+    This is STRUCTURE detection only:
+    - Finds multiple distinct address-like blocks in a document
+    - Does NOT validate correctness or existence
+    - Geo-agnostic by default
+
+    Returns:
+        {
+          "status": "SINGLE" | "MULTIPLE" | "UNKNOWN",
+          "count": int,
+          "address_types": ["STANDARD"|"PO_BOX"|"UNKNOWN", ...],
+          "evidence": [str, ...]
+        }
+    """
+    # Confidence gating to avoid false positives on uncertain doc types
+    if (doc_profile_confidence or 0.0) < 0.55:
+        return {
+            "status": "UNKNOWN",
+            "count": 0,
+            "address_types": [],
+            "evidence": ["gated:doc_profile_confidence"],
+        }
+
+    if not text or len(text.strip()) < 50:
+        return {
+            "status": "UNKNOWN",
+            "count": 0,
+            "address_types": [],
+            "evidence": ["insufficient_text"],
+        }
+
+    norm = text.replace("\r", "\n")
+    lines = [ln.strip() for ln in norm.split("\n")]
+
+    # Candidate blocks: paragraphs + sliding windows
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", norm) if p and p.strip()]
+    paragraph_blocks = [p[:_MAX_BLOCK_CHARS] for p in paragraphs]
+
+    window_blocks = _chunk_lines_windows(lines, window_sizes=[2, 3, 4])
+
+    blocks = _dedupe_blocks(paragraph_blocks + window_blocks)
+
+    # Score blocks with existing validator; keep only plausible+ candidates
+    candidates: List[Dict[str, Any]] = []
+    for b in blocks:
+        prof = validate_address(b)
+        if prof.get("address_classification") in ("PLAUSIBLE_ADDRESS", "STRONG_ADDRESS"):
+            candidates.append(prof)
+        if len(candidates) >= max_candidates:
+            break
+
+    if len(candidates) < 2:
+        if len(candidates) == 1:
+            return {
+                "status": "SINGLE",
+                "count": 1,
+                "address_types": [candidates[0].get("address_type", "UNKNOWN")],
+                "evidence": ["one_address_candidate"],
+            }
+        return {
+            "status": "UNKNOWN",
+            "count": 0,
+            "address_types": [],
+            "evidence": ["no_address_candidates"],
+        }
+
+    # Distinctness grouping (greedy clustering)
+    groups: List[Dict[str, Any]] = []
+    for c in candidates:
+        sig = _address_signature(c)
+        placed = False
+        for g in groups:
+            if not _is_distinct(sig, g["sig"]):
+                placed = True
+                break
+        if not placed:
+            groups.append({"sig": sig, "profile": c})
+
+    distinct_count = len(groups)
+    types = [g["sig"].get("address_type", "UNKNOWN") for g in groups]
+
+    if distinct_count >= 2:
+        evidence: List[str] = []
+        postals = [g["sig"].get("postal") for g in groups if g["sig"].get("postal")]
+        if len(set(postals)) >= 2:
+            evidence.append("distinct_postal_tokens")
+        if len(set(types)) >= 2:
+            evidence.append("distinct_address_types")
+
+        return {
+            "status": "MULTIPLE",
+            "count": distinct_count,
+            "address_types": types,
+            "evidence": evidence or ["multiple_distinct_address_blocks"],
+        }
+
+    # Multiple candidates but none distinct => repeated address
+    return {
+        "status": "SINGLE",
+        "count": 1,
+        "address_types": types[:1],
+        "evidence": ["repeated_address_blocks"],
+    }
 
 
 def validate_address(text: str) -> Dict[str, Any]:

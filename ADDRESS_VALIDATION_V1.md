@@ -271,3 +271,97 @@ text_features["merchant_address_consistency"] = merchant_address_consistency
 **This signal is designed to support learned rules and should not independently mark fraud.**
 
 ---
+
+## 🧾 V2.2: Multi-Address Detection (Feature-only)
+
+**Date:** 2026-01-16  
+**Status:** 🟢 COMPLETE
+
+V2.2 detects whether a document contains **multiple distinct address-like blocks**.
+
+### **Key Properties**
+- ✅ **Geo-agnostic** - Works globally without country-specific assumptions
+- ✅ **Structure-only** - Detects address-like blocks, not correctness
+- ✅ **Confidence-gated** - Returns `UNKNOWN` when doc profile confidence is low
+- ✅ **Feature-only** - Emits signals for downstream learned rules (no scoring impact)
+
+### **Gating Conditions**
+Returns `UNKNOWN` if:
+- `doc_profile_confidence < 0.55` 
+- Text is too short / insufficient
+- No plausible address candidates found
+
+### **How It Works**
+1. Builds candidate blocks from:
+   - Paragraphs (split by blank lines)
+   - Sliding windows of 2–4 lines
+2. Runs `validate_address(block)` on each block
+3. Keeps only `PLAUSIBLE_ADDRESS` / `STRONG_ADDRESS` candidates
+4. Groups candidates using conservative distinctness heuristics:
+   - Different postal-like tokens
+   - Different address types (`PO_BOX` vs `STANDARD`)
+   - Low locality token overlap
+
+### **Output Format**
+```json
+"multi_address_profile": {
+  "status": "SINGLE | MULTIPLE | UNKNOWN",
+  "count": 0,
+  "address_types": ["STANDARD", "PO_BOX"],
+  "evidence": ["distinct_postal_tokens"]
+}
+```
+
+### **Safety Guarantees**
+- ❌ No fraud scoring impact
+- ❌ No geo correctness claims
+- ✅ Conservative to avoid false positives
+
+---
+
+## 🧠 V3: Learned Rule Consumption Examples
+
+**Date:** 2026-01-16  
+**Status:** 📖 DOCUMENTATION ONLY
+
+V3 documents how learned rules should consume address-related signals safely.
+
+### **Principle**
+
+**No single address signal should independently mark a document as fraudulent.** Address signals are amplifiers, not decisive verdicts.
+
+### **Example Patterns**
+
+#### **Pattern A: Invoice Risk Amplifier (high-confidence docs only)**
+Trigger when multiple weak indicators co-occur:
+- `doc_subtype == INVOICE`
+- `doc_profile_confidence >= 0.8`
+- `multi_address_profile.status == MULTIPLE`
+- `merchant_address_consistency.status in {WEAK_MISMATCH, MISMATCH}`
+
+#### **Pattern B: Template / Editing Suspicion (tooling + structure)**
+- `suspicious_pdf_producer == true`
+- `multi_address_profile.status == MULTIPLE`
+- `address_profile.address_classification in {PLAUSIBLE_ADDRESS, STRONG_ADDRESS}`
+
+#### **Pattern C: Suppression for Low-Confidence Docs**
+- If `doc_profile_confidence < 0.55`, address-derived learned rules should be suppressed or downgraded.
+
+### **Design Rationale**
+
+**Why Feature-Only?**
+- ✅ Allows learned rules to discover patterns organically
+- ✅ Avoids premature penalization
+- ✅ Can be tuned based on real-world data
+
+**Why Multiple Signals?**
+- ✅ Single signals are too weak to be decisive
+- ✅ Combination of signals creates stronger evidence
+- ✅ Reduces false positive rate
+
+**Why Confidence Gating?**
+- ✅ Only applies to high-confidence documents
+- ✅ Prevents noise from uncertain classifications
+- ✅ Maintains precision over recall
+
+---
