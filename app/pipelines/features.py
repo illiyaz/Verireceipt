@@ -2135,6 +2135,18 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     except Exception:
         logger.exception("Merchant signal emission failed")
 
+    # ------------------------------------------------------------------
+    # Signal Invariant Validation
+    # ------------------------------------------------------------------
+    # Ensure dict key == signal.name for all emitted signals
+    for key, signal in unified_signals.items():
+        if hasattr(signal, 'name') and signal.name != key:
+            logger.error(
+                f"Signal key mismatch: dict key='{key}' but signal.name='{signal.name}'"
+            )
+            # Fix it automatically to maintain invariant
+            signal.name = key
+
     return ReceiptFeatures(
         file_features=file_features,
         text_features=text_features,
