@@ -267,7 +267,7 @@ class SignalRegistry:
             severity="weak",
             gated_by=[],
             privacy="safe",
-            description="Language detection confidence below threshold",
+            description="Automatic language identification algorithm produced uncertain or ambiguous results",
         ),
         "language.script_mismatch": SignalSpec(
             name="language.script_mismatch",
@@ -276,7 +276,7 @@ class SignalRegistry:
             severity="medium",
             gated_by=["doc_profile_confidence"],
             privacy="safe",
-            description="Detected script doesn't match language",
+            description="Writing system used in document inconsistent with identified spoken language",
         ),
         "language.mixed_scripts": SignalSpec(
             name="language.mixed_scripts",
@@ -285,7 +285,7 @@ class SignalRegistry:
             severity="medium",
             gated_by=["doc_profile_confidence"],
             privacy="safe",
-            description="Multiple scripts detected (potential fraud indicator)",
+            description="Document contains text in multiple writing systems which may indicate manipulation",
         ),
     }
     
