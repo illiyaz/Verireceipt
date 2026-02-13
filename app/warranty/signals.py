@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, date
 from enum import Enum
 
-from .db import get_benchmark, get_dealer_statistics, get_connection
+from .db import get_benchmark, get_dealer_statistics, get_connection, release_connection, _get_cursor, _sql, USE_POSTGRES
 import re
 
 
@@ -648,34 +648,37 @@ class WarrantyFraudSignalDetector:
         signals = []
         
         conn = get_connection()
-        cursor = conn.cursor()
-        
-        # Find previous claims for this VIN
-        cursor.execute("""
-            SELECT id, odometer, claim_date 
-            FROM warranty_claims 
-            WHERE vin = ? AND id != ? AND odometer IS NOT NULL
-            ORDER BY claim_date DESC
-        """, (vin, claim_id))
-        
-        for row in cursor.fetchall():
-            prev_odometer = row["odometer"]
-            prev_date = row["claim_date"]
+        try:
+            cursor = _get_cursor(conn)
             
-            if prev_odometer and prev_odometer > odometer:
-                signals.append(FraudSignal(
-                    signal_type="ODOMETER_REGRESSION",
-                    severity=Severity.HIGH,
-                    description=f"Odometer went backwards: prior claim shows {prev_odometer:,} miles, "
-                               f"current claim shows {odometer:,} miles",
-                    evidence={
-                        "current_odometer": odometer,
-                        "prior_odometer": prev_odometer,
-                        "prior_claim_id": row["id"],
-                        "prior_claim_date": prev_date
-                    }
-                ))
-                break  # One signal is enough
+            # Find previous claims for this VIN
+            cursor.execute(_sql("""
+                SELECT id, odometer, claim_date 
+                FROM warranty_claims 
+                WHERE vin = ? AND id != ? AND odometer IS NOT NULL
+                ORDER BY claim_date DESC
+            """), (vin, claim_id))
+            
+            for row in cursor.fetchall():
+                prev_odometer = row["odometer"]
+                prev_date = row["claim_date"]
+                
+                if prev_odometer and prev_odometer > odometer:
+                    signals.append(FraudSignal(
+                        signal_type="ODOMETER_REGRESSION",
+                        severity=Severity.HIGH,
+                        description=f"Odometer went backwards: prior claim shows {prev_odometer:,} miles, "
+                                   f"current claim shows {odometer:,} miles",
+                        evidence={
+                            "current_odometer": odometer,
+                            "prior_odometer": prev_odometer,
+                            "prior_claim_id": row["id"],
+                            "prior_claim_date": prev_date
+                        }
+                    ))
+                    break  # One signal is enough
+        finally:
+            release_connection(conn)
         
         return signals
     
@@ -784,36 +787,49 @@ class WarrantyFraudSignalDetector:
         signals = []
         
         conn = get_connection()
-        cursor = conn.cursor()
-        
-        # Count claims in last 30 days vs previous 30 days
-        cursor.execute("""
-            SELECT 
-                SUM(CASE WHEN claim_date >= date('now', '-30 days') THEN 1 ELSE 0 END) as recent,
-                SUM(CASE WHEN claim_date >= date('now', '-60 days') 
-                         AND claim_date < date('now', '-30 days') THEN 1 ELSE 0 END) as prior
-            FROM warranty_claims
-            WHERE dealer_id = ?
-        """, (dealer_id,))
-        
-        row = cursor.fetchone()
-        if row:
-            recent = row["recent"] or 0
-            prior = row["prior"] or 0
+        try:
+            cursor = _get_cursor(conn)
             
-            if prior > 0 and recent > prior * 2.5:  # 2.5x spike
-                signals.append(FraudSignal(
-                    signal_type="DEALER_SPIKE_IN_CLAIMS",
-                    severity=Severity.MEDIUM,
-                    description=f"Dealer claim volume spiked: {recent} claims in last 30 days "
-                               f"vs {prior} in prior 30 days ({recent/prior:.1f}x increase)",
-                    evidence={
-                        "dealer_id": dealer_id,
-                        "recent_claims": recent,
-                        "prior_claims": prior,
-                        "spike_ratio": recent / prior if prior > 0 else None
-                    }
-                ))
+            # Count claims in last 30 days vs previous 30 days
+            if USE_POSTGRES:
+                cursor.execute("""
+                    SELECT 
+                        SUM(CASE WHEN claim_date >= (CURRENT_DATE - INTERVAL '30 days')::TEXT THEN 1 ELSE 0 END) as recent,
+                        SUM(CASE WHEN claim_date >= (CURRENT_DATE - INTERVAL '60 days')::TEXT 
+                                 AND claim_date < (CURRENT_DATE - INTERVAL '30 days')::TEXT THEN 1 ELSE 0 END) as prior
+                    FROM warranty_claims
+                    WHERE dealer_id = %s
+                """, (dealer_id,))
+            else:
+                cursor.execute("""
+                    SELECT 
+                        SUM(CASE WHEN claim_date >= date('now', '-30 days') THEN 1 ELSE 0 END) as recent,
+                        SUM(CASE WHEN claim_date >= date('now', '-60 days') 
+                                 AND claim_date < date('now', '-30 days') THEN 1 ELSE 0 END) as prior
+                    FROM warranty_claims
+                    WHERE dealer_id = ?
+                """, (dealer_id,))
+            
+            row = cursor.fetchone()
+            if row:
+                recent = row["recent"] or 0
+                prior = row["prior"] or 0
+                
+                if prior > 0 and recent > prior * 2.5:  # 2.5x spike
+                    signals.append(FraudSignal(
+                        signal_type="DEALER_SPIKE_IN_CLAIMS",
+                        severity=Severity.MEDIUM,
+                        description=f"Dealer claim volume spiked: {recent} claims in last 30 days "
+                                   f"vs {prior} in prior 30 days ({recent/prior:.1f}x increase)",
+                        evidence={
+                            "dealer_id": dealer_id,
+                            "recent_claims": recent,
+                            "prior_claims": prior,
+                            "spike_ratio": recent / prior if prior > 0 else None
+                        }
+                    ))
+        finally:
+            release_connection(conn)
         
         return signals
     
@@ -828,38 +844,49 @@ class WarrantyFraudSignalDetector:
         signals = []
         
         conn = get_connection()
-        cursor = conn.cursor()
-        
-        # Find similar claims for same VIN in last 90 days
-        cursor.execute("""
-            SELECT id, issue_description, claim_date
-            FROM warranty_claims
-            WHERE vin = ? AND id != ?
-            AND claim_date >= date('now', '-90 days')
-        """, (vin, claim_id))
-        
-        issue_words = set(issue_description.lower().split())
-        
-        for row in cursor.fetchall():
-            prev_issue = row["issue_description"] or ""
-            prev_words = set(prev_issue.lower().split())
+        try:
+            cursor = _get_cursor(conn)
             
-            # Check word overlap
-            overlap = len(issue_words & prev_words)
-            if overlap >= 2:  # At least 2 common words
-                signals.append(FraudSignal(
-                    signal_type="REPEAT_CLAIM_SAME_PART_SHORT_WINDOW",
-                    severity=Severity.MEDIUM,
-                    description=f"Similar claim for same VIN within 90 days: "
-                               f"'{prev_issue}' (claim {row['id']})",
-                    evidence={
-                        "current_issue": issue_description,
-                        "prior_issue": prev_issue,
-                        "prior_claim_id": row["id"],
-                        "prior_claim_date": row["claim_date"]
-                    }
-                ))
-                break  # One signal is enough
+            # Find similar claims for same VIN in last 90 days
+            if USE_POSTGRES:
+                cursor.execute("""
+                    SELECT id, issue_description, claim_date
+                    FROM warranty_claims
+                    WHERE vin = %s AND id != %s
+                    AND claim_date >= (CURRENT_DATE - INTERVAL '90 days')::TEXT
+                """, (vin, claim_id))
+            else:
+                cursor.execute("""
+                    SELECT id, issue_description, claim_date
+                    FROM warranty_claims
+                    WHERE vin = ? AND id != ?
+                    AND claim_date >= date('now', '-90 days')
+                """, (vin, claim_id))
+            
+            issue_words = set(issue_description.lower().split())
+            
+            for row in cursor.fetchall():
+                prev_issue = row["issue_description"] or ""
+                prev_words = set(prev_issue.lower().split())
+                
+                # Check word overlap
+                overlap = len(issue_words & prev_words)
+                if overlap >= 2:  # At least 2 common words
+                    signals.append(FraudSignal(
+                        signal_type="REPEAT_CLAIM_SAME_PART_SHORT_WINDOW",
+                        severity=Severity.MEDIUM,
+                        description=f"Similar claim for same VIN within 90 days: "
+                                   f"'{prev_issue}' (claim {row['id']})",
+                        evidence={
+                            "current_issue": issue_description,
+                            "prior_issue": prev_issue,
+                            "prior_claim_id": row["id"],
+                            "prior_claim_date": row["claim_date"]
+                        }
+                    ))
+                    break  # One signal is enough
+        finally:
+            release_connection(conn)
         
         return signals
     
@@ -901,49 +928,52 @@ class WarrantyFraudSignalDetector:
         signals = []
         
         conn = get_connection()
-        cursor = conn.cursor()
-        
-        # Count total claims for this VIN
-        cursor.execute("""
-            SELECT COUNT(*) as claim_count,
-                   MIN(claim_date) as first_claim,
-                   MAX(claim_date) as last_claim,
-                   SUM(total_amount) as total_claimed
-            FROM warranty_claims
-            WHERE vin = ? AND id != ?
-        """, (vin, claim_id))
-        
-        row = cursor.fetchone()
-        if row and row["claim_count"]:
-            claim_count = row["claim_count"]
-            total_claimed = row["total_claimed"] or 0
+        try:
+            cursor = _get_cursor(conn)
             
-            # Flag if more than 3 claims for same vehicle
-            if claim_count >= 3:
-                signals.append(FraudSignal(
-                    signal_type="VIN_EXCESSIVE_CLAIMS",
-                    severity=Severity.HIGH,
-                    description=f"Vehicle has {claim_count + 1} total claims (including this one), "
-                               f"total claimed: ${total_claimed:,.2f}",
-                    evidence={
-                        "vin": vin,
-                        "prior_claim_count": claim_count,
-                        "total_claims": claim_count + 1,
-                        "total_amount_claimed": total_claimed,
-                        "first_claim_date": row["first_claim"],
-                        "last_claim_date": row["last_claim"]
-                    }
-                ))
-            elif claim_count >= 2:
-                signals.append(FraudSignal(
-                    signal_type="VIN_MULTIPLE_CLAIMS",
-                    severity=Severity.MEDIUM,
-                    description=f"Vehicle has {claim_count + 1} total claims",
-                    evidence={
-                        "vin": vin,
-                        "total_claims": claim_count + 1
-                    }
-                ))
+            # Count total claims for this VIN
+            cursor.execute(_sql("""
+                SELECT COUNT(*) as claim_count,
+                       MIN(claim_date) as first_claim,
+                       MAX(claim_date) as last_claim,
+                       SUM(total_amount) as total_claimed
+                FROM warranty_claims
+                WHERE vin = ? AND id != ?
+            """), (vin, claim_id))
+            
+            row = cursor.fetchone()
+            if row and row["claim_count"]:
+                claim_count = row["claim_count"]
+                total_claimed = row["total_claimed"] or 0
+                
+                # Flag if more than 3 claims for same vehicle
+                if claim_count >= 3:
+                    signals.append(FraudSignal(
+                        signal_type="VIN_EXCESSIVE_CLAIMS",
+                        severity=Severity.HIGH,
+                        description=f"Vehicle has {claim_count + 1} total claims (including this one), "
+                                   f"total claimed: ${total_claimed:,.2f}",
+                        evidence={
+                            "vin": vin,
+                            "prior_claim_count": claim_count,
+                            "total_claims": claim_count + 1,
+                            "total_amount_claimed": total_claimed,
+                            "first_claim_date": row["first_claim"],
+                            "last_claim_date": row["last_claim"]
+                        }
+                    ))
+                elif claim_count >= 2:
+                    signals.append(FraudSignal(
+                        signal_type="VIN_MULTIPLE_CLAIMS",
+                        severity=Severity.MEDIUM,
+                        description=f"Vehicle has {claim_count + 1} total claims",
+                        evidence={
+                            "vin": vin,
+                            "total_claims": claim_count + 1
+                        }
+                    ))
+        finally:
+            release_connection(conn)
         
         return signals
 

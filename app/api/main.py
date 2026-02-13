@@ -13,6 +13,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
 import asyncio
 import json as json_module
@@ -73,6 +74,20 @@ app.include_router(warranty_router)
 web_dir = Path(__file__).parent.parent.parent / "web"
 if web_dir.exists():
     app.mount("/web", StaticFiles(directory=str(web_dir), html=True), name="web")
+
+
+class NoCacheHTMLMiddleware(BaseHTTPMiddleware):
+    """Prevent browsers from caching HTML files so deploys are picked up immediately."""
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/web/") and request.url.path.endswith(".html"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
+
+app.add_middleware(NoCacheHTMLMiddleware)
 
 # Enable CORS for web demo
 app.add_middleware(

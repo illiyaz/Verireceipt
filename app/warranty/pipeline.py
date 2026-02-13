@@ -255,9 +255,12 @@ class WarrantyAnalysisPipeline:
         # Save to database
         self._save_result(result, pdf_path)
         
-        # Update dealer statistics if dealer_id provided
+        # Update dealer statistics if dealer_id provided (non-critical)
         if dealer_id:
-            update_dealer_statistics(dealer_id)
+            try:
+                update_dealer_statistics(dealer_id)
+            except Exception as e:
+                print(f"⚠️ Failed to update dealer statistics for {dealer_id}: {e}")
         
         print(f"✅ Analysis complete in {processing_time:.0f}ms")
         print(f"   Risk Score: {risk_score:.2f}")

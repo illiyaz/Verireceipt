@@ -18,6 +18,7 @@
         
         function StatsPage() {
             const [stats, setStats] = useState(null);
+            const [warrantyStats, setWarrantyStats] = useState(null);
             const [rules, setRules] = useState([]);
             const [loading, setLoading] = useState(true);
             const [days, setDays] = useState(30);
@@ -25,6 +26,7 @@
             useEffect(() => {
                 loadStats();
                 loadRules();
+                loadWarrantyStats();
             }, [days]);
             
             const loadStats = async () => {
@@ -34,6 +36,16 @@
                     setStats(data);
                 } catch (error) {
                     console.error('Error loading stats:', error);
+                }
+            };
+
+            const loadWarrantyStats = async () => {
+                try {
+                    const response = await fetch(`${window.location.origin}/warranty/stats`);
+                    const data = await response.json();
+                    setWarrantyStats(data);
+                } catch (error) {
+                    console.error('Error loading warranty stats:', error);
                 }
             };
             
@@ -87,6 +99,107 @@
                     </header>
                     
                     <div className="container mx-auto px-4 py-8">
+                        {/* Warranty Claims Analytics */}
+                        {warrantyStats && (
+                            <div className="mb-8">
+                                <h2 className="text-xl font-bold text-gray-800 mb-4">
+                                    <i className="fas fa-shield-alt mr-2 text-blue-600"></i>
+                                    Warranty Claims Analytics
+                                </h2>
+                                <div className="grid md:grid-cols-4 gap-6 mb-6">
+                                    <div className="bg-white rounded-xl p-6 shadow-lg">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <i className="fas fa-file-invoice text-3xl text-blue-600"></i>
+                                            <span className="text-3xl font-bold text-gray-800">{warrantyStats.total_claims}</span>
+                                        </div>
+                                        <div className="text-gray-600">Total Claims</div>
+                                    </div>
+                                    
+                                    <div className="bg-white rounded-xl p-6 shadow-lg">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <i className="fas fa-exclamation-triangle text-3xl text-red-600"></i>
+                                            <span className="text-3xl font-bold text-gray-800">{warrantyStats.suspicious_count}</span>
+                                        </div>
+                                        <div className="text-gray-600">Suspicious Claims</div>
+                                    </div>
+                                    
+                                    <div className="bg-white rounded-xl p-6 shadow-lg">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <i className="fas fa-copy text-3xl text-orange-600"></i>
+                                            <span className="text-3xl font-bold text-gray-800">{warrantyStats.claims_with_duplicates}</span>
+                                        </div>
+                                        <div className="text-gray-600">With Duplicates</div>
+                                    </div>
+                                    
+                                    <div className="bg-white rounded-xl p-6 shadow-lg">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <i className="fas fa-comment-dots text-3xl text-green-600"></i>
+                                            <span className="text-3xl font-bold text-gray-800">
+                                                {Object.values(warrantyStats.feedback_summary || {}).reduce((a, b) => a + b, 0)}
+                                            </span>
+                                        </div>
+                                        <div className="text-gray-600">Adjuster Feedback</div>
+                                    </div>
+                                </div>
+                                
+                                {/* Triage Breakdown */}
+                                {warrantyStats.by_triage && Object.keys(warrantyStats.by_triage).length > 0 && (
+                                    <div className="bg-white rounded-xl p-6 shadow-lg mb-6">
+                                        <h3 className="text-lg font-bold text-gray-800 mb-4">
+                                            <i className="fas fa-chart-bar mr-2 text-purple-600"></i>
+                                            Claims by Triage Class
+                                        </h3>
+                                        <div className="grid md:grid-cols-3 gap-4">
+                                            <div className="text-center p-4 bg-green-50 rounded-lg">
+                                                <div className="text-3xl font-bold text-green-600">
+                                                    {warrantyStats.by_triage['AUTO_APPROVE'] || 0}
+                                                </div>
+                                                <div className="text-gray-600 mt-1">Auto Approve</div>
+                                            </div>
+                                            <div className="text-center p-4 bg-yellow-50 rounded-lg">
+                                                <div className="text-3xl font-bold text-yellow-600">
+                                                    {warrantyStats.by_triage['REVIEW'] || 0}
+                                                </div>
+                                                <div className="text-gray-600 mt-1">Manual Review</div>
+                                            </div>
+                                            <div className="text-center p-4 bg-red-50 rounded-lg">
+                                                <div className="text-3xl font-bold text-red-600">
+                                                    {warrantyStats.by_triage['INVESTIGATE'] || 0}
+                                                </div>
+                                                <div className="text-gray-600 mt-1">Investigate</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Feedback Breakdown */}
+                                {warrantyStats.feedback_summary && Object.keys(warrantyStats.feedback_summary).length > 0 && (
+                                    <div className="bg-white rounded-xl p-6 shadow-lg mb-6">
+                                        <h3 className="text-lg font-bold text-gray-800 mb-4">
+                                            <i className="fas fa-gavel mr-2 text-indigo-600"></i>
+                                            Adjuster Verdict Breakdown
+                                        </h3>
+                                        <div className="grid md:grid-cols-3 gap-4">
+                                            {Object.entries(warrantyStats.feedback_summary).map(([verdict, count]) => (
+                                                <div key={verdict} className="text-center p-4 bg-indigo-50 rounded-lg">
+                                                    <div className="text-2xl font-bold text-indigo-600">{count}</div>
+                                                    <div className="text-gray-600 mt-1 text-sm">{verdict.replace(/_/g, ' ')}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        <hr className="my-8 border-gray-200" />
+                        
+                        {/* Receipt Feedback Section Header */}
+                        <h2 className="text-xl font-bold text-gray-800 mb-4">
+                            <i className="fas fa-receipt mr-2 text-purple-600"></i>
+                            Receipt Analysis Feedback
+                        </h2>
+
                         {/* Time Period Selector */}
                         <div className="mb-6 flex items-center space-x-4">
                             <span className="text-gray-700 font-semibold">Time Period:</span>
@@ -119,7 +232,7 @@
                                 <div className="bg-white rounded-xl p-6 shadow-lg">
                                     <div className="flex items-center justify-between mb-2">
                                         <i className="fas fa-check-circle text-3xl text-green-600"></i>
-                                        <span className="text-3xl font-bold text-gray-800">{stats.accuracy.toFixed(1)}%</span>
+                                        <span className="text-3xl font-bold text-gray-800">{(stats.accuracy || 0).toFixed(1)}%</span>
                                     </div>
                                     <div className="text-gray-600">Accuracy</div>
                                 </div>

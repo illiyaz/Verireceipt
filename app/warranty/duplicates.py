@@ -30,6 +30,9 @@ from .db import (
     find_exact_image,
     save_duplicate_match,
     get_connection,
+    release_connection,
+    _get_cursor,
+    _sql,
     get_hash_claim_count,
     get_phash_claim_count
 )
@@ -291,51 +294,54 @@ class DuplicateDetector:
         matches = []
         
         conn = get_connection()
-        cursor = conn.cursor()
-        
-        # Find claims with same VIN
-        cursor.execute("""
-            SELECT id, issue_description, claim_date, status, dealer_id
-            FROM warranty_claims 
-            WHERE vin = ? AND id != ?
-        """, (vin, claim_id))
-        
-        vin_matches = cursor.fetchall()
-        
-        for row in vin_matches:
-            matched_id = row["id"]
-            matched_issue = row["issue_description"] or ""
-            matched_date = row["claim_date"]
+        try:
+            cursor = _get_cursor(conn)
             
-            # Check issue similarity
-            issue_similarity = self._calculate_issue_similarity(
-                issue_description or "", matched_issue
-            )
+            # Find claims with same VIN
+            cursor.execute(_sql("""
+                SELECT id, issue_description, claim_date, status, dealer_id
+                FROM warranty_claims 
+                WHERE vin = ? AND id != ?
+            """), (vin, claim_id))
             
-            # Check date proximity
-            date_proximity = self._calculate_date_proximity(
-                claim_date, matched_date
-            )
+            vin_matches = cursor.fetchall()
             
-            # High similarity + recent = likely duplicate
-            if issue_similarity > 0.7 and date_proximity > 0.5:
-                overall_score = (issue_similarity + date_proximity) / 2
+            for row in vin_matches:
+                matched_id = row["id"]
+                matched_issue = row["issue_description"] or ""
+                matched_date = row["claim_date"]
                 
-                matches.append(DuplicateMatch(
-                    matched_claim_id=matched_id,
-                    match_type="VIN_ISSUE_DUPLICATE",
-                    similarity_score=overall_score,
-                    details=f"Same VIN with similar issue (issue sim: {issue_similarity:.2f}, "
-                            f"date proximity: {date_proximity:.2f})"
-                ))
-                
-                save_duplicate_match(
-                    claim_id_1=claim_id,
-                    claim_id_2=matched_id,
-                    match_type="VIN_ISSUE_DUPLICATE",
-                    similarity_score=overall_score,
-                    details=f"Same VIN, issue similarity: {issue_similarity:.2f}"
+                # Check issue similarity
+                issue_similarity = self._calculate_issue_similarity(
+                    issue_description or "", matched_issue
                 )
+                
+                # Check date proximity
+                date_proximity = self._calculate_date_proximity(
+                    claim_date, matched_date
+                )
+                
+                # High similarity + recent = likely duplicate
+                if issue_similarity > 0.7 and date_proximity > 0.5:
+                    overall_score = (issue_similarity + date_proximity) / 2
+                    
+                    matches.append(DuplicateMatch(
+                        matched_claim_id=matched_id,
+                        match_type="VIN_ISSUE_DUPLICATE",
+                        similarity_score=overall_score,
+                        details=f"Same VIN with similar issue (issue sim: {issue_similarity:.2f}, "
+                                f"date proximity: {date_proximity:.2f})"
+                    ))
+                    
+                    save_duplicate_match(
+                        claim_id_1=claim_id,
+                        claim_id_2=matched_id,
+                        match_type="VIN_ISSUE_DUPLICATE",
+                        similarity_score=overall_score,
+                        details=f"Same VIN, issue similarity: {issue_similarity:.2f}"
+                    )
+        finally:
+            release_connection(conn)
         
         return matches
     
