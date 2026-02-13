@@ -100,6 +100,7 @@
             const [dealerId, setDealerId] = useState('');
             const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
             const [feedbackVerdict, setFeedbackVerdict] = useState(null);
+            const [feedbackError, setFeedbackError] = useState(null);
             const fileInputRef = useRef(null);
 
             const handleFile = (selectedFile) => {
@@ -160,7 +161,11 @@
             };
 
             const submitFeedback = async (verdict) => {
-                if (!result?.claim_id) return;
+                if (!result?.claim_id) {
+                    setFeedbackError('No claim ID available. Please analyze a document first.');
+                    return;
+                }
+                setFeedbackError(null);
 
                 try {
                     const response = await fetch(`${API_BASE_URL}/warranty/feedback`, {
@@ -177,8 +182,12 @@
                     if (response.ok) {
                         setFeedbackSubmitted(true);
                         setFeedbackVerdict(verdict);
+                    } else {
+                        const errData = await response.json().catch(() => ({}));
+                        setFeedbackError(`Feedback failed (${response.status}): ${errData.detail || response.statusText}`);
                     }
                 } catch (err) {
+                    setFeedbackError(`Feedback error: ${err.message}`);
                     console.error('Feedback error:', err);
                 }
             };
@@ -464,6 +473,11 @@
                                             <h3 className="font-semibold text-gray-700 mb-3">
                                                 <i className="fas fa-comment-dots mr-2"></i>Adjuster Feedback
                                             </h3>
+                                            {feedbackError && (
+                                                <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3 text-center">
+                                                    <p className="text-red-700 text-sm">{feedbackError}</p>
+                                                </div>
+                                            )}
                                             {feedbackSubmitted ? (
                                                 <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
                                                     <i className="fas fa-check-circle text-green-500 text-2xl mb-2"></i>
