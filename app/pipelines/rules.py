@@ -3345,9 +3345,9 @@ def _score_and_explain(
                 message="No date detected but optional for this doc subtype",
                 evidence={
                     "has_date": False,
-                    "doc_family": doc_profile.get("family"),
-                    "doc_subtype": doc_profile.get("subtype"),
-                    "doc_profile_confidence": doc_profile.get("confidence"),
+                    "doc_family": legacy_doc_profile.get("family"),
+                    "doc_subtype": legacy_doc_profile.get("subtype"),
+                    "doc_profile_confidence": legacy_doc_profile.get("confidence"),
                 },
             )
 

@@ -1596,7 +1596,6 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         text=full_text,
         doc_profile_confidence=conf,
     )
-    text_features["multi_address_profile"] = multi_address_profile
     
     # Optional: Record address telemetry (controlled by ENABLE_ADDRESS_TELEMETRY env var)
     import os
@@ -1664,8 +1663,6 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         image_width = raw.images[0].width
         image_height = raw.images[0].height
 
-    suspicious_producer = _check_suspicious_producer(meta)
-    
     file_features: Dict[str, Any] = {
         "file_size_bytes": raw.file_size_bytes,
         "num_pages": raw.num_pages,
@@ -2105,9 +2102,9 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
             unified_signals["amount.semantic_override"] = normalize_signal(
                 "amount.semantic_override",
                 signal_amount_semantic_override(
-                    semantic_amounts,
+                    semantic_amounts.to_dict() if hasattr(semantic_amounts, 'to_dict') else semantic_amounts,
                     text_features.get("total_amount"),
-                    semantic_amounts.total_amount,
+                    semantic_amounts.total_amount if hasattr(semantic_amounts, 'total_amount') else None,
                 ),
             )
     except Exception:
