@@ -2,3 +2,7 @@ __pycache__/
 .env
 *.pyc
 .ipynb_checkpoints/
+*.bin
+*.sqlite
+data/
+venv/
