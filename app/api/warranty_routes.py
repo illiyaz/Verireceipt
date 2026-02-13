@@ -11,6 +11,7 @@ Endpoints:
 import os
 import tempfile
 import shutil
+import traceback
 from typing import Optional
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException
 from pydantic import BaseModel
@@ -88,8 +89,13 @@ async def analyze_warranty(
             content = await file.read()
             f.write(content)
         
+        # Normalize dealer_id: empty string → None
+        effective_dealer_id = dealer_id.strip() if dealer_id else None
+        if effective_dealer_id == "":
+            effective_dealer_id = None
+        
         # Run analysis pipeline
-        result = analyze_warranty_claim(temp_path, dealer_id=dealer_id)
+        result = analyze_warranty_claim(temp_path, dealer_id=effective_dealer_id)
         
         # Build response
         return AnalyzeResponse(
@@ -97,9 +103,9 @@ async def analyze_warranty(
             risk_score=result.risk_score,
             triage_class=result.triage_class.value,
             is_suspicious=result.is_suspicious,
-            fraud_signals=[s.dict() for s in result.fraud_signals],
+            fraud_signals=[s.model_dump() if hasattr(s, 'model_dump') else s.dict() for s in result.fraud_signals],
             warnings=result.warnings,
-            duplicates_found=[d.dict() for d in result.duplicates_found],
+            duplicates_found=[d.model_dump() if hasattr(d, 'model_dump') else d.dict() for d in result.duplicates_found],
             summary=result.summary,
             processing_time_ms=result.processing_time_ms,
             images_extracted=result.images_extracted,
@@ -118,6 +124,9 @@ async def analyze_warranty(
         )
         
     except Exception as e:
+        # Log full traceback for Render debugging
+        print(f"❌ WARRANTY ANALYZE ERROR: {str(e)}")
+        traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail=f"Analysis failed: {str(e)}"

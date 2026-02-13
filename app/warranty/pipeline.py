@@ -21,7 +21,7 @@ from .duplicates import DuplicateDetector, DuplicateMatch
 from .signals import WarrantyFraudSignalDetector, FraudSignal, Severity
 from .db import (
     save_claim, save_image_fingerprint, claim_exists,
-    update_dealer_statistics
+    update_dealer_statistics, delete_claim_images
 )
 
 
@@ -65,9 +65,21 @@ class WarrantyAnalysisPipeline:
         
         claim_id = extracted.claim_id or self._generate_claim_id(pdf_path)
         
-        # Check if claim already exists
-        if claim_exists(claim_id):
+        # Save a placeholder claim record FIRST so that image FK constraints
+        # are satisfied (PostgreSQL enforces FK, SQLite does not).
+        already_exists = claim_exists(claim_id)
+        if already_exists:
             print(f"⚠️ Claim {claim_id} already exists in database")
+            # Delete old images to avoid duplicates on re-analysis
+            delete_claim_images(claim_id)
+        else:
+            # Insert minimal placeholder so warranty_claim_images FK is satisfied
+            save_claim({
+                "claim_id": claim_id,
+                "customer_name": extracted.customer_name,
+                "issue_description": extracted.issue_description,
+                "status": "Pending",
+            })
         
         # Stage 2: Save images and compute hashes
         print(f"🖼️ Stage 2: Processing {len(extracted.images)} images...")
@@ -75,27 +87,30 @@ class WarrantyAnalysisPipeline:
         for idx, img in enumerate(extracted.images):
             has_hash = img.phash or img.file_hash
             if has_hash:
-                save_image_fingerprint(
-                    claim_id=claim_id,
-                    image_index=idx,
-                    phash=img.phash or "",
-                    dhash=img.dhash,
-                    file_hash=img.file_hash,
-                    exif_data=getattr(img, 'exif', None),
-                    dimensions=(img.width, img.height),
-                    extraction_method=img.method,
-                    page_number=img.page,
-                    bbox=img.bbox
-                )
-                image_data.append({
-                    "index": idx,
-                    "phash": img.phash,
-                    "dhash": img.dhash,
-                    "file_hash": img.file_hash,
-                    "size": getattr(img, 'size', 0),
-                    "width": img.width,
-                    "height": img.height
-                })
+                try:
+                    save_image_fingerprint(
+                        claim_id=claim_id,
+                        image_index=idx,
+                        phash=img.phash or "",
+                        dhash=img.dhash,
+                        file_hash=img.file_hash,
+                        exif_data=getattr(img, 'exif', None),
+                        dimensions=(img.width, img.height),
+                        extraction_method=img.method,
+                        page_number=img.page,
+                        bbox=img.bbox
+                    )
+                    image_data.append({
+                        "index": idx,
+                        "phash": img.phash,
+                        "dhash": img.dhash,
+                        "file_hash": img.file_hash,
+                        "size": getattr(img, 'size', 0),
+                        "width": img.width,
+                        "height": img.height
+                    })
+                except Exception as e:
+                    print(f"   ⚠️ Image {idx}: failed to save fingerprint: {e}")
             else:
                 print(f"   ⚠️ Image {idx}: no phash or file_hash, skipping")
         
@@ -368,7 +383,7 @@ class WarrantyAnalysisPipeline:
             "rejection_reason": result.claim.rejection_reason,
             "risk_score": result.risk_score,
             "triage_class": result.triage_class.value,
-            "fraud_signals": [s.dict() for s in result.fraud_signals],
+            "fraud_signals": [s.model_dump() if hasattr(s, 'model_dump') else s.dict() for s in result.fraud_signals],
             "warnings": result.warnings,
             "is_suspicious": result.is_suspicious,
             "pdf_path": pdf_path,

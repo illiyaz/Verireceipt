@@ -146,6 +146,11 @@
 
                     const data = await response.json();
                     setResult(data);
+                    // Clear upload form after successful analysis
+                    setFile(null);
+                    setPreview(null);
+                    setFeedbackSubmitted(false);
+                    setFeedbackVerdict(null);
                 } catch (err) {
                     setError(err.message);
                 } finally {

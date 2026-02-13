@@ -179,6 +179,26 @@ def claim_exists(claim_id: str) -> bool:
         release_connection(conn)
 
 
+def delete_claim_images(claim_id: str) -> int:
+    """Delete all image fingerprints and duplicate matches for a claim (used on re-analysis)."""
+    conn = get_connection()
+    try:
+        cursor = _get_cursor(conn)
+        # Delete duplicate matches first (FK references)
+        cursor.execute(_sql(
+            "DELETE FROM warranty_duplicate_matches WHERE claim_id_1 = ? OR claim_id_2 = ?"
+        ), (claim_id, claim_id))
+        # Delete image fingerprints
+        cursor.execute(_sql(
+            "DELETE FROM warranty_claim_images WHERE claim_id = ?"
+        ), (claim_id,))
+        deleted = cursor.rowcount
+        conn.commit()
+        return deleted
+    finally:
+        release_connection(conn)
+
+
 def save_image_fingerprint(
     claim_id: str,
     image_index: int,
@@ -498,6 +518,8 @@ def save_feedback(
 
 def update_dealer_statistics(dealer_id: str, dealer_name: Optional[str] = None):
     """Update aggregated statistics for a dealer."""
+    if not dealer_id:
+        return
     conn = get_connection()
     try:
         cursor = _get_cursor(conn)
@@ -506,9 +528,9 @@ def update_dealer_statistics(dealer_id: str, dealer_name: Optional[str] = None):
         cursor.execute(_sql("""
             SELECT 
                 COUNT(*) as total_claims,
-                SUM(CASE WHEN status = 'Approved' THEN 1 ELSE 0 END) as approved_claims,
-                SUM(CASE WHEN status = 'Rejected' THEN 1 ELSE 0 END) as rejected_claims,
-                SUM(CASE WHEN is_suspicious = 1 THEN 1 ELSE 0 END) as suspicious_count,
+                COALESCE(SUM(CASE WHEN status = 'Approved' THEN 1 ELSE 0 END), 0) as approved_claims,
+                COALESCE(SUM(CASE WHEN status = 'Rejected' THEN 1 ELSE 0 END), 0) as rejected_claims,
+                COALESCE(SUM(CASE WHEN is_suspicious = 1 THEN 1 ELSE 0 END), 0) as suspicious_count,
                 AVG(total_amount) as avg_claim_amount,
                 AVG(parts_cost) as avg_parts_cost,
                 AVG(labor_cost) as avg_labor_cost,
@@ -518,6 +540,9 @@ def update_dealer_statistics(dealer_id: str, dealer_name: Optional[str] = None):
             WHERE dealer_id = ?
         """), (dealer_id,))
         stats = cursor.fetchone()
+
+        if not stats or (stats["total_claims"] if isinstance(stats, dict) else stats[0]) == 0:
+            return
 
         # Count duplicates
         cursor.execute(_sql("""
