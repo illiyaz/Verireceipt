@@ -21,6 +21,7 @@ from app.pipelines.rules import analyze_receipt
 from app.repository.receipt_store import get_receipt_store
 from app.pipelines.ensemble import get_ensemble
 from app.api.feedback import router as feedback_router
+from app.api.warranty_routes import router as warranty_router
 from app.utils.audit_formatter import format_audit_for_human_review
 
 # PDF to image conversion
@@ -64,6 +65,9 @@ app = FastAPI(
 
 # Include feedback router
 app.include_router(feedback_router)
+
+# Include warranty claims router
+app.include_router(warranty_router)
 
 # Mount static files for web UI
 web_dir = Path(__file__).parent.parent.parent / "web"
