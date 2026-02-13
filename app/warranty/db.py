@@ -33,7 +33,7 @@ def _get_pg_pool():
         from psycopg2 import pool as pg_pool
         # Render uses postgres:// but psycopg2 needs postgresql://
         db_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-        _pg_pool = pg_pool.ThreadedConnectionPool(1, 10, db_url)
+        _pg_pool = pg_pool.ThreadedConnectionPool(1, 3, db_url)
         # Bootstrap schema on first connect
         conn = _pg_pool.getconn()
         try:

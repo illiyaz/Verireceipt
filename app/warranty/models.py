@@ -28,6 +28,8 @@ class FeedbackVerdict(str, Enum):
 
 class ExtractedImage(BaseModel):
     """Image extracted from a warranty claim PDF."""
+    model_config = {"extra": "allow"}
+    
     data: bytes
     page: int
     index: int
@@ -38,6 +40,8 @@ class ExtractedImage(BaseModel):
     file_hash: Optional[str] = None
     width: Optional[int] = None
     height: Optional[int] = None
+    size: Optional[int] = None  # File size in bytes
+    exif: Optional[Dict[str, Any]] = None  # EXIF metadata dict
     exif_timestamp: Optional[str] = None
     exif_gps_lat: Optional[float] = None
     exif_gps_lon: Optional[float] = None

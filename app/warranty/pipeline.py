@@ -73,14 +73,15 @@ class WarrantyAnalysisPipeline:
         print(f"🖼️ Stage 2: Processing {len(extracted.images)} images...")
         image_data = []
         for idx, img in enumerate(extracted.images):
-            if img.phash:
+            has_hash = img.phash or img.file_hash
+            if has_hash:
                 save_image_fingerprint(
                     claim_id=claim_id,
                     image_index=idx,
-                    phash=img.phash,
+                    phash=img.phash or "",
                     dhash=img.dhash,
                     file_hash=img.file_hash,
-                    exif_data=img.exif,
+                    exif_data=getattr(img, 'exif', None),
                     dimensions=(img.width, img.height),
                     extraction_method=img.method,
                     page_number=img.page,
@@ -91,10 +92,12 @@ class WarrantyAnalysisPipeline:
                     "phash": img.phash,
                     "dhash": img.dhash,
                     "file_hash": img.file_hash,
-                    "size": img.size,  # Size in bytes for template filtering
-                    "width": img.width,  # For aspect ratio detection
-                    "height": img.height  # For aspect ratio detection
+                    "size": getattr(img, 'size', 0),
+                    "width": img.width,
+                    "height": img.height
                 })
+            else:
+                print(f"   ⚠️ Image {idx}: no phash or file_hash, skipping")
         
         # Stage 3: Check for duplicates
         print(f"🔍 Stage 3: Checking for duplicates...")

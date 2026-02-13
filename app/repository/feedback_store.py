@@ -31,7 +31,10 @@ def _get_pg_pool():
         import psycopg2
         from psycopg2 import pool
         from psycopg2.extras import RealDictCursor
-        _pg_pool = pool.ThreadedConnectionPool(1, 10, _DATABASE_URL)
+        # Render uses postgres:// but psycopg2 needs postgresql://
+        db_url = _DATABASE_URL.replace("postgres://", "postgresql://", 1)
+        _pg_pool = pool.ThreadedConnectionPool(1, 3, db_url)
+        print("✅ Feedback PostgreSQL connection pool created")
     return _pg_pool
 
 class FeedbackStore:
