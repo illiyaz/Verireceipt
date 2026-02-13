@@ -6,11 +6,9 @@ services:
     plan: pro
     region: oregon
     envVars:
-      # Render sets PORT automatically; Dockerfile reads it
+      # Set DATABASE_URL in Render dashboard (not in git for security)
       - key: DATABASE_URL
-        fromDatabase:
-          name: verireceipt-db
-          property: connectionString
+        sync: false
       - key: VERIRECEIPT_STORE_BACKEND
         value: db
       - key: PYTHONUNBUFFERED
@@ -25,9 +23,3 @@ services:
       # OCR engine
       - key: OCR_ENGINE
         value: tesseract
-
-databases:
-  - name: verireceipt-db
-    plan: starter
-    databaseName: verireceipt
-    postgresMajorVersion: "16"
