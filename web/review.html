@@ -215,7 +215,7 @@
                 console.log('Submitting feedback to new API:', feedbackData);
                 
                 try {
-                    const response = await fetch('http://localhost:8000/feedback/submit', {
+                    const response = await fetch(`${window.location.origin}/feedback/submit`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(feedbackData)
@@ -316,7 +316,7 @@
                                 receipt.image_url.includes('AAAAGGZ0eXBoZWlj') || receipt.image_url.includes('ftypheic') ? (
                                     // HEIC data - try to load from server instead
                                     <img 
-                                        src={`http://localhost:8000/receipt/${receipt.id}/image`}
+                                        src={`${window.location.origin}/receipt/${receipt.id}/image`}
                                         alt="Receipt"
                                         className="receipt-image border-2 border-gray-300 shadow-lg rounded-lg"
                                         style={{ transform: `scale(${zoom})` }}

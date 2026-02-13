@@ -131,7 +131,7 @@
         const { useState, useEffect, useRef } = React;
 
         // API Configuration
-        const API_BASE_URL = 'http://localhost:8000';
+        const API_BASE_URL = window.location.origin;
 
         function App() {
             const [file, setFile] = useState(null);
@@ -931,7 +931,7 @@
                                         
                                         // Store image separately to avoid sessionStorage size limits
                                         // Use server URL if available, otherwise store preview separately
-                                        let imageUrl = verdict.uploaded_image || `http://localhost:8000/receipt/${verdict.receipt_id}/image`;
+                                        let imageUrl = verdict.uploaded_image || `${API_BASE_URL}/receipt/${verdict.receipt_id}/image`;
                                         
                                         // Store preview image separately (if not too large)
                                         if (preview && preview.length < 500000) {

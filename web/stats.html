@@ -29,7 +29,7 @@
             
             const loadStats = async () => {
                 try {
-                    const response = await fetch(`http://localhost:8000/feedback/stats?days=${days}`);
+                    const response = await fetch(`${window.location.origin}/feedback/stats?days=${days}`);
                     const data = await response.json();
                     setStats(data);
                 } catch (error) {
@@ -39,7 +39,7 @@
             
             const loadRules = async () => {
                 try {
-                    const response = await fetch('http://localhost:8000/feedback/learned-rules');
+                    const response = await fetch(`${window.location.origin}/feedback/learned-rules`);
                     const data = await response.json();
                     setRules(data);
                     setLoading(false);
@@ -51,7 +51,7 @@
             
             const toggleRule = async (ruleId, enabled) => {
                 try {
-                    await fetch(`http://localhost:8000/feedback/rules/${ruleId}/toggle?enabled=${!enabled}`, {
+                    await fetch(`${window.location.origin}/feedback/rules/${ruleId}/toggle?enabled=${!enabled}`, {
                         method: 'POST'
                     });
                     loadRules();
