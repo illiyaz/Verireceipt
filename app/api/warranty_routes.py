@@ -200,43 +200,59 @@ async def get_warranty_stats():
     """
     Get overall warranty claim statistics.
     """
-    from ..warranty.db import get_connection
+    from ..warranty.db import get_connection, release_connection, _get_cursor
     
     conn = get_connection()
-    cursor = conn.cursor()
-    
-    # Total claims
-    cursor.execute("SELECT COUNT(*) FROM warranty_claims")
-    total_claims = cursor.fetchone()[0]
-    
-    # By triage class
-    cursor.execute("""
-        SELECT triage_class, COUNT(*) 
-        FROM warranty_claims 
-        GROUP BY triage_class
-    """)
-    by_triage = {row[0]: row[1] for row in cursor.fetchall()}
-    
-    # Suspicious count
-    cursor.execute("SELECT COUNT(*) FROM warranty_claims WHERE is_suspicious = 1")
-    suspicious_count = cursor.fetchone()[0]
-    
-    # Duplicate count
-    cursor.execute("SELECT COUNT(DISTINCT claim_id_1) FROM warranty_duplicate_matches")
-    claims_with_duplicates = cursor.fetchone()[0]
-    
-    # Feedback summary
-    cursor.execute("""
-        SELECT verdict, COUNT(*) 
-        FROM warranty_feedback 
-        GROUP BY verdict
-    """)
-    feedback_summary = {row[0]: row[1] for row in cursor.fetchall()}
-    
-    return {
-        "total_claims": total_claims,
-        "by_triage": by_triage,
-        "suspicious_count": suspicious_count,
-        "claims_with_duplicates": claims_with_duplicates,
-        "feedback_summary": feedback_summary
-    }
+    try:
+        cursor = _get_cursor(conn)
+        
+        # Total claims
+        cursor.execute("SELECT COUNT(*) as cnt FROM warranty_claims")
+        row = cursor.fetchone()
+        total_claims = row["cnt"] if isinstance(row, dict) else row[0]
+        
+        # By triage class
+        cursor.execute("""
+            SELECT triage_class, COUNT(*) as cnt
+            FROM warranty_claims 
+            GROUP BY triage_class
+        """)
+        by_triage = {}
+        for row in cursor.fetchall():
+            if isinstance(row, dict):
+                by_triage[row["triage_class"]] = row["cnt"]
+            else:
+                by_triage[row[0]] = row[1]
+        
+        # Suspicious count
+        cursor.execute("SELECT COUNT(*) as cnt FROM warranty_claims WHERE is_suspicious = 1")
+        row = cursor.fetchone()
+        suspicious_count = row["cnt"] if isinstance(row, dict) else row[0]
+        
+        # Duplicate count
+        cursor.execute("SELECT COUNT(DISTINCT claim_id_1) as cnt FROM warranty_duplicate_matches")
+        row = cursor.fetchone()
+        claims_with_duplicates = row["cnt"] if isinstance(row, dict) else row[0]
+        
+        # Feedback summary
+        cursor.execute("""
+            SELECT verdict, COUNT(*) as cnt
+            FROM warranty_feedback 
+            GROUP BY verdict
+        """)
+        feedback_summary = {}
+        for row in cursor.fetchall():
+            if isinstance(row, dict):
+                feedback_summary[row["verdict"]] = row["cnt"]
+            else:
+                feedback_summary[row[0]] = row[1]
+        
+        return {
+            "total_claims": total_claims,
+            "by_triage": by_triage,
+            "suspicious_count": suspicious_count,
+            "claims_with_duplicates": claims_with_duplicates,
+            "feedback_summary": feedback_summary
+        }
+    finally:
+        release_connection(conn)
