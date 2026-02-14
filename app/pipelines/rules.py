@@ -4279,6 +4279,468 @@ def _score_and_explain(
         logger.warning(f"Address validation rules failed: {e}")
 
     # ---------------------------------------------------------------------------
+    # RULE GROUP 5D: Screenshot Detection
+    # ---------------------------------------------------------------------------
+    # Expert insight: Fraudsters often submit screenshots of receipts (from apps,
+    # browsers, or other phones) instead of actual receipt photos/scans.
+    # Screenshots contain telltale UI elements visible in OCR text.
+    try:
+        _screenshot_lines = lf.get("lines", [])
+        if not _screenshot_lines:
+            _screenshot_lines = [l for l in full_text.split("\n") if l.strip()] if full_text else []
+
+        _screenshot_signals = []
+        _screenshot_signal_count = 0
+
+        # 1. Status bar indicators (top ~5 lines of OCR text)
+        _STATUS_BAR_PATTERNS = [
+            # Time patterns that appear in phone status bars
+            r"\b\d{1,2}:\d{2}\s*(AM|PM|am|pm)\b",
+            # Battery percentage
+            r"\b\d{1,3}\s*%\s*(battery|charged|charging)\b",
+            r"\bbattery\b",
+            # Signal/carrier indicators
+            r"\b(LTE|5G|4G|3G|EDGE|H\+|HSPA)\b",
+            r"\b(Wi-?Fi|WiFi|WLAN)\b",
+            # Common carrier names
+            r"\b(Verizon|AT&T|T-Mobile|Sprint|Vodafone|Airtel|Jio|BSNL|O2|EE|Three|Rogers|Bell|Telus)\b",
+            # Phone UI elements
+            r"\b(Settings|Notifications|Control Center|Do Not Disturb)\b",
+        ]
+
+        _top_lines = _screenshot_lines[:5] if len(_screenshot_lines) > 5 else _screenshot_lines
+        _top_text = " ".join(_top_lines).strip()
+        for pat in _STATUS_BAR_PATTERNS:
+            if re.search(pat, _top_text, re.IGNORECASE):
+                _screenshot_signals.append(f"Status bar pattern: {pat}")
+                _screenshot_signal_count += 1
+                break  # One status bar match is enough
+
+        # 2. Browser chrome / URL bar indicators (anywhere in text)
+        _full_text_lower = full_text.lower() if full_text else ""
+        _BROWSER_PATTERNS = [
+            (r"https?://[^\s]{5,}", "URL in text"),
+            (r"\b(chrome|safari|firefox|edge|opera|brave)\b.*\b(tab|tabs|bookmark|address)\b", "Browser UI"),
+            (r"\b(address\s+bar|search\s+bar|navigation\s+bar)\b", "Browser navigation"),
+            (r"\bnew\s+tab\b", "Browser new tab"),
+            (r"\b(incognito|private\s+browsing)\b", "Private browsing mode"),
+        ]
+        for pat, label in _BROWSER_PATTERNS:
+            if re.search(pat, _full_text_lower):
+                _screenshot_signals.append(f"Browser chrome: {label}")
+                _screenshot_signal_count += 1
+                break
+
+        # 3. App UI elements
+        _APP_UI_PATTERNS = [
+            (r"\b(share|forward|reply|delete|archive)\b.*\b(button|icon)\b", "App action buttons"),
+            (r"\b(home|back|recent|menu)\b.*\b(button|navigation)\b", "Navigation buttons"),
+            (r"\bscreenshot\s*(saved|taken|captured)\b", "Screenshot notification"),
+        ]
+        for pat, label in _APP_UI_PATTERNS:
+            if re.search(pat, _full_text_lower):
+                _screenshot_signals.append(f"App UI: {label}")
+                _screenshot_signal_count += 1
+                break
+
+        # 4. Combine with DPI screenshot-size signal from image forensics
+        _dpi_screenshot = False
+        if img_forensics.get("forensics_available"):
+            _dpi_data = img_forensics.get("dpi", {})
+            if _dpi_data.get("is_screenshot_size"):
+                _screenshot_signals.append(
+                    f"Screenshot dimensions: {_dpi_data.get('width')}×{_dpi_data.get('height')}"
+                )
+                _screenshot_signal_count += 1
+                _dpi_screenshot = True
+
+        # Emit rule if we have 2+ signals (text + dimension) or strong text signals
+        if _screenshot_signal_count >= 2:
+            score += emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="R_SCREENSHOT_DETECTED",
+                severity="WARNING",
+                weight=0.12,
+                message=f"Image appears to be a screenshot ({_screenshot_signal_count} signals)",
+                evidence={
+                    "signal_count": _screenshot_signal_count,
+                    "signals": _screenshot_signals[:5],
+                    "is_screenshot_size": _dpi_screenshot,
+                },
+                reason_text=(
+                    f"📱 Screenshot Detected: {_screenshot_signal_count} indicators suggest "
+                    f"this is a screenshot rather than an original receipt photo/scan. "
+                    + "; ".join(_screenshot_signals[:3])
+                ),
+            )
+    except Exception as e:
+        logger.warning(f"R_SCREENSHOT_DETECTED check failed: {e}")
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 5E: Structure Order Anomaly
+    # ---------------------------------------------------------------------------
+    # Expert insight: Real receipts/invoices follow a consistent structure:
+    #   Header → Line Items → Subtotal → Tax → Total
+    # If the total appears BEFORE line items, the document was likely fabricated
+    # by someone who typed the total first and items after.
+    try:
+        _struct_lines = lf.get("lines", [])
+        if not _struct_lines and full_text:
+            _struct_lines = [l for l in full_text.split("\n") if l.strip()]
+
+        if len(_struct_lines) >= 5:
+            # Find first occurrence of total-like keywords
+            _total_keywords = re.compile(
+                r"\b(grand\s+total|total\s+amount|total\s+due|net\s+total"
+                r"|amount\s+due|balance\s+due|total\b)",
+                re.IGNORECASE,
+            )
+            # Find first occurrence of line-item-like patterns
+            # Line items typically: quantity × description × price
+            _item_pattern = re.compile(
+                r"(\d+\s*[xX×]\s*.+\s+\d+[.,]\d{2})"    # "2 x Widget  45.00"
+                r"|(.+\s{2,}\d+[.,]\d{2}$)"               # "Widget        45.00"
+                r"|(\d+[.,]\d{2}\s{2,}.+)"                 # "45.00   Widget"
+            )
+
+            _total_line_idx = None
+            _first_item_idx = None
+            _last_item_idx = None
+            _item_count = 0
+
+            for idx, line in enumerate(_struct_lines):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+
+                # Check for total (skip if just "subtotal" — that's expected before total)
+                if _total_line_idx is None:
+                    if _total_keywords.search(stripped):
+                        # Exclude subtotal-only matches
+                        if not re.match(r"^\s*sub\s*total", stripped, re.IGNORECASE):
+                            _total_line_idx = idx
+
+                # Check for line items
+                if _item_pattern.search(stripped):
+                    _item_count += 1
+                    if _first_item_idx is None:
+                        _first_item_idx = idx
+                    _last_item_idx = idx
+
+            # Anomaly: total found significantly before line items
+            if (_total_line_idx is not None
+                    and _first_item_idx is not None
+                    and _item_count >= 2
+                    and _total_line_idx < _first_item_idx):
+                # Total is before the first line item
+                _total_position_pct = round(
+                    _total_line_idx / max(1, len(_struct_lines)), 2
+                )
+                _items_position_pct = round(
+                    _first_item_idx / max(1, len(_struct_lines)), 2
+                )
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_STRUCTURE_ORDER",
+                    severity="WARNING",
+                    weight=0.10,
+                    message=(
+                        f"Total appears at line {_total_line_idx + 1} but "
+                        f"line items start at line {_first_item_idx + 1}"
+                    ),
+                    evidence={
+                        "total_line_idx": _total_line_idx,
+                        "first_item_idx": _first_item_idx,
+                        "last_item_idx": _last_item_idx,
+                        "item_count": _item_count,
+                        "total_position_pct": _total_position_pct,
+                        "items_position_pct": _items_position_pct,
+                        "total_line": _struct_lines[_total_line_idx].strip()[:80],
+                    },
+                    reason_text=(
+                        f"🔢 Structure Anomaly: Total appears at line "
+                        f"{_total_line_idx + 1} ({_total_position_pct:.0%} into document) "
+                        f"but {_item_count} line items don't start until line "
+                        f"{_first_item_idx + 1} ({_items_position_pct:.0%}). "
+                        f"Real receipts list items before the total."
+                    ),
+                )
+    except Exception as e:
+        logger.warning(f"R_STRUCTURE_ORDER check failed: {e}")
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 5F: Tax Component Verification (multi-geo)
+    # ---------------------------------------------------------------------------
+    # Expert insight: When a receipt shows tax breakdown (CGST+SGST, VAT components),
+    # the components must add up correctly. Fraudsters often edit the total but
+    # forget to adjust individual tax lines.
+    #
+    # Supported tax regimes:
+    #   India (GST): CGST = SGST (intra-state), or IGST alone (inter-state)
+    #                CGST + SGST + CESS ≈ total tax
+    #   Canada:      GST + PST = total tax (or HST alone)
+    #   EU/UK:       VAT components should sum to total tax
+    #   Gulf (AE/SA/OM/BH): Single VAT — component should equal total tax
+    #   General:     If multiple tax lines detected, they should sum to total tax
+    try:
+        _tax_val = _normalize_amount_str(tf.get("tax_amount"))
+        _subtotal_val = _normalize_amount_str(tf.get("subtotal"))
+        _total_val = _normalize_amount_str(tf.get("total_amount"))
+        _geo = tf.get("geo_country_guess", "").upper()
+
+        # --- India GST Component Verification ---
+        _has_cgst = tf.get("has_cgst", False)
+        _has_sgst = tf.get("has_sgst", False)
+        _has_igst = tf.get("has_igst", False)
+        _cgst_amt = _normalize_amount_str(tf.get("cgst_amount"))
+        _sgst_amt = _normalize_amount_str(tf.get("sgst_amount"))
+        _igst_amt = _normalize_amount_str(tf.get("igst_amount"))
+        _cess_amt = _normalize_amount_str(tf.get("cess_amount"))
+        _is_indian = tf.get("is_indian_receipt", False)
+
+        if _is_indian or _geo == "IN":
+            # Check 1: CGST should equal SGST (intra-state supply)
+            if (_cgst_amt is not None and _cgst_amt > 0
+                    and _sgst_amt is not None and _sgst_amt > 0):
+                _cgst_sgst_diff = abs(_cgst_amt - _sgst_amt)
+                # Allow ₹0.50 tolerance for rounding
+                if _cgst_sgst_diff > max(0.50, _cgst_amt * 0.02):
+                    score += emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="R7D_TAX_COMPONENT_VERIFICATION",
+                        severity="CRITICAL",
+                        weight=0.18,
+                        message=f"CGST ({_cgst_amt}) ≠ SGST ({_sgst_amt}) — must be equal for intra-state",
+                        evidence={
+                            "regime": "IN_GST",
+                            "check": "cgst_equals_sgst",
+                            "cgst_amount": _cgst_amt,
+                            "sgst_amount": _sgst_amt,
+                            "difference": round(_cgst_sgst_diff, 2),
+                            "geo_country": _geo,
+                        },
+                        reason_text=(
+                            f"💰 Tax Math Error (India GST): CGST ₹{_cgst_amt:.2f} ≠ "
+                            f"SGST ₹{_sgst_amt:.2f}. For intra-state supply, CGST and "
+                            f"SGST must be equal. Difference: ₹{_cgst_sgst_diff:.2f}."
+                        ),
+                    )
+
+            # Check 2: CGST + SGST (+ CESS) should sum to total tax
+            _component_sum = 0.0
+            _components_present = []
+            if _cgst_amt is not None and _cgst_amt > 0:
+                _component_sum += _cgst_amt
+                _components_present.append(f"CGST={_cgst_amt}")
+            if _sgst_amt is not None and _sgst_amt > 0:
+                _component_sum += _sgst_amt
+                _components_present.append(f"SGST={_sgst_amt}")
+            if _igst_amt is not None and _igst_amt > 0:
+                _component_sum += _igst_amt
+                _components_present.append(f"IGST={_igst_amt}")
+            if _cess_amt is not None and _cess_amt > 0:
+                _component_sum += _cess_amt
+                _components_present.append(f"CESS={_cess_amt}")
+
+            if _component_sum > 0 and _tax_val is not None and _tax_val > 0:
+                _tax_diff = abs(_component_sum - _tax_val)
+                # Allow 2% tolerance or ₹1.00 for rounding
+                _tolerance = max(1.0, _tax_val * 0.02)
+                if _tax_diff > _tolerance:
+                    score += emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="R7D_TAX_COMPONENT_VERIFICATION",
+                        severity="WARNING",
+                        weight=0.12,
+                        message=f"Tax components ({_component_sum:.2f}) ≠ total tax ({_tax_val:.2f})",
+                        evidence={
+                            "regime": "IN_GST",
+                            "check": "components_sum_to_total",
+                            "component_sum": round(_component_sum, 2),
+                            "total_tax": _tax_val,
+                            "difference": round(_tax_diff, 2),
+                            "components": _components_present,
+                            "geo_country": _geo,
+                        },
+                        reason_text=(
+                            f"💰 Tax Sum Mismatch (India GST): Components "
+                            f"({' + '.join(_components_present)} = ₹{_component_sum:.2f}) "
+                            f"≠ total tax ₹{_tax_val:.2f}. "
+                            f"Difference: ₹{_tax_diff:.2f}."
+                        ),
+                    )
+
+            # Check 3: CGST+SGST and IGST should not both be present
+            # (one is intra-state, the other inter-state — mutually exclusive)
+            if ((_has_cgst or _has_sgst) and _has_igst
+                    and _cgst_amt and _cgst_amt > 0
+                    and _igst_amt and _igst_amt > 0):
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R7D_TAX_COMPONENT_VERIFICATION",
+                    severity="CRITICAL",
+                    weight=0.20,
+                    message="Both CGST/SGST and IGST present — mutually exclusive",
+                    evidence={
+                        "regime": "IN_GST",
+                        "check": "mutual_exclusion",
+                        "has_cgst_sgst": True,
+                        "has_igst": True,
+                        "cgst_amount": _cgst_amt,
+                        "sgst_amount": _sgst_amt,
+                        "igst_amount": _igst_amt,
+                        "geo_country": _geo,
+                    },
+                    reason_text=(
+                        f"💰 Tax Logic Error (India GST): Both CGST/SGST "
+                        f"(intra-state) and IGST (inter-state) are present. "
+                        f"These are mutually exclusive — a transaction is either "
+                        f"intra-state or inter-state, never both."
+                    ),
+                )
+
+            # Check 4: Verify tax rate is a valid GST slab
+            # Valid Indian GST rates: 0%, 5%, 12%, 18%, 28% (half-rate for CGST/SGST)
+            if _subtotal_val and _subtotal_val > 0 and _component_sum > 0:
+                _effective_rate = round((_component_sum / _subtotal_val) * 100, 1)
+                _VALID_GST_SLABS = [0, 5, 12, 18, 28]
+                _closest_slab = min(_VALID_GST_SLABS, key=lambda s: abs(s - _effective_rate))
+                _slab_diff = abs(_effective_rate - _closest_slab)
+                if _slab_diff > 2.0:  # More than 2% away from any valid slab
+                    score += emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="R7D_TAX_COMPONENT_VERIFICATION",
+                        severity="INFO",
+                        weight=0.06,
+                        message=f"Effective GST rate {_effective_rate:.1f}% not near any standard slab",
+                        evidence={
+                            "regime": "IN_GST",
+                            "check": "valid_slab",
+                            "effective_rate_pct": _effective_rate,
+                            "closest_slab": _closest_slab,
+                            "slab_difference": round(_slab_diff, 1),
+                            "valid_slabs": _VALID_GST_SLABS,
+                            "geo_country": _geo,
+                        },
+                        reason_text=(
+                            f"💰 Non-Standard GST Rate: Effective rate {_effective_rate:.1f}% "
+                            f"is not near any standard Indian GST slab "
+                            f"({', '.join(str(s) + '%' for s in _VALID_GST_SLABS)}). "
+                            f"Closest: {_closest_slab}%."
+                        ),
+                    )
+
+        # --- Canada GST/HST/PST Verification ---
+        elif _geo == "CA":
+            # Extract Canadian tax components from OCR lines
+            _ca_gst = None
+            _ca_pst = None
+            _ca_hst = None
+            _ca_lines = lf.get("lines", []) or (_full_text_lower.split("\n") if _full_text_lower else [])
+            for _cl in _ca_lines:
+                _cll = _cl.lower().strip()
+                if re.search(r"\bgst\b", _cll) and not re.search(r"\bhst\b", _cll):
+                    _m = re.search(r"[\d,]+\.\d{2}", _cl)
+                    if _m:
+                        _ca_gst = _normalize_amount_str(_m.group(0))
+                elif re.search(r"\bpst\b|\bqst\b|\brst\b", _cll):
+                    _m = re.search(r"[\d,]+\.\d{2}", _cl)
+                    if _m:
+                        _ca_pst = _normalize_amount_str(_m.group(0))
+                elif re.search(r"\bhst\b", _cll):
+                    _m = re.search(r"[\d,]+\.\d{2}", _cl)
+                    if _m:
+                        _ca_hst = _normalize_amount_str(_m.group(0))
+
+            # If GST + PST both present, they should sum to total tax
+            if (_ca_gst is not None and _ca_gst > 0
+                    and _ca_pst is not None and _ca_pst > 0
+                    and _tax_val is not None and _tax_val > 0):
+                _ca_sum = _ca_gst + _ca_pst
+                _ca_diff = abs(_ca_sum - _tax_val)
+                if _ca_diff > max(0.50, _tax_val * 0.03):
+                    score += emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="R7D_TAX_COMPONENT_VERIFICATION",
+                        severity="WARNING",
+                        weight=0.12,
+                        message=f"GST ({_ca_gst:.2f}) + PST ({_ca_pst:.2f}) ≠ total tax ({_tax_val:.2f})",
+                        evidence={
+                            "regime": "CA_GST_PST",
+                            "check": "components_sum_to_total",
+                            "gst_amount": _ca_gst,
+                            "pst_amount": _ca_pst,
+                            "component_sum": round(_ca_sum, 2),
+                            "total_tax": _tax_val,
+                            "difference": round(_ca_diff, 2),
+                            "geo_country": "CA",
+                        },
+                        reason_text=(
+                            f"💰 Tax Sum Mismatch (Canada): GST ${_ca_gst:.2f} + "
+                            f"PST ${_ca_pst:.2f} = ${_ca_sum:.2f} ≠ total tax "
+                            f"${_tax_val:.2f}. Difference: ${_ca_diff:.2f}."
+                        ),
+                    )
+
+        # --- General: Multi-line tax component sum verification ---
+        # For any geo: if we can find multiple tax lines with amounts, verify sum
+        elif _tax_val is not None and _tax_val > 0:
+            _gen_tax_lines = lf.get("lines", []) or []
+            _gen_components = []
+            _TAX_LINE_RE = re.compile(
+                r"\b(vat|tax|hst|gst|pst|qst|service\s+tax|sales\s+tax|excise)"
+                r"\b.*?([\d,]+\.\d{2})",
+                re.IGNORECASE,
+            )
+            for _gl in _gen_tax_lines:
+                _gm = _TAX_LINE_RE.search(_gl)
+                if _gm:
+                    _gv = _normalize_amount_str(_gm.group(2))
+                    if _gv is not None and _gv > 0:
+                        _gen_components.append((_gm.group(1).strip(), _gv))
+
+            # Only verify if we found 2+ distinct tax component lines
+            if len(_gen_components) >= 2:
+                _gen_sum = sum(v for _, v in _gen_components)
+                _gen_diff = abs(_gen_sum - _tax_val)
+                _gen_tol = max(1.0, _tax_val * 0.03)
+                if _gen_diff > _gen_tol:
+                    _comp_desc = [f"{n}={v:.2f}" for n, v in _gen_components]
+                    score += emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="R7D_TAX_COMPONENT_VERIFICATION",
+                        severity="WARNING",
+                        weight=0.10,
+                        message=f"Tax components sum ({_gen_sum:.2f}) ≠ total tax ({_tax_val:.2f})",
+                        evidence={
+                            "regime": "GENERAL",
+                            "check": "components_sum_to_total",
+                            "components": _comp_desc,
+                            "component_sum": round(_gen_sum, 2),
+                            "total_tax": _tax_val,
+                            "difference": round(_gen_diff, 2),
+                            "geo_country": _geo,
+                        },
+                        reason_text=(
+                            f"💰 Tax Sum Mismatch: Components "
+                            f"({' + '.join(_comp_desc)} = {_gen_sum:.2f}) ≠ "
+                            f"total tax {_tax_val:.2f}. "
+                            f"Difference: {_gen_diff:.2f}."
+                        ),
+                    )
+
+    except Exception as e:
+        logger.warning(f"R7D_TAX_COMPONENT_VERIFICATION check failed: {e}")
+
+    # ---------------------------------------------------------------------------
     # RULE GROUP 6: Apply learned rules from feedback
     # ---------------------------------------------------------------------------
 

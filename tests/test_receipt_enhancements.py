@@ -376,3 +376,348 @@ class TestPlausibilityRules:
                 )
             except Exception as e:
                 pytest.skip(f"Full pipeline mock incomplete: {e}")
+
+
+# =============================================================================
+# 6. Screenshot Detection, Structure Order, Tax Component Verification
+# =============================================================================
+
+class TestScreenshotStructureTax:
+    """Tests for R_SCREENSHOT_DETECTED, R_STRUCTURE_ORDER, R7D_TAX_COMPONENT_VERIFICATION."""
+
+    # --- Rule existence tests ---
+
+    def test_screenshot_rule_exists(self):
+        import app.pipelines.rules as rules_module
+        source = open(rules_module.__file__).read()
+        assert "R_SCREENSHOT_DETECTED" in source
+
+    def test_structure_order_rule_exists(self):
+        import app.pipelines.rules as rules_module
+        source = open(rules_module.__file__).read()
+        assert "R_STRUCTURE_ORDER" in source
+
+    def test_tax_component_rule_exists(self):
+        import app.pipelines.rules as rules_module
+        source = open(rules_module.__file__).read()
+        assert "R7D_TAX_COMPONENT_VERIFICATION" in source
+
+    # --- Tax component verification: multi-geo ---
+
+    def test_tax_component_india_cgst_neq_sgst(self):
+        """CGST ≠ SGST should fire R7D for Indian receipts."""
+        from app.pipelines.rules import _score_and_explain
+        from app.schemas.receipt import ReceiptFeatures
+
+        features = ReceiptFeatures(
+            file_features={"source_type": "image"},
+            text_features={
+                "doc_class": "POS_RETAIL",
+                "doc_subtype_guess": "POS_RETAIL",
+                "doc_profile_confidence": 0.8,
+                "merchant_candidate": "Chai Point",
+                "has_any_amount": True,
+                "total_line_present": True,
+                "has_date": True,
+                "receipt_date": "2025-01-15",
+                "total_amount": "118.00",
+                "subtotal": "100.00",
+                "tax_amount": "18.00",
+                "has_line_items": True,
+                "line_items_sum": 118.0,
+                "total_mismatch": False,
+                "address_profile": {},
+                "merchant_address_consistency": {},
+                "doc_profile": {"subtype": "POS_RETAIL", "confidence": 0.8},
+                # Indian GST: CGST should equal SGST but here they don't
+                "is_indian_receipt": True,
+                "has_cgst": True,
+                "has_sgst": True,
+                "has_igst": False,
+                "cgst_amount": "12.00",  # Should be 9.00
+                "sgst_amount": "6.00",   # Should be 9.00
+                "igst_amount": None,
+                "cess_amount": None,
+                "geo_country_guess": "IN",
+                "geo_confidence": 0.9,
+            },
+            layout_features={"num_lines": 10, "numeric_line_ratio": 0.3},
+            forensic_features={},
+        )
+
+        result = _score_and_explain(features)
+        rule_ids = [e.get("rule_id") for e in result.events]
+        assert "R7D_TAX_COMPONENT_VERIFICATION" in rule_ids, (
+            f"R7D should fire when CGST ≠ SGST. Got: {rule_ids}"
+        )
+        # Verify it caught the cgst_equals_sgst check
+        r7d_events = [e for e in result.events if e.get("rule_id") == "R7D_TAX_COMPONENT_VERIFICATION"]
+        checks = [e.get("evidence", {}).get("check") for e in r7d_events]
+        assert "cgst_equals_sgst" in checks, (
+            f"Expected cgst_equals_sgst check. Got checks: {checks}"
+        )
+
+    def test_tax_component_india_mutual_exclusion(self):
+        """Both CGST/SGST and IGST present should fire R7D (mutually exclusive)."""
+        from app.pipelines.rules import _score_and_explain
+        from app.schemas.receipt import ReceiptFeatures
+
+        features = ReceiptFeatures(
+            file_features={"source_type": "image"},
+            text_features={
+                "doc_class": "TAX_INVOICE",
+                "doc_subtype_guess": "TAX_INVOICE",
+                "doc_profile_confidence": 0.9,
+                "merchant_candidate": "ABC Traders",
+                "has_any_amount": True,
+                "total_line_present": True,
+                "has_date": True,
+                "receipt_date": "2025-01-15",
+                "total_amount": "1180.00",
+                "subtotal": "1000.00",
+                "tax_amount": "180.00",
+                "has_line_items": True,
+                "line_items_sum": 1180.0,
+                "total_mismatch": False,
+                "address_profile": {},
+                "merchant_address_consistency": {},
+                "doc_profile": {"subtype": "TAX_INVOICE", "confidence": 0.9},
+                # Impossible: both intra-state and inter-state tax
+                "is_indian_receipt": True,
+                "has_cgst": True,
+                "has_sgst": True,
+                "has_igst": True,
+                "cgst_amount": "90.00",
+                "sgst_amount": "90.00",
+                "igst_amount": "180.00",
+                "cess_amount": None,
+                "geo_country_guess": "IN",
+                "geo_confidence": 0.9,
+            },
+            layout_features={"num_lines": 15, "numeric_line_ratio": 0.3},
+            forensic_features={},
+        )
+
+        result = _score_and_explain(features)
+        r7d_events = [e for e in result.events if e.get("rule_id") == "R7D_TAX_COMPONENT_VERIFICATION"]
+        checks = [e.get("evidence", {}).get("check") for e in r7d_events]
+        assert "mutual_exclusion" in checks, (
+            f"Expected mutual_exclusion check for CGST+SGST+IGST. Got checks: {checks}"
+        )
+
+    def test_tax_component_india_valid_receipt_no_fire(self):
+        """Valid Indian receipt with correct CGST=SGST should NOT fire R7D."""
+        from app.pipelines.rules import _score_and_explain
+        from app.schemas.receipt import ReceiptFeatures
+
+        features = ReceiptFeatures(
+            file_features={"source_type": "image"},
+            text_features={
+                "doc_class": "POS_RETAIL",
+                "doc_subtype_guess": "POS_RETAIL",
+                "doc_profile_confidence": 0.8,
+                "merchant_candidate": "Haldiram",
+                "has_any_amount": True,
+                "total_line_present": True,
+                "has_date": True,
+                "receipt_date": "2025-01-15",
+                "total_amount": "118.00",
+                "subtotal": "100.00",
+                "tax_amount": "18.00",
+                "has_line_items": True,
+                "line_items_sum": 118.0,
+                "total_mismatch": False,
+                "address_profile": {},
+                "merchant_address_consistency": {},
+                "doc_profile": {"subtype": "POS_RETAIL", "confidence": 0.8},
+                # Correct: CGST = SGST, sum = total tax
+                "is_indian_receipt": True,
+                "has_cgst": True,
+                "has_sgst": True,
+                "has_igst": False,
+                "cgst_amount": "9.00",
+                "sgst_amount": "9.00",
+                "igst_amount": None,
+                "cess_amount": None,
+                "geo_country_guess": "IN",
+                "geo_confidence": 0.9,
+            },
+            layout_features={"num_lines": 10, "numeric_line_ratio": 0.3},
+            forensic_features={},
+        )
+
+        result = _score_and_explain(features)
+        r7d_events = [e for e in result.events if e.get("rule_id") == "R7D_TAX_COMPONENT_VERIFICATION"]
+        r7d_checks = [e.get("evidence", {}).get("check") for e in r7d_events]
+        # cgst_equals_sgst and components_sum_to_total should NOT fire
+        assert "cgst_equals_sgst" not in r7d_checks, (
+            f"R7D cgst_equals_sgst should NOT fire when CGST=SGST. Got: {r7d_checks}"
+        )
+
+    def test_tax_component_india_non_standard_slab(self):
+        """Effective GST rate not near any standard slab should fire R7D."""
+        from app.pipelines.rules import _score_and_explain
+        from app.schemas.receipt import ReceiptFeatures
+
+        features = ReceiptFeatures(
+            file_features={"source_type": "image"},
+            text_features={
+                "doc_class": "POS_RETAIL",
+                "doc_subtype_guess": "POS_RETAIL",
+                "doc_profile_confidence": 0.8,
+                "merchant_candidate": "Test Shop",
+                "has_any_amount": True,
+                "total_line_present": True,
+                "has_date": True,
+                "receipt_date": "2025-01-15",
+                "total_amount": "115.00",
+                "subtotal": "100.00",
+                "tax_amount": "15.00",
+                "has_line_items": True,
+                "line_items_sum": 115.0,
+                "total_mismatch": False,
+                "address_profile": {},
+                "merchant_address_consistency": {},
+                "doc_profile": {"subtype": "POS_RETAIL", "confidence": 0.8},
+                # 15% is not a valid GST slab (5, 12, 18, 28)
+                "is_indian_receipt": True,
+                "has_cgst": True,
+                "has_sgst": True,
+                "has_igst": False,
+                "cgst_amount": "7.50",
+                "sgst_amount": "7.50",
+                "igst_amount": None,
+                "cess_amount": None,
+                "geo_country_guess": "IN",
+                "geo_confidence": 0.9,
+            },
+            layout_features={"num_lines": 10, "numeric_line_ratio": 0.3},
+            forensic_features={},
+        )
+
+        result = _score_and_explain(features)
+        r7d_events = [e for e in result.events if e.get("rule_id") == "R7D_TAX_COMPONENT_VERIFICATION"]
+        checks = [e.get("evidence", {}).get("check") for e in r7d_events]
+        assert "valid_slab" in checks, (
+            f"Expected valid_slab check for 15% rate (not a standard GST slab). Got: {checks}"
+        )
+
+    # --- Structure order ---
+
+    def test_structure_order_total_before_items(self):
+        """Total appearing before line items should fire R_STRUCTURE_ORDER."""
+        from app.pipelines.rules import _score_and_explain
+        from app.schemas.receipt import ReceiptFeatures
+
+        # Fabricated receipt: total at top, items below
+        lines = [
+            "RECEIPT",
+            "Date: 2025-01-15",
+            "Total Amount   $150.00",        # Total at line 3
+            "",
+            "Thank you for your purchase",
+            "Item 1          2 x Widget  45.00",  # Items start at line 6
+            "Item 2          1 x Gadget  55.00",
+            "Item 3          1 x Tool    50.00",
+        ]
+
+        features = ReceiptFeatures(
+            file_features={"source_type": "image"},
+            text_features={
+                "doc_class": "POS_RETAIL",
+                "doc_subtype_guess": "POS_RETAIL",
+                "doc_profile_confidence": 0.8,
+                "merchant_candidate": "Test Store",
+                "has_any_amount": True,
+                "total_line_present": True,
+                "has_date": True,
+                "receipt_date": "2025-01-15",
+                "total_amount": "150.00",
+                "has_line_items": True,
+                "line_items_sum": 150.0,
+                "total_mismatch": False,
+                "address_profile": {},
+                "merchant_address_consistency": {},
+                "doc_profile": {"subtype": "POS_RETAIL", "confidence": 0.8},
+            },
+            layout_features={
+                "num_lines": len(lines),
+                "numeric_line_ratio": 0.3,
+                "lines": lines,
+            },
+            forensic_features={},
+        )
+
+        result = _score_and_explain(features)
+        rule_ids = [e.get("rule_id") for e in result.events]
+        assert "R_STRUCTURE_ORDER" in rule_ids, (
+            f"R_STRUCTURE_ORDER should fire when total appears before line items. Got: {rule_ids}"
+        )
+
+    # --- Screenshot detection ---
+
+    def test_screenshot_two_signals_fires(self):
+        """Screenshot with status bar + screenshot dimensions should fire R_SCREENSHOT_DETECTED."""
+        from app.pipelines.rules import _score_and_explain
+        from app.schemas.receipt import ReceiptFeatures
+
+        # Lines that look like a phone screenshot
+        lines = [
+            "10:30 AM  LTE  85%",           # Status bar
+            "Store Receipt",
+            "Item 1   $10.00",
+            "Total    $10.00",
+        ]
+
+        features = ReceiptFeatures(
+            file_features={"source_type": "image"},
+            text_features={
+                "doc_class": "POS_RETAIL",
+                "doc_subtype_guess": "POS_RETAIL",
+                "doc_profile_confidence": 0.8,
+                "merchant_candidate": "Test Store",
+                "has_any_amount": True,
+                "total_line_present": True,
+                "has_date": True,
+                "receipt_date": "2025-01-15",
+                "total_amount": "10.00",
+                "has_line_items": True,
+                "line_items_sum": 10.0,
+                "total_mismatch": False,
+                "address_profile": {},
+                "merchant_address_consistency": {},
+                "doc_profile": {"subtype": "POS_RETAIL", "confidence": 0.8},
+            },
+            layout_features={
+                "num_lines": len(lines),
+                "numeric_line_ratio": 0.3,
+                "lines": lines,
+            },
+            forensic_features={
+                "uppercase_ratio": 0.2,
+                "unique_char_count": 30,
+                "image_forensics": {
+                    "forensics_available": True,
+                    "ela": {"ela_suspicious": False},
+                    "noise": {"noise_suspicious": False},
+                    "dpi": {
+                        "dpi_suspicious": True,
+                        "is_screenshot_size": True,
+                        "is_very_low_res": False,
+                        "width": 375,
+                        "height": 812,
+                    },
+                    "histogram": {"histogram_suspicious": False},
+                    "overall_suspicious": False,
+                    "signal_count": 1,
+                    "overall_confidence": 0.15,
+                    "overall_evidence": [],
+                },
+            },
+        )
+
+        result = _score_and_explain(features)
+        rule_ids = [e.get("rule_id") for e in result.events]
+        assert "R_SCREENSHOT_DETECTED" in rule_ids, (
+            f"R_SCREENSHOT_DETECTED should fire with status bar + screenshot dimensions. Got: {rule_ids}"
+        )
