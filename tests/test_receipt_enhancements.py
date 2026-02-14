@@ -224,6 +224,97 @@ class TestPlausibilityRules:
         assert "coffee" in source
         assert "starbucks" in source
 
+    def test_metadata_timestamp_anomaly_rule_exists(self):
+        """Verify R1B_METADATA_TIMESTAMP_ANOMALY rule exists in codebase."""
+        import app.pipelines.rules as rules_module
+        source = open(rules_module.__file__).read()
+        assert "R1B_METADATA_TIMESTAMP_ANOMALY" in source
+        assert "_parse_pdf_creation_datetime_best_effort" in source
+
+    def test_future_date_rule_exists(self):
+        """Verify R_FUTURE_DATE rule exists in codebase."""
+        import app.pipelines.rules as rules_module
+        source = open(rules_module.__file__).read()
+        assert "R_FUTURE_DATE" in source
+        assert "days in the future" in source
+
+    def test_future_date_fires_on_future_receipt(self):
+        """R_FUTURE_DATE should fire when receipt date is > 1 day ahead."""
+        from app.pipelines.rules import _score_and_explain
+        from app.schemas.receipt import ReceiptFeatures
+        from datetime import date, timedelta
+
+        future_date = (date.today() + timedelta(days=10)).isoformat()
+
+        features = ReceiptFeatures(
+            file_features={"source_type": "pdf"},
+            text_features={
+                "doc_class": "POS_RETAIL",
+                "doc_subtype_guess": "POS_RETAIL",
+                "doc_profile_confidence": 0.8,
+                "merchant_candidate": "Test Store",
+                "has_any_amount": True,
+                "total_line_present": True,
+                "has_date": True,
+                "receipt_date": future_date,
+                "total_amount": 50.0,
+                "has_line_items": True,
+                "line_items_sum": 50.0,
+                "total_mismatch": False,
+                "address_profile": {},
+                "merchant_address_consistency": {},
+                "doc_profile": {"subtype": "POS_RETAIL", "confidence": 0.8},
+            },
+            layout_features={"num_lines": 10, "numeric_line_ratio": 0.3},
+            forensic_features={},
+        )
+
+        result = _score_and_explain(features)
+        rule_ids = [e.get("rule_id") for e in result.events]
+        assert "R_FUTURE_DATE" in rule_ids, (
+            f"R_FUTURE_DATE should fire for receipt dated {future_date}. "
+            f"Fired rules: {rule_ids}"
+        )
+
+    def test_metadata_timestamp_fires_on_large_gap(self):
+        """R1B should fire when creation-to-mod gap > 30 days."""
+        from app.pipelines.rules import _score_and_explain
+        from app.schemas.receipt import ReceiptFeatures
+
+        features = ReceiptFeatures(
+            file_features={
+                "source_type": "pdf",
+                "creation_date": "D:20240101120000",
+                "mod_date": "D:20240601120000",  # 152 days later
+            },
+            text_features={
+                "doc_class": "POS_RETAIL",
+                "doc_subtype_guess": "POS_RETAIL",
+                "doc_profile_confidence": 0.8,
+                "merchant_candidate": "Test Store",
+                "has_any_amount": True,
+                "total_line_present": True,
+                "has_date": True,
+                "receipt_date": "2024-01-01",
+                "total_amount": 50.0,
+                "has_line_items": True,
+                "line_items_sum": 50.0,
+                "total_mismatch": False,
+                "address_profile": {},
+                "merchant_address_consistency": {},
+                "doc_profile": {"subtype": "POS_RETAIL", "confidence": 0.8},
+            },
+            layout_features={"num_lines": 10, "numeric_line_ratio": 0.3},
+            forensic_features={},
+        )
+
+        result = _score_and_explain(features)
+        rule_ids = [e.get("rule_id") for e in result.events]
+        assert "R1B_METADATA_TIMESTAMP_ANOMALY" in rule_ids, (
+            f"R1B should fire for 152-day creation-to-mod gap. "
+            f"Fired rules: {rule_ids}"
+        )
+
     def test_r8_no_date_not_duplicated(self):
         """Verify R8_NO_DATE fires only once (regression test for double-emit bug)."""
         import app.pipelines.rules as rules_module

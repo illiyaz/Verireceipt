@@ -3,7 +3,7 @@
 import logging
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Union, Tuple
-from datetime import datetime
+from datetime import datetime, date
 import re
 
 from app.pipelines.rule_family_matrix import (
@@ -1914,6 +1914,19 @@ def _parse_date_best_effort(date_str: Optional[str]):
 
     s = str(date_str).strip()
 
+    # PRIORITY: Try unambiguous ISO 8601 (YYYY-MM-DD) FIRST.
+    # Must come before the DD/MM regex, which incorrectly matches substrings
+    # of ISO dates (e.g., '2026-02-24' → regex finds '26-02-24' → wrong parse).
+    iso_match = re.search(r'\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b', s)
+    if iso_match:
+        for fmt in ["%Y-%m-%d", "%Y/%m/%d"]:
+            try:
+                parsed = datetime.strptime(iso_match.group(0), fmt).date()
+                if 1990 <= parsed.year <= datetime.now().year + 2:
+                    return parsed
+            except Exception:
+                pass
+
     # Extract date pattern from text (handles "Date: 13/06/23" or "13/06/23 10:30")
     date_match = re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', s)
     if date_match:
@@ -2563,6 +2576,67 @@ def _score_and_explain(
     
     if source_type == "image" and not ff.get("exif_present"):
         minor_notes.append("Image has no EXIF data (could be a screenshot or exported image).")
+
+    # R1B_METADATA_TIMESTAMP_ANOMALY: creation vs modification date gap
+    # Expert insight: If a PDF was created months ago but modified very recently,
+    # someone likely edited it (changed amounts, dates, merchant name).
+    # Legitimate workflows (scan → store) don't produce large creation-to-mod gaps.
+    try:
+        _cd_raw = ff.get("creation_date")
+        _md_raw = ff.get("mod_date")
+        if _cd_raw and _md_raw:
+            _cd_dt = _parse_pdf_creation_datetime_best_effort(_cd_raw)
+            _md_dt = _parse_pdf_creation_datetime_best_effort(_md_raw)
+            if _cd_dt and _md_dt:
+                _meta_gap = abs((_md_dt - _cd_dt).total_seconds())
+                _meta_gap_hours = _meta_gap / 3600.0
+                _meta_gap_days = _meta_gap / 86400.0
+
+                # Small gaps (< 1 hour) are normal — tool processing, save/export.
+                # Medium gaps (1-30 days) — could be legitimate re-export.
+                # Large gaps (> 30 days) — very suspicious, document was revisited.
+                if _meta_gap_days > 30:
+                    score += emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="R1B_METADATA_TIMESTAMP_ANOMALY",
+                        severity="CRITICAL",
+                        weight=0.25,
+                        message=f"Document modified {int(_meta_gap_days)} days after creation",
+                        evidence={
+                            "creation_date": str(_cd_dt),
+                            "mod_date": str(_md_dt),
+                            "gap_days": round(_meta_gap_days, 1),
+                            "gap_hours": round(_meta_gap_hours, 1),
+                        },
+                        reason_text=(
+                            f"📄⚠️ Metadata Anomaly: Document was modified {int(_meta_gap_days)} days "
+                            f"after it was created. This indicates the document was reopened "
+                            f"and edited, which is uncommon for genuine receipts."
+                        ),
+                    )
+                elif _meta_gap_hours > 24:
+                    # 1-30 day gap: mild warning
+                    score += emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="R1B_METADATA_TIMESTAMP_ANOMALY",
+                        severity="WARNING",
+                        weight=0.08,
+                        message=f"Document modified {round(_meta_gap_hours, 1)} hours after creation",
+                        evidence={
+                            "creation_date": str(_cd_dt),
+                            "mod_date": str(_md_dt),
+                            "gap_days": round(_meta_gap_days, 1),
+                            "gap_hours": round(_meta_gap_hours, 1),
+                        },
+                        reason_text=(
+                            f"📄 Metadata Note: Document was modified {round(_meta_gap_days, 1)} days "
+                            f"after creation. Could indicate re-processing or editing."
+                        ),
+                    )
+    except Exception as e:
+        logger.warning(f"R1B_METADATA_TIMESTAMP_ANOMALY check failed: {e}")
 
     # ---------------------------------------------------------------------------
     # RULE GROUP 2: Text-based checks (amounts, merchant, dates)
@@ -3692,6 +3766,38 @@ def _score_and_explain(
     
     # Parse receipt date if present (regardless of creation date)
     receipt_date = _parse_date_best_effort(receipt_date_str) if receipt_date_str else None
+
+    # R_FUTURE_DATE: Receipt date is in the future
+    # Expert insight: A receipt dated tomorrow or next week is obviously fabricated.
+    # Allow 1-day tolerance for timezone differences.
+    if receipt_date is not None:
+        try:
+            _today = date.today()
+            _days_ahead = (receipt_date - _today).days
+            if _days_ahead > 1:
+                # More than 1 day in the future → definite fabrication
+                severity = "HARD_FAIL" if _days_ahead > 7 else "CRITICAL"
+                weight = 0.45 if severity == "HARD_FAIL" else 0.30
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_FUTURE_DATE",
+                    severity=severity,
+                    weight=weight,
+                    message=f"Receipt date is {_days_ahead} days in the future",
+                    evidence={
+                        "receipt_date": str(receipt_date),
+                        "today": str(_today),
+                        "days_ahead": _days_ahead,
+                    },
+                    reason_text=(
+                        f"📅🚨 Future Date: Receipt is dated {receipt_date_str} "
+                        f"which is {_days_ahead} days in the future. "
+                        f"A receipt cannot be dated before the transaction occurs."
+                    ),
+                )
+        except Exception as e:
+            logger.warning(f"R_FUTURE_DATE check failed: {e}")
 
     if receipt_date_str and creation_date_str:
         # Parse creation date for comparison
