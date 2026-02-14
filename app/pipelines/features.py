@@ -605,25 +605,71 @@ def _extract_currency_symbols(text: str) -> List[str]:
     """
     Extract all currency symbols found in the text.
     Returns list of unique currency symbols.
+    
+    Supports:
+    - Unicode symbols (₹, $, €, £, ¥)
+    - ISO 4217 codes (USD, EUR, KES, NGN, JPY, KRW, etc.)
+    - Common abbreviations (Rs, Rp, KSh, etc.)
     """
     currency_symbols = []
-    currency_patterns = [
-        (r'₹', 'INR'),  # Indian Rupee
-        (r'\$', 'USD'),  # US Dollar
-        (r'€', 'EUR'),  # Euro
-        (r'£', 'GBP'),  # British Pound
-        (r'¥', 'JPY'),  # Japanese Yen
-        (r'Rs\.?', 'INR'),  # Rupees (text)
-        (r'USD', 'USD'),
-        (r'EUR', 'EUR'),
-        (r'GBP', 'GBP'),
+    # Phase 1: Unicode currency symbols
+    symbol_patterns = [
+        (r'₹', 'INR'),
+        (r'\$', 'USD'),
+        (r'€', 'EUR'),
+        (r'£', 'GBP'),
+        (r'¥', 'JPY'),
+        (r'₩', 'KRW'),
+        (r'₱', 'PHP'),
+        (r'₫', 'VND'),
+        (r'₦', 'NGN'),
+        (r'฿', 'THB'),
+        (r'R\$', 'BRL'),
     ]
-    
-    for pattern, symbol in currency_patterns:
+    # Phase 2: ISO codes and common abbreviations (word-boundary matched)
+    text_code_patterns = [
+        (r'\bRs\.?\b', 'INR'),
+        (r'\bRp\.?\b', 'IDR'),
+        (r'\bKSh\.?\b', 'KES'),
+        (r'\bRM\b', 'MYR'),
+        # ISO 4217 codes — Africa
+        (r'\bKES\b', 'KES'), (r'\bNGN\b', 'NGN'), (r'\bZAR\b', 'ZAR'),
+        (r'\bTZS\b', 'TZS'), (r'\bUGX\b', 'UGX'), (r'\bGHS\b', 'GHS'),
+        (r'\bETB\b', 'ETB'),
+        # ISO 4217 codes — Asia
+        (r'\bINR\b', 'INR'), (r'\bJPY\b', 'JPY'), (r'\bKRW\b', 'KRW'),
+        (r'\bIDR\b', 'IDR'), (r'\bVND\b', 'VND'), (r'\bPHP\b', 'PHP'),
+        (r'\bTHB\b', 'THB'), (r'\bMYR\b', 'MYR'), (r'\bSGD\b', 'SGD'),
+        (r'\bHKD\b', 'HKD'), (r'\bTWD\b', 'TWD'), (r'\bPKR\b', 'PKR'),
+        (r'\bBDT\b', 'BDT'), (r'\bLKR\b', 'LKR'), (r'\bMMK\b', 'MMK'),
+        (r'\bCNY\b', 'CNY'), (r'\bRMB\b', 'CNY'),
+        # ISO 4217 codes — Americas
+        (r'\bUSD\b', 'USD'), (r'\bCAD\b', 'CAD'), (r'\bMXN\b', 'MXN'),
+        (r'\bBRL\b', 'BRL'), (r'\bCOP\b', 'COP'), (r'\bCLP\b', 'CLP'),
+        (r'\bARS\b', 'ARS'), (r'\bPEN\b', 'PEN'),
+        # ISO 4217 codes — Europe
+        (r'\bEUR\b', 'EUR'), (r'\bGBP\b', 'GBP'), (r'\bCHF\b', 'CHF'),
+        (r'\bSEK\b', 'SEK'), (r'\bNOK\b', 'NOK'), (r'\bDKK\b', 'DKK'),
+        (r'\bPLN\b', 'PLN'), (r'\bCZK\b', 'CZK'), (r'\bHUF\b', 'HUF'),
+        (r'\bRON\b', 'RON'), (r'\bRUB\b', 'RUB'), (r'\bTRY\b', 'TRY'),
+        # ISO 4217 codes — Middle East
+        (r'\bAED\b', 'AED'), (r'\bSAR\b', 'SAR'), (r'\bQAR\b', 'QAR'),
+        (r'\bOMR\b', 'OMR'), (r'\bBHD\b', 'BHD'), (r'\bKWD\b', 'KWD'),
+        (r'\bJOD\b', 'JOD'), (r'\bILS\b', 'ILS'),
+        # ISO 4217 codes — Oceania
+        (r'\bAUD\b', 'AUD'), (r'\bNZD\b', 'NZD'), (r'\bFJD\b', 'FJD'),
+    ]
+
+    for pattern, symbol in symbol_patterns:
         if re.search(pattern, text):
             if symbol not in currency_symbols:
                 currency_symbols.append(symbol)
-    
+
+    for pattern, symbol in text_code_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            if symbol not in currency_symbols:
+                currency_symbols.append(symbol)
+
     return currency_symbols
 
 

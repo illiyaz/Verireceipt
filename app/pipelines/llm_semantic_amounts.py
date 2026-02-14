@@ -30,6 +30,55 @@ from dataclasses import dataclass, asdict
 
 logger = logging.getLogger(__name__)
 
+# Currency multipliers for high-nominal currencies (approximate USD exchange).
+# Used to scale the line-item sanity threshold so that e.g. 3.9M KES (~$30K)
+# is not wrongly rejected as "too large to be money".
+_CURRENCY_MULTIPLIERS: Dict[str, float] = {
+    "KES": 150,   "KSH": 150,   # Kenyan Shilling
+    "JPY": 160,   "YEN": 160,   # Japanese Yen
+    "KRW": 1400,  "WON": 1400,  # Korean Won
+    "IDR": 16000, "RP": 16000,  # Indonesian Rupiah
+    "VND": 25000,               # Vietnamese Dong
+    "NGN": 1600,  "NAIRA": 1600,# Nigerian Naira
+    "INR": 85,    "RS": 85,     # Indian Rupee
+    "PKR": 280,                 # Pakistani Rupee
+    "LKR": 300,                 # Sri Lankan Rupee
+    "BDT": 120,                 # Bangladeshi Taka
+    "MMK": 2100,                # Myanmar Kyat
+    "CLP": 950,                 # Chilean Peso
+    "COP": 4000,                # Colombian Peso
+    "HUF": 380,                 # Hungarian Forint
+    "ISK": 140,                 # Icelandic Krona
+    "MXN": 17,                  # Mexican Peso
+    "PHP": 57,                  # Philippine Peso
+    "THB": 35,                  # Thai Baht
+    "TWD": 32,                  # Taiwan Dollar
+    "TZS": 2600,                # Tanzanian Shilling
+    "UGX": 3700,                # Ugandan Shilling
+    "ZAR": 18,                  # South African Rand
+    "RUB": 95,                  # Russian Ruble
+}
+
+_BASE_MAX_LINE_ITEM = 100_000.0  # USD baseline threshold
+
+
+def _detect_currency_multiplier(text: str) -> float:
+    """Detect currency from text and return the threshold multiplier.
+
+    Returns 1.0 for USD/EUR/GBP or unknown currencies,
+    and a larger multiplier for high-nominal currencies.
+    """
+    if not text:
+        return 1.0
+    upper = text.upper()
+    best_mult = 1.0
+    for code, mult in _CURRENCY_MULTIPLIERS.items():
+        # Look for currency code as a whole word (e.g. "KES" not inside "MAKES")
+        if re.search(rf'\b{re.escape(code)}\b', upper):
+            best_mult = max(best_mult, mult)
+    return best_mult
+
+
 # Try to import LLM backend (Ollama or OpenAI)
 try:
     import requests
@@ -146,9 +195,11 @@ CRITICAL RULES:
 - Total should be the FINAL amount to pay (after tax)
 - Line items should NOT include subtotals/tax/total
 - Dates, IDs, addresses, phone numbers → ignore_numbers
-- **SANITY CHECK**: Line item amounts are typically < $10,000 for individual items
-  - If a number is > $100,000, it's almost certainly an ID/invoice number, NOT a line item
-  - Large numbers (> $10,000) should be carefully verified before classifying as line items
+- **SANITY CHECK**: Consider the document's currency when judging amount plausibility
+  - In USD/EUR/GBP, amounts > $100,000 for a single item are unusual
+  - In high-nominal currencies (KES, JPY, KRW, IDR, VND, INR, etc.), large numbers are normal
+  - Example: 3,991,080 KES ≈ $30,000 USD — this IS a valid amount
+  - Only reject a number as an ID if it truly looks like a reference/invoice number (no currency context)
 - **REASONABLENESS**: The sum of line items should be close to the total (within 2x)
   - If line items sum to 10x the total, you've likely included IDs as amounts
 - Return confidence 0.0-1.0 based on clarity of the document
@@ -295,7 +346,11 @@ def _parse_semantic_response(response: str) -> Optional[SemanticAmounts]:
         
         # POST-PROCESSING SANITY CHECKS
         # Filter out unrealistic line item amounts (likely IDs/invoice numbers)
-        MAX_LINE_ITEM = 100000.0  # $100k threshold
+        # Use currency-aware threshold: high-nominal currencies (KES, JPY, etc.)
+        # routinely have amounts in the millions.
+        currency_mult = _detect_currency_multiplier(response)
+        MAX_LINE_ITEM = _BASE_MAX_LINE_ITEM * max(1.0, currency_mult)
+        
         filtered_line_items = []
         rejected_items = []
         
@@ -303,7 +358,7 @@ def _parse_semantic_response(response: str) -> Optional[SemanticAmounts]:
             if amount > MAX_LINE_ITEM:
                 # Likely an ID/invoice number, not a line item
                 rejected_items.append(str(int(amount)))
-                logger.warning(f"Rejected line item ${amount:,.0f} (> ${MAX_LINE_ITEM:,.0f} threshold)")
+                logger.warning(f"Rejected line item {amount:,.0f} (> {MAX_LINE_ITEM:,.0f} threshold, currency_mult={currency_mult})")
             else:
                 filtered_line_items.append(amount)
         

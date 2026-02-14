@@ -31,7 +31,7 @@ import io
 # Configuration
 USE_OLLAMA = os.getenv("USE_OLLAMA", "true").lower() == "true"
 OLLAMA_API_URL = os.getenv("OLLAMA_URL", "http://localhost:11434") + "/api/generate"
-DEFAULT_VISION_MODEL = os.getenv("VISION_MODEL", "llama3.2-vision:latest")
+DEFAULT_VISION_MODEL = os.getenv("VISION_MODEL", "llama3.2-vision:fp16")
 
 print(f"🔧 Vision LLM Mode: {'Ollama (Development)' if USE_OLLAMA else 'PyTorch (Production)'}")
 
