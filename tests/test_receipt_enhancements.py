@@ -721,3 +721,145 @@ class TestScreenshotStructureTax:
         assert "R_SCREENSHOT_DETECTED" in rule_ids, (
             f"R_SCREENSHOT_DETECTED should fire with status bar + screenshot dimensions. Got: {rule_ids}"
         )
+
+    # --- Multi-geo tax verification ---
+
+    def test_tax_component_eu_invalid_vat_rate(self):
+        """EU receipt with invalid VAT rate should fire R7D (valid_vat_rate check)."""
+        from app.pipelines.rules import _score_and_explain
+        from app.schemas.receipt import ReceiptFeatures
+
+        # German receipt with 15% VAT (invalid — should be 7% or 19%)
+        lines = [
+            "Supermarkt Berlin",
+            "Brot           2.50",
+            "Milch          1.20",
+            "MwSt 15%:      0.56",
+            "Total:         4.26",
+        ]
+
+        features = ReceiptFeatures(
+            file_features={"source_type": "image"},
+            text_features={
+                "doc_class": "POS_RETAIL",
+                "doc_subtype_guess": "POS_RETAIL",
+                "doc_profile_confidence": 0.8,
+                "merchant_candidate": "Supermarkt Berlin",
+                "has_any_amount": True,
+                "total_line_present": True,
+                "has_date": True,
+                "receipt_date": "2025-01-15",
+                "total_amount": "4.26",
+                "subtotal": "3.70",
+                "tax_amount": "0.56",
+                "has_line_items": True,
+                "line_items_sum": 4.26,
+                "total_mismatch": False,
+                "address_profile": {},
+                "merchant_address_consistency": {},
+                "doc_profile": {"subtype": "POS_RETAIL", "confidence": 0.8},
+                "geo_country_guess": "DE",
+                "geo_confidence": 0.9,
+            },
+            layout_features={
+                "num_lines": len(lines),
+                "numeric_line_ratio": 0.3,
+                "lines": lines,
+            },
+            forensic_features={},
+        )
+
+        result = _score_and_explain(features)
+        r7d_events = [e for e in result.events if e.get("rule_id") == "R7D_TAX_COMPONENT_VERIFICATION"]
+        checks = [e.get("evidence", {}).get("check") for e in r7d_events]
+        assert "valid_vat_rate" in checks, (
+            f"Expected valid_vat_rate check for 15% in Germany (valid: 7%/19%). Got: {checks}"
+        )
+
+    def test_tax_component_gulf_vat_math(self):
+        """UAE receipt where tax ≠ 5% × base should fire R7D."""
+        from app.pipelines.rules import _score_and_explain
+        from app.schemas.receipt import ReceiptFeatures
+
+        features = ReceiptFeatures(
+            file_features={"source_type": "image"},
+            text_features={
+                "doc_class": "POS_RETAIL",
+                "doc_subtype_guess": "POS_RETAIL",
+                "doc_profile_confidence": 0.8,
+                "merchant_candidate": "Dubai Mall Store",
+                "has_any_amount": True,
+                "total_line_present": True,
+                "has_date": True,
+                "receipt_date": "2025-01-15",
+                "total_amount": "115.00",
+                "subtotal": "100.00",
+                # VAT should be 5.00 (5% of 100), but shows 15.00
+                "tax_amount": "15.00",
+                "has_line_items": True,
+                "line_items_sum": 115.0,
+                "total_mismatch": False,
+                "address_profile": {},
+                "merchant_address_consistency": {},
+                "doc_profile": {"subtype": "POS_RETAIL", "confidence": 0.8},
+                "geo_country_guess": "AE",
+                "geo_confidence": 0.9,
+            },
+            layout_features={"num_lines": 10, "numeric_line_ratio": 0.3},
+            forensic_features={},
+        )
+
+        result = _score_and_explain(features)
+        r7d_events = [e for e in result.events if e.get("rule_id") == "R7D_TAX_COMPONENT_VERIFICATION"]
+        checks = [e.get("evidence", {}).get("check") for e in r7d_events]
+        regimes = [e.get("evidence", {}).get("regime") for e in r7d_events]
+        assert "rate_times_base" in checks, (
+            f"Expected rate_times_base check for UAE (5% × 100 ≠ 15). Got: {checks}"
+        )
+        assert "GULF_VAT" in regimes, (
+            f"Expected GULF_VAT regime. Got: {regimes}"
+        )
+
+    def test_tax_component_australia_gst_math(self):
+        """Australian receipt where tax ≠ 10% × base should fire R7D."""
+        from app.pipelines.rules import _score_and_explain
+        from app.schemas.receipt import ReceiptFeatures
+
+        features = ReceiptFeatures(
+            file_features={"source_type": "image"},
+            text_features={
+                "doc_class": "POS_RETAIL",
+                "doc_subtype_guess": "POS_RETAIL",
+                "doc_profile_confidence": 0.8,
+                "merchant_candidate": "Woolworths",
+                "has_any_amount": True,
+                "total_line_present": True,
+                "has_date": True,
+                "receipt_date": "2025-01-15",
+                "total_amount": "120.00",
+                "subtotal": "100.00",
+                # GST should be 10.00 (10% of 100), but shows 20.00
+                "tax_amount": "20.00",
+                "has_line_items": True,
+                "line_items_sum": 120.0,
+                "total_mismatch": False,
+                "address_profile": {},
+                "merchant_address_consistency": {},
+                "doc_profile": {"subtype": "POS_RETAIL", "confidence": 0.8},
+                "geo_country_guess": "AU",
+                "geo_confidence": 0.9,
+            },
+            layout_features={"num_lines": 10, "numeric_line_ratio": 0.3},
+            forensic_features={},
+        )
+
+        result = _score_and_explain(features)
+        r7d_events = [e for e in result.events if e.get("rule_id") == "R7D_TAX_COMPONENT_VERIFICATION"]
+        checks = [e.get("evidence", {}).get("check") for e in r7d_events]
+        regimes = [e.get("evidence", {}).get("regime") for e in r7d_events]
+        assert "rate_times_base" in checks, (
+            f"Expected rate_times_base check for AU (10% × 100 ≠ 20). Got: {checks}"
+        )
+        assert "AU_GST" in regimes, (
+            f"Expected AU_GST regime. Got: {regimes}"
+        )

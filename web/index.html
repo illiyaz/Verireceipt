@@ -944,6 +944,9 @@
                                             image_url: imageUrl,  // Use server URL or SESSION_STORAGE marker
                                             verdict: verdict.final_label,
                                             confidence: verdict.confidence,
+                                            recommended_action: verdict.recommended_action || 'review',
+                                            reasoning: verdict.reasoning || [],
+                                            audit_report: verdict.audit_report || null,
                                             models: {
                                                 rule_based: verdict.rule_based || engineResults['rule-based'] || {},
                                                 donut: verdict.donut || engineResults['donut'] || {},
@@ -951,7 +954,8 @@
                                                 layoutlm: verdict.layoutlm || engineResults['layoutlm'] || {},
                                                 vision_llm: verdict.vision_llm || engineResults['vision-llm'] || {}
                                             },
-                                            extracted: verdict.extracted || {}
+                                            extracted: verdict.extracted || {},
+                                            _fullData: verdict._fullData || null
                                         };
                                         
                                         console.log('Preview length:', preview ? preview.length : 0);

@@ -4638,7 +4638,6 @@ def _score_and_explain(
 
         # --- Canada GST/HST/PST Verification ---
         elif _geo == "CA":
-            # Extract Canadian tax components from OCR lines
             _ca_gst = None
             _ca_pst = None
             _ca_hst = None
@@ -4689,8 +4688,241 @@ def _score_and_explain(
                         ),
                     )
 
+        # --- EU/UK VAT Component Verification ---
+        # EU countries commonly show multiple VAT rates on a single receipt
+        # (e.g. Germany: 7% reduced + 19% standard). Each must be from the
+        # country's valid set, and they must sum to total tax.
+        elif _geo in ("GB", "DE", "FR", "IT", "ES", "NL", "BE", "AT", "PT",
+                       "IE", "SE", "DK", "FI", "NO", "PL", "CZ", "GR", "HU",
+                       "RO", "CH"):
+            # Valid VAT rate sets per country (standard + reduced + zero)
+            _EU_VAT_RATES = {
+                "GB": [0, 5, 20],
+                "DE": [0, 7, 19],
+                "FR": [0, 2.1, 5.5, 10, 20],
+                "IT": [0, 4, 5, 10, 22],
+                "ES": [0, 4, 10, 21],
+                "NL": [0, 9, 21],
+                "BE": [0, 6, 12, 21],
+                "AT": [0, 10, 13, 20],
+                "PT": [0, 6, 13, 23],
+                "IE": [0, 9, 13.5, 23],
+                "SE": [0, 6, 12, 25],
+                "DK": [0, 25],
+                "FI": [0, 10, 14, 24],
+                "NO": [0, 12, 15, 25],
+                "PL": [0, 5, 8, 23],
+                "CZ": [0, 12, 21],
+                "GR": [0, 6, 13, 24],
+                "HU": [0, 5, 18, 27],
+                "RO": [0, 5, 9, 19],
+                "CH": [0, 2.5, 3.7, 7.7],  # Not EU but often grouped
+            }
+            _valid_rates = _EU_VAT_RATES.get(_geo, [])
+
+            # Extract VAT component lines: "VAT 19%: €5.70" or "MwSt 7%  2.10"
+            _vat_line_re = re.compile(
+                r"\b(?:vat|mwst|tva|iva|btw|moms|alv|ust|fpa|afa|áfa|dph)"
+                r"\s*(?:@\s*)?(\d+(?:[.,]\d+)?)\s*%"
+                r".*?([\d,]+[.,]\d{2})",
+                re.IGNORECASE,
+            )
+            _eu_components = []
+            _eu_ocr_lines = lf.get("lines", []) or []
+            for _el in _eu_ocr_lines:
+                _em = _vat_line_re.search(_el)
+                if _em:
+                    _rate_str = _em.group(1).replace(",", ".")
+                    _amt_val = _normalize_amount_str(_em.group(2))
+                    try:
+                        _rate_val = float(_rate_str)
+                    except (ValueError, TypeError):
+                        continue
+                    if _amt_val is not None and _amt_val > 0:
+                        _eu_components.append((_rate_val, _amt_val))
+
+            # Check 1: Each extracted VAT rate should be from the valid set
+            if _eu_components and _valid_rates:
+                for _rate, _amt in _eu_components:
+                    _closest = min(_valid_rates, key=lambda r: abs(r - _rate))
+                    if abs(_rate - _closest) > 1.0:
+                        score += emit_event(
+                            events=events,
+                            reasons=reasons,
+                            rule_id="R7D_TAX_COMPONENT_VERIFICATION",
+                            severity="WARNING",
+                            weight=0.10,
+                            message=f"VAT rate {_rate}% is not valid for {_geo}",
+                            evidence={
+                                "regime": "EU_VAT",
+                                "check": "valid_vat_rate",
+                                "detected_rate": _rate,
+                                "valid_rates": _valid_rates,
+                                "closest_valid": _closest,
+                                "geo_country": _geo,
+                            },
+                            reason_text=(
+                                f"💰 Invalid VAT Rate ({_geo}): {_rate}% is not a valid "
+                                f"VAT rate. Valid rates: "
+                                f"{', '.join(str(r) + '%' for r in _valid_rates)}."
+                            ),
+                        )
+                        break  # One invalid rate is enough
+
+            # Check 2: VAT components should sum to total tax
+            if len(_eu_components) >= 2 and _tax_val is not None and _tax_val > 0:
+                _eu_sum = sum(a for _, a in _eu_components)
+                _eu_diff = abs(_eu_sum - _tax_val)
+                if _eu_diff > max(0.50, _tax_val * 0.03):
+                    _eu_desc = [f"{r}%={a:.2f}" for r, a in _eu_components]
+                    score += emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="R7D_TAX_COMPONENT_VERIFICATION",
+                        severity="WARNING",
+                        weight=0.12,
+                        message=f"VAT components ({_eu_sum:.2f}) ≠ total tax ({_tax_val:.2f})",
+                        evidence={
+                            "regime": "EU_VAT",
+                            "check": "components_sum_to_total",
+                            "components": _eu_desc,
+                            "component_sum": round(_eu_sum, 2),
+                            "total_tax": _tax_val,
+                            "difference": round(_eu_diff, 2),
+                            "geo_country": _geo,
+                        },
+                        reason_text=(
+                            f"💰 VAT Sum Mismatch ({_geo}): Components "
+                            f"({' + '.join(_eu_desc)} = {_eu_sum:.2f}) ≠ total tax "
+                            f"{_tax_val:.2f}. Difference: {_eu_diff:.2f}."
+                        ),
+                    )
+
+        # --- Gulf VAT Verification (AE/SA/OM/BH/QA/KW) ---
+        # Single-rate VAT regimes: verify tax = rate% × base
+        elif _geo in ("AE", "SA", "OM", "BH", "QA", "KW"):
+            _GULF_VAT_RATES = {
+                "AE": 5.0, "SA": 15.0, "OM": 5.0, "BH": 10.0,
+                "QA": 0.0, "KW": 0.0,
+            }
+            _expected_rate = _GULF_VAT_RATES.get(_geo, 0.0)
+            _base = _subtotal_val
+            if _base is None and _total_val is not None and _tax_val is not None:
+                _base = _total_val - _tax_val
+
+            if (_expected_rate > 0 and _tax_val is not None and _tax_val > 0
+                    and _base is not None and _base > 0):
+                _expected_tax = round(_base * _expected_rate / 100.0, 2)
+                _gulf_diff = abs(_tax_val - _expected_tax)
+                # Tolerance: 2% of expected or 0.50, whichever is larger
+                _gulf_tol = max(0.50, _expected_tax * 0.02)
+                if _gulf_diff > _gulf_tol:
+                    score += emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="R7D_TAX_COMPONENT_VERIFICATION",
+                        severity="WARNING",
+                        weight=0.12,
+                        message=f"VAT {_expected_rate}% × base {_base:.2f} = {_expected_tax:.2f}, but tax shows {_tax_val:.2f}",
+                        evidence={
+                            "regime": "GULF_VAT",
+                            "check": "rate_times_base",
+                            "expected_rate": _expected_rate,
+                            "base_amount": round(_base, 2),
+                            "expected_tax": _expected_tax,
+                            "actual_tax": _tax_val,
+                            "difference": round(_gulf_diff, 2),
+                            "geo_country": _geo,
+                        },
+                        reason_text=(
+                            f"💰 VAT Math Error ({_geo}): {_expected_rate}% × "
+                            f"base {_base:.2f} = {_expected_tax:.2f}, but receipt "
+                            f"shows tax {_tax_val:.2f}. Difference: {_gulf_diff:.2f}."
+                        ),
+                    )
+
+        # --- Australia GST Verification ---
+        # GST is exactly 10%; verify tax = 10% × base
+        elif _geo == "AU":
+            _base = _subtotal_val
+            if _base is None and _total_val is not None and _tax_val is not None:
+                _base = _total_val - _tax_val
+            if (_tax_val is not None and _tax_val > 0
+                    and _base is not None and _base > 0):
+                _au_expected = round(_base * 0.10, 2)
+                _au_diff = abs(_tax_val - _au_expected)
+                if _au_diff > max(0.50, _au_expected * 0.02):
+                    score += emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="R7D_TAX_COMPONENT_VERIFICATION",
+                        severity="WARNING",
+                        weight=0.10,
+                        message=f"GST 10% × base {_base:.2f} = {_au_expected:.2f}, but tax shows {_tax_val:.2f}",
+                        evidence={
+                            "regime": "AU_GST",
+                            "check": "rate_times_base",
+                            "expected_rate": 10.0,
+                            "base_amount": round(_base, 2),
+                            "expected_tax": _au_expected,
+                            "actual_tax": _tax_val,
+                            "difference": round(_au_diff, 2),
+                            "geo_country": "AU",
+                        },
+                        reason_text=(
+                            f"💰 GST Math Error (Australia): 10% × base "
+                            f"${_base:.2f} = ${_au_expected:.2f}, but receipt shows "
+                            f"tax ${_tax_val:.2f}. Difference: ${_au_diff:.2f}."
+                        ),
+                    )
+
+        # --- US Multi-Component Tax Verification ---
+        # US can have state + county + city taxes
+        elif _geo == "US":
+            _us_lines = lf.get("lines", []) or []
+            _us_tax_re = re.compile(
+                r"\b(state\s+tax|county\s+tax|city\s+tax|local\s+tax"
+                r"|sales\s+tax|tax)\b.*?([\d,]+[.,]\d{2})",
+                re.IGNORECASE,
+            )
+            _us_components = []
+            for _ul in _us_lines:
+                _um = _us_tax_re.search(_ul)
+                if _um:
+                    _uv = _normalize_amount_str(_um.group(2))
+                    if _uv is not None and _uv > 0:
+                        _us_components.append((_um.group(1).strip(), _uv))
+
+            if len(_us_components) >= 2 and _tax_val is not None and _tax_val > 0:
+                _us_sum = sum(v for _, v in _us_components)
+                _us_diff = abs(_us_sum - _tax_val)
+                if _us_diff > max(0.50, _tax_val * 0.03):
+                    _us_desc = [f"{n}={v:.2f}" for n, v in _us_components]
+                    score += emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="R7D_TAX_COMPONENT_VERIFICATION",
+                        severity="WARNING",
+                        weight=0.10,
+                        message=f"Tax components ({_us_sum:.2f}) ≠ total tax ({_tax_val:.2f})",
+                        evidence={
+                            "regime": "US_SALES_TAX",
+                            "check": "components_sum_to_total",
+                            "components": _us_desc,
+                            "component_sum": round(_us_sum, 2),
+                            "total_tax": _tax_val,
+                            "difference": round(_us_diff, 2),
+                            "geo_country": "US",
+                        },
+                        reason_text=(
+                            f"💰 Tax Sum Mismatch (US): Components "
+                            f"({' + '.join(_us_desc)} = ${_us_sum:.2f}) ≠ total tax "
+                            f"${_tax_val:.2f}. Difference: ${_us_diff:.2f}."
+                        ),
+                    )
+
         # --- General: Multi-line tax component sum verification ---
-        # For any geo: if we can find multiple tax lines with amounts, verify sum
+        # Fallback for any geo not handled above
         elif _tax_val is not None and _tax_val > 0:
             _gen_tax_lines = lf.get("lines", []) or []
             _gen_components = []
@@ -4706,7 +4938,6 @@ def _score_and_explain(
                     if _gv is not None and _gv > 0:
                         _gen_components.append((_gm.group(1).strip(), _gv))
 
-            # Only verify if we found 2+ distinct tax component lines
             if len(_gen_components) >= 2:
                 _gen_sum = sum(v for _, v in _gen_components)
                 _gen_diff = abs(_gen_sum - _tax_val)
@@ -4736,6 +4967,61 @@ def _score_and_explain(
                             f"Difference: {_gen_diff:.2f}."
                         ),
                     )
+
+        # --- Universal: Rate × Base math verification ---
+        # If OCR captured a tax rate (e.g. "Tax 9%: 90.00"), verify the math
+        # regardless of geo. This catches edits where someone changed the amount
+        # but forgot to adjust the percentage or vice versa.
+        # Runs for all geos as a secondary check (non-exclusive with above).
+        _ocr_rate_re = re.compile(
+            r"\b(?:tax|vat|gst|hst|mwst|tva|iva|btw)\s*"
+            r"(?:@\s*)?(\d+(?:[.,]\d+)?)\s*%"
+            r".*?([\d,]+[.,]\d{2})",
+            re.IGNORECASE,
+        )
+        _base_for_math = _subtotal_val
+        if _base_for_math is None and _total_val is not None and _tax_val is not None:
+            _base_for_math = _total_val - _tax_val
+        if _base_for_math is not None and _base_for_math > 0:
+            _rate_lines = lf.get("lines", []) or []
+            for _rl in _rate_lines:
+                _rm = _ocr_rate_re.search(_rl)
+                if _rm:
+                    try:
+                        _ocr_rate = float(_rm.group(1).replace(",", "."))
+                        _ocr_amt = _normalize_amount_str(_rm.group(2))
+                    except (ValueError, TypeError):
+                        continue
+                    if _ocr_rate > 0 and _ocr_amt is not None and _ocr_amt > 0:
+                        _calc_amt = round(_base_for_math * _ocr_rate / 100.0, 2)
+                        _math_diff = abs(_ocr_amt - _calc_amt)
+                        _math_tol = max(1.0, _calc_amt * 0.03)
+                        if _math_diff > _math_tol:
+                            score += emit_event(
+                                events=events,
+                                reasons=reasons,
+                                rule_id="R7D_TAX_COMPONENT_VERIFICATION",
+                                severity="WARNING",
+                                weight=0.10,
+                                message=f"Tax {_ocr_rate}% × {_base_for_math:.2f} = {_calc_amt:.2f}, but line shows {_ocr_amt:.2f}",
+                                evidence={
+                                    "regime": "UNIVERSAL",
+                                    "check": "rate_times_base",
+                                    "ocr_rate_pct": _ocr_rate,
+                                    "base_amount": round(_base_for_math, 2),
+                                    "calculated_tax": _calc_amt,
+                                    "line_tax_amount": _ocr_amt,
+                                    "difference": round(_math_diff, 2),
+                                    "geo_country": _geo,
+                                },
+                                reason_text=(
+                                    f"💰 Tax Math Error: {_ocr_rate}% × "
+                                    f"{_base_for_math:.2f} = {_calc_amt:.2f}, "
+                                    f"but receipt shows {_ocr_amt:.2f}. "
+                                    f"Difference: {_math_diff:.2f}."
+                                ),
+                            )
+                            break  # One math error is enough
 
     except Exception as e:
         logger.warning(f"R7D_TAX_COMPONENT_VERIFICATION check failed: {e}")
