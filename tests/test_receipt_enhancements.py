@@ -863,3 +863,210 @@ class TestScreenshotStructureTax:
         assert "AU_GST" in regimes, (
             f"Expected AU_GST regime. Got: {regimes}"
         )
+
+    # --- Structural Layout Analysis ---
+
+    def test_layout_analysis_pos_receipt(self):
+        """Narrow lines with separators should be classified as pos_receipt layout."""
+        from app.pipelines.features import _analyze_layout_structure
+
+        lines = [
+            "      STARBUCKS COFFEE      ",
+            "      Store #12345          ",
+            "      123 Main St           ",
+            "      Tel: 555-1234         ",
+            "------------------------------",
+            "Latte             4.50",
+            "Muffin            3.25",
+            "------------------------------",
+            "Subtotal          7.75",
+            "Tax               0.62",
+            "Total             8.37",
+            "------------------------------",
+            "   Thank you!              ",
+        ]
+
+        result = _analyze_layout_structure(lines)
+        assert result["layout_available"] is True
+        assert result["layout_type"] == "pos_receipt", (
+            f"Expected pos_receipt, got {result['layout_type']}. Evidence: {result}"
+        )
+        assert result["separator_count"] >= 2
+        assert result["median_line_length"] <= 42
+
+    def test_layout_analysis_invoice(self):
+        """Wide lines with table structure should be classified as invoice layout."""
+        from app.pipelines.features import _analyze_layout_structure
+
+        lines = [
+            "Invoice No: INV-2025-001                                              Date: 2025-01-15",
+            "Bill To: Acme Corporation                                             Due: 2025-02-15",
+            "Ship To: 123 Business Park, Suite 400                                 Terms: Net 30",
+            "",
+            "Description                          Qty       Rate          Amount",
+            "Web Development Services               1    5000.00         5000.00",
+            "UI/UX Design                            1    2000.00         2000.00",
+            "Server Hosting (3 months)               3     150.00          450.00",
+            "SSL Certificate                         1      99.00           99.00",
+            "",
+            "                                                  Subtotal:  7549.00",
+            "                                                  Tax (18%): 1358.82",
+            "                                                  Total:     8907.82",
+        ]
+
+        result = _analyze_layout_structure(lines)
+        assert result["layout_available"] is True
+        assert result["has_table_structure"] is True, (
+            f"Expected table structure detected. Col alignment: {result['col_alignment_score']}"
+        )
+        assert result["label_value_ratio"] > 0, (
+            f"Expected label:value pairs. Ratio: {result['label_value_ratio']}"
+        )
+
+    def test_layout_analysis_minimum_lines(self):
+        """Very few lines should return layout_available=False."""
+        from app.pipelines.features import _analyze_layout_structure
+
+        result = _analyze_layout_structure(["Hello", "World"])
+        assert result["layout_available"] is False
+
+    # --- Brand Consistency ---
+
+    def test_brand_consistency_merchant_not_in_header(self):
+        """R_BRAND_CONSISTENCY should fire when merchant is not in header and header is numeric."""
+        from app.pipelines.rules import _score_and_explain
+        from app.schemas.receipt import ReceiptFeatures
+
+        # Merchant claims "Starbucks" but top lines are just numbers
+        lines = [
+            "12345678901234",
+            "09876 54321 00",
+            "2025-01-15 14:30",
+            "001 002 003 004",
+            "55555 66666 777",
+            "Latte             4.50",
+            "Total             4.50",
+            "Starbucks Coffee",
+        ]
+
+        features = ReceiptFeatures(
+            file_features={"source_type": "image"},
+            text_features={
+                "doc_class": "POS_RETAIL",
+                "doc_subtype_guess": "POS_RETAIL",
+                "doc_profile_confidence": 0.8,
+                "merchant_candidate": "Starbucks Coffee",
+                "has_any_amount": True,
+                "total_line_present": True,
+                "has_date": True,
+                "receipt_date": "2025-01-15",
+                "total_amount": "4.50",
+                "has_line_items": True,
+                "line_items_sum": 4.50,
+                "total_mismatch": False,
+                "address_profile": {},
+                "merchant_address_consistency": {},
+                "doc_profile": {"subtype": "POS_RETAIL", "confidence": 0.8},
+            },
+            layout_features={
+                "num_lines": len(lines),
+                "numeric_line_ratio": 0.5,
+                "lines": lines,
+            },
+            forensic_features={},
+        )
+
+        result = _score_and_explain(features)
+        rule_ids = [e.get("rule_id") for e in result.events]
+        assert "R_BRAND_CONSISTENCY" in rule_ids, (
+            f"R_BRAND_CONSISTENCY should fire: merchant 'Starbucks Coffee' not in header "
+            f"and header is mostly numeric. Got rules: {rule_ids}"
+        )
+
+    def test_brand_consistency_merchant_in_header_no_fire(self):
+        """R_BRAND_CONSISTENCY should NOT fire when merchant is in header."""
+        from app.pipelines.rules import _score_and_explain
+        from app.schemas.receipt import ReceiptFeatures
+
+        lines = [
+            "STARBUCKS COFFEE",
+            "Store #12345",
+            "123 Main Street",
+            "Tel: 555-1234",
+            "2025-01-15 14:30",
+            "------------------------------",
+            "Latte             4.50",
+            "Total             4.50",
+        ]
+
+        features = ReceiptFeatures(
+            file_features={"source_type": "image"},
+            text_features={
+                "doc_class": "POS_RETAIL",
+                "doc_subtype_guess": "POS_RETAIL",
+                "doc_profile_confidence": 0.8,
+                "merchant_candidate": "Starbucks Coffee",
+                "has_any_amount": True,
+                "total_line_present": True,
+                "has_date": True,
+                "receipt_date": "2025-01-15",
+                "total_amount": "4.50",
+                "has_line_items": True,
+                "line_items_sum": 4.50,
+                "total_mismatch": False,
+                "address_profile": {},
+                "merchant_address_consistency": {},
+                "doc_profile": {"subtype": "POS_RETAIL", "confidence": 0.8},
+            },
+            layout_features={
+                "num_lines": len(lines),
+                "numeric_line_ratio": 0.3,
+                "lines": lines,
+            },
+            forensic_features={},
+        )
+
+        result = _score_and_explain(features)
+        brand_events = [e for e in result.events if e.get("rule_id") == "R_BRAND_CONSISTENCY"
+                        and e.get("severity") == "WARNING"]
+        assert len(brand_events) == 0, (
+            f"R_BRAND_CONSISTENCY WARNING should NOT fire when merchant is in header. "
+            f"Got: {brand_events}"
+        )
+
+    # --- Template Matching Rule ---
+
+    def test_template_matching_registry_loads(self):
+        """Template registry should load built-in templates."""
+        from app.pipelines.templates.registry import TemplateRegistry
+        import os
+
+        registry = TemplateRegistry(auto_load=True)
+        count = registry.count()
+        assert count >= 10, (
+            f"Expected at least 10 built-in templates, got {count}"
+        )
+
+    def test_template_matching_fingerprint(self):
+        """compute_fingerprint should extract structural features from lines."""
+        from app.pipelines.templates.fingerprint import compute_fingerprint
+
+        lines = [
+            "STARBUCKS",
+            "Store #12345",
+            "123 Main St",
+            "-----",
+            "Latte         4.50",
+            "Muffin        3.25",
+            "-----",
+            "Subtotal      7.75",
+            "Tax           0.62",
+            "Total         8.37",
+            "Thank you!",
+        ]
+
+        fp = compute_fingerprint(lines, template_id="test", source="test")
+        assert fp.has_tax_line is True
+        assert fp.has_subtotal_line is True
+        assert fp.has_total_line is True
+        assert fp.has_separator_lines is True

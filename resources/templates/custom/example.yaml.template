@@ -1,0 +1,66 @@
+# Example Custom Template
+# Copy this file and modify for your own templates
+#
+# Usage:
+#   1. Copy this file to a new .yaml file (e.g., starbucks.yaml)
+#   2. Update the fields based on your receipt samples
+#   3. Templates are auto-loaded from this directory
+#
+# You can also generate templates automatically:
+#   python scripts/setup_templates.py --add-custom receipt.txt --name "My Store"
+
+template_id: "example_store"
+template_name: "Example Store Template"
+source: "custom"
+
+# Line count range (min, max)
+line_count_range: [15, 50]
+
+# Lines before first amount (header area)
+header_line_count: 5
+
+# Lines after last amount (footer area)
+footer_line_count: 3
+
+# Keywords found in merchant name area (lowercase)
+merchant_keywords:
+  - "example"
+  - "store"
+  - "inc"
+
+# Keywords in header area
+header_keywords:
+  - "store"
+  - "receipt"
+  - "tel"
+
+# Keywords in footer area
+footer_keywords:
+  - "thank"
+  - "visit"
+  - "again"
+
+# Amount patterns
+amount_count_range: [3, 20]
+has_tax_line: true
+has_subtotal_line: true
+has_total_line: true
+
+# Date/time patterns
+date_formats:
+  - "MM/DD/YYYY"
+has_time: true
+
+# Layout features
+has_table_structure: false
+has_separator_lines: true
+typical_line_length: [10, 60]
+
+# Confidence threshold for this template
+match_threshold: 0.7
+
+# Extraction hints (optional - helps extraction pipeline)
+extraction_hints:
+  merchant_line: 1  # Merchant is typically on line 1
+  date_pattern: "\\d{2}/\\d{2}/\\d{4}"
+  total_keyword: "TOTAL"

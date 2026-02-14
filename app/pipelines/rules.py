@@ -4471,6 +4471,198 @@ def _score_and_explain(
         logger.warning(f"R_STRUCTURE_ORDER check failed: {e}")
 
     # ---------------------------------------------------------------------------
+    # RULE GROUP 5G: Brand / Logo Consistency
+    # ---------------------------------------------------------------------------
+    # Expert insight: Real receipts from established businesses show the
+    # merchant/brand name prominently in the first few lines (the "logo region").
+    # Fraudsters often:
+    #   1. Claim a well-known merchant but the name doesn't appear at the top
+    #   2. Use generic/template text where brand should be
+    #   3. Have the merchant name only deep in the body (copy-pasted)
+    #   4. Mismatch between OCR-detected brand and extracted merchant
+    #
+    # We check:
+    #   A. Merchant name appears in top 5 lines (logo region)
+    #   B. Known brand chains are formatted correctly
+    #   C. Top lines contain plausible branding (not just numbers/dates)
+    try:
+        _brand_merchant = (tf.get("merchant_candidate") or "").strip()
+        _brand_lines = lf.get("lines", [])
+        if not _brand_lines:
+            _brand_lines = [l for l in full_text.split("\n") if l.strip()] if full_text else []
+
+        if _brand_merchant and len(_brand_merchant) >= 3 and len(_brand_lines) >= 5:
+            _brand_top = "\n".join(_brand_lines[:5]).lower()
+            _brand_merchant_lower = _brand_merchant.lower()
+            _brand_signals = []
+
+            # Check A: Merchant name should appear in logo region (top 5 lines)
+            _merchant_words = [w for w in _brand_merchant_lower.split() if len(w) >= 3]
+            _words_in_top = sum(1 for w in _merchant_words if w in _brand_top)
+            _merchant_in_top = (
+                _brand_merchant_lower in _brand_top
+                or (_merchant_words and _words_in_top >= max(1, len(_merchant_words) * 0.5))
+            )
+
+            if not _merchant_in_top:
+                # Check if merchant appears anywhere in the doc
+                _full_lower = full_text.lower() if full_text else ""
+                _merchant_in_body = _brand_merchant_lower in _full_lower
+                if _merchant_in_body:
+                    _brand_signals.append("merchant_not_in_header_but_in_body")
+                else:
+                    _brand_signals.append("merchant_not_found_anywhere")
+
+            # Check B: Known brand chains should appear in specific format
+            _KNOWN_CHAINS = {
+                "mcdonald": ["mcdonald's", "mcdonalds", "mcd"],
+                "starbucks": ["starbucks", "starbucks coffee"],
+                "walmart": ["walmart", "wal-mart", "wal mart"],
+                "costco": ["costco", "costco wholesale"],
+                "amazon": ["amazon", "amazon.com", "amzn"],
+                "target": ["target"],
+                "ikea": ["ikea"],
+                "zara": ["zara"],
+                "h&m": ["h&m", "h & m"],
+                "uber": ["uber", "uber eats"],
+                "swiggy": ["swiggy"],
+                "zomato": ["zomato"],
+                "flipkart": ["flipkart"],
+                "reliance": ["reliance", "reliance retail", "reliance fresh"],
+                "big bazaar": ["big bazaar", "bigbazaar"],
+                "dmart": ["dmart", "d-mart", "d mart"],
+            }
+            for _chain_key, _chain_variants in _KNOWN_CHAINS.items():
+                if any(v in _brand_merchant_lower for v in _chain_variants):
+                    # This receipt claims to be from a known chain
+                    _chain_in_top = any(v in _brand_top for v in _chain_variants)
+                    if not _chain_in_top:
+                        _brand_signals.append(f"known_chain_{_chain_key}_not_in_header")
+                    break
+
+            # Check C: Top lines should contain plausible branding (not just numbers)
+            _top_alpha_ratio = sum(
+                c.isalpha() for c in _brand_top
+            ) / max(len(_brand_top), 1)
+            if _top_alpha_ratio < 0.2:
+                _brand_signals.append("header_mostly_numeric")
+
+            # Emit if 2+ brand signals detected
+            if len(_brand_signals) >= 2:
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_BRAND_CONSISTENCY",
+                    severity="WARNING",
+                    weight=0.10,
+                    message=f"Brand/logo inconsistency: {', '.join(_brand_signals[:3])}",
+                    evidence={
+                        "merchant": _brand_merchant,
+                        "signals": _brand_signals,
+                        "signal_count": len(_brand_signals),
+                        "merchant_in_header": _merchant_in_top,
+                    },
+                    reason_text=(
+                        f"🏷️ Brand Inconsistency: Merchant '{_brand_merchant}' "
+                        f"shows {len(_brand_signals)} branding anomalies: "
+                        f"{'; '.join(_brand_signals[:3])}. "
+                        f"Real receipts prominently display the merchant/brand "
+                        f"name in the header region."
+                    ),
+                )
+            elif len(_brand_signals) == 1 and "merchant_not_found_anywhere" in _brand_signals:
+                # Single strong signal: merchant name doesn't appear at all
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_BRAND_CONSISTENCY",
+                    severity="INFO",
+                    weight=0.05,
+                    message=f"Merchant '{_brand_merchant}' not found in document text",
+                    evidence={
+                        "merchant": _brand_merchant,
+                        "signals": _brand_signals,
+                        "merchant_in_header": False,
+                    },
+                    reason_text=(
+                        f"🏷️ Brand Note: Extracted merchant '{_brand_merchant}' "
+                        f"does not appear anywhere in the document OCR text."
+                    ),
+                )
+    except Exception as e:
+        logger.warning(f"R_BRAND_CONSISTENCY check failed: {e}")
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 5H: Template Matching
+    # ---------------------------------------------------------------------------
+    # Expert insight: Known merchant chains (Starbucks, Walmart, McDonald's etc.)
+    # produce receipts with consistent structural patterns. If a receipt claims
+    # to be from a known chain but its structure doesn't match the expected
+    # template, that's a fraud signal. Conversely, a strong template match
+    # boosts confidence in legitimacy.
+    try:
+        _tmpl_merchant = (tf.get("merchant_candidate") or "").strip().lower()
+        _tmpl_lines = lf.get("lines", [])
+        if _tmpl_merchant and len(_tmpl_lines) >= 5:
+            from app.pipelines.templates.registry import get_registry
+            from app.pipelines.templates.matcher import TemplateMatcher
+
+            _registry = get_registry()
+            if _registry.count() > 0:
+                _matcher = TemplateMatcher(_registry.get_all())
+                _matches = _matcher.match(_tmpl_lines, top_k=3, min_confidence=0.3)
+
+                if _matches:
+                    _best = _matches[0]
+                    _best_name = _best.template.template_name.lower()
+                    _best_conf = _best.confidence
+
+                    # Check: Does claimed merchant match best template?
+                    _claimed_matches_template = (
+                        _tmpl_merchant in _best_name
+                        or _best_name in _tmpl_merchant
+                        or any(
+                            kw in _tmpl_merchant
+                            for kw in _best.template.merchant_keywords
+                            if len(kw) >= 3
+                        )
+                    )
+
+                    # Case 1: Receipt claims known chain but structure doesn't match
+                    _is_known_chain = any(
+                        kw in _tmpl_merchant
+                        for t in _registry.get_all()
+                        for kw in t.merchant_keywords
+                        if len(kw) >= 4
+                    )
+                    if _is_known_chain and not _claimed_matches_template and _best_conf < 0.5:
+                        score += emit_event(
+                            events=events,
+                            reasons=reasons,
+                            rule_id="R_TEMPLATE_MATCH",
+                            severity="WARNING",
+                            weight=0.08,
+                            message=f"Receipt claims '{tf.get('merchant_candidate')}' but structure doesn't match known template",
+                            evidence={
+                                "claimed_merchant": tf.get("merchant_candidate"),
+                                "best_template": _best.template.template_name,
+                                "best_confidence": round(_best_conf, 3),
+                                "match_details": {
+                                    k: round(v, 2) for k, v in _best.match_details.items()
+                                },
+                            },
+                            reason_text=(
+                                f"📋 Template Mismatch: Receipt claims to be from "
+                                f"'{tf.get('merchant_candidate')}' but its structural "
+                                f"fingerprint best matches '{_best.template.template_name}' "
+                                f"(confidence: {_best_conf:.0%}). Known chains produce "
+                                f"consistent receipt formats."
+                            ),
+                        )
+    except Exception as e:
+        logger.warning(f"R_TEMPLATE_MATCH check failed: {e}")
+
+    # ---------------------------------------------------------------------------
     # RULE GROUP 5F: Tax Component Verification (multi-geo)
     # ---------------------------------------------------------------------------
     # Expert insight: When a receipt shows tax breakdown (CGST+SGST, VAT components),

@@ -1089,6 +1089,134 @@ def _guess_merchant_line(lines: List[str]) -> Optional[str]:
     return None
 
 
+# --- Helper: Structural layout analysis ------------------------------------
+
+def _analyze_layout_structure(lines: List[str]) -> Dict[str, Any]:
+    """Analyze the structural layout of OCR lines.
+
+    Returns signals that distinguish document types by visual structure:
+      POS receipt  → narrow, centered headers, separator lines, short lines
+      Invoice      → wide, table columns, aligned amounts, label:value pairs
+      Statement    → repeating row patterns, date+amount columns
+      Logistics    → dense text, many fields, wide format
+
+    These signals are consumed by _detect_document_profile() to boost or
+    penalize subtype scores beyond keyword matching alone.
+    """
+    if not lines:
+        return {"layout_available": False}
+
+    non_empty = [l for l in lines if l.strip()]
+    if len(non_empty) < 3:
+        return {"layout_available": False}
+
+    # --- Line length statistics ---
+    lengths = [len(l.rstrip()) for l in non_empty]
+    avg_len = sum(lengths) / len(lengths)
+    max_len = max(lengths)
+    median_len = sorted(lengths)[len(lengths) // 2]
+
+    # --- Separator lines (----, ====, ****, ~~~~) ---
+    _SEP_RE = re.compile(r"^[\s]*[-=*~_]{4,}[\s]*$")
+    separator_count = sum(1 for l in non_empty if _SEP_RE.match(l))
+
+    # --- Centered text detection (first 10 lines) ---
+    centered_count = 0
+    if max_len > 20:
+        for l in non_empty[:10]:
+            stripped = l.rstrip()
+            if not stripped:
+                continue
+            left_spaces = len(l) - len(l.lstrip())
+            content_len = len(stripped.strip())
+            # Line is centered if padding on left is roughly (max_len - content_len) / 2
+            if content_len < max_len * 0.7 and left_spaces > 2:
+                expected_pad = (max_len - content_len) / 2
+                if abs(left_spaces - expected_pad) < max(3, max_len * 0.15):
+                    centered_count += 1
+
+    # --- Numeric density (lines with amounts) ---
+    _AMT_RE = re.compile(r"[\d,]+\.\d{2}")
+    numeric_lines = sum(1 for l in non_empty if _AMT_RE.search(l))
+    numeric_ratio = numeric_lines / len(non_empty)
+
+    # --- Table structure detection ---
+    # Look for aligned columns: multiple lines where numbers appear at similar x-positions
+    _NUM_POS_RE = re.compile(r"\d+\.\d{2}")
+    num_positions = []
+    for l in non_empty:
+        m = _NUM_POS_RE.search(l)
+        if m:
+            num_positions.append(m.start())
+    # If many numbers appear at similar column positions → table structure
+    has_table = False
+    col_alignment_score = 0.0
+    if len(num_positions) >= 4:
+        from collections import Counter
+        # Bucket positions into 5-char bins
+        buckets = Counter(p // 5 for p in num_positions)
+        dominant_count = buckets.most_common(1)[0][1] if buckets else 0
+        col_alignment_score = dominant_count / len(num_positions)
+        has_table = col_alignment_score >= 0.4
+
+    # --- Label:Value pair density ---
+    _LABEL_VAL_RE = re.compile(r"^[A-Za-z\s]{2,30}:\s*.+")
+    label_value_count = sum(1 for l in non_empty if _LABEL_VAL_RE.match(l.strip()))
+    label_value_ratio = label_value_count / len(non_empty)
+
+    # --- Repeating row pattern (statements) ---
+    # Look for lines that match date+description+amount pattern
+    _ROW_RE = re.compile(r"\d{1,2}[-/]\d{1,2}.*\d+\.\d{2}")
+    row_pattern_count = sum(1 for l in non_empty if _ROW_RE.search(l))
+    row_pattern_ratio = row_pattern_count / len(non_empty)
+
+    # --- Derive layout classification ---
+    layout_type = "unknown"
+    layout_evidence = []
+
+    # POS receipt: narrow lines, centered headers, separator dashes
+    if median_len <= 42 and (separator_count >= 2 or centered_count >= 2):
+        layout_type = "pos_receipt"
+        layout_evidence.append("narrow_lines")
+        if separator_count >= 2:
+            layout_evidence.append(f"separators:{separator_count}")
+        if centered_count >= 2:
+            layout_evidence.append(f"centered_headers:{centered_count}")
+
+    # Invoice: wide lines, table structure, label:value pairs
+    elif has_table and label_value_ratio >= 0.1 and median_len > 40:
+        layout_type = "invoice"
+        layout_evidence.append("table_structure")
+        layout_evidence.append(f"label_value_pairs:{label_value_count}")
+
+    # Statement: repeating date+amount rows
+    elif row_pattern_ratio >= 0.3 and row_pattern_count >= 5:
+        layout_type = "statement"
+        layout_evidence.append(f"row_patterns:{row_pattern_count}")
+
+    # Wide format (logistics, commercial docs)
+    elif median_len > 60 and len(non_empty) > 30:
+        layout_type = "wide_document"
+        layout_evidence.append("wide_format")
+
+    return {
+        "layout_available": True,
+        "layout_type": layout_type,
+        "layout_evidence": layout_evidence,
+        "avg_line_length": round(avg_len, 1),
+        "median_line_length": median_len,
+        "max_line_length": max_len,
+        "separator_count": separator_count,
+        "centered_header_count": centered_count,
+        "numeric_line_ratio": round(numeric_ratio, 3),
+        "has_table_structure": has_table,
+        "col_alignment_score": round(col_alignment_score, 3),
+        "label_value_ratio": round(label_value_ratio, 3),
+        "row_pattern_ratio": round(row_pattern_ratio, 3),
+        "line_count": len(non_empty),
+    }
+
+
 # --- Helper: Document profile / type inference -----------------------------
 
 def _detect_document_profile(full_text: str, lines: List[str]) -> Dict[str, Any]:
@@ -1312,6 +1440,55 @@ def _detect_document_profile(full_text: str, lines: List[str]) -> Dict[str, Any]
                 if kw not in subtype_evidence[subtype]:
                     subtype_evidence[subtype].append(kw)
 
+    # =========================================================================
+    # STRUCTURAL LAYOUT BOOST: Use spatial layout signals to boost/penalize
+    # subtypes beyond keyword matching. This is the key gap we're filling.
+    # =========================================================================
+    layout = _analyze_layout_structure(lines or [])
+    if layout.get("layout_available"):
+        _lt = layout.get("layout_type", "unknown")
+
+        if _lt == "pos_receipt":
+            # Narrow layout with centered headers → POS receipts
+            for st in ("POS_RESTAURANT", "POS_RETAIL", "FUEL", "PARKING", "TRANSPORT"):
+                if subtype_scores.get(st, 0) > 0:
+                    subtype_scores[st] += 1.2
+                    if "layout:pos_receipt" not in subtype_evidence[st]:
+                        subtype_evidence[st].append("layout:pos_receipt")
+            # Penalize invoice/logistics subtypes that don't match narrow layout
+            for st in ("TAX_INVOICE", "VAT_INVOICE", "COMMERCIAL_INVOICE",
+                        "SHIPPING_BILL", "BILL_OF_LADING"):
+                subtype_scores[st] = max(0, subtype_scores.get(st, 0) - 0.5)
+
+        elif _lt == "invoice":
+            # Table structure + label:value pairs → invoices
+            for st in ("TAX_INVOICE", "VAT_INVOICE", "COMMERCIAL_INVOICE",
+                        "SERVICE_INVOICE", "SHIPPING_INVOICE"):
+                if subtype_scores.get(st, 0) > 0:
+                    subtype_scores[st] += 1.0
+                    if "layout:invoice" not in subtype_evidence[st]:
+                        subtype_evidence[st].append("layout:invoice")
+            # Penalize POS receipts that don't match wide/table layout
+            for st in ("POS_RESTAURANT", "POS_RETAIL"):
+                subtype_scores[st] = max(0, subtype_scores.get(st, 0) - 0.5)
+
+        elif _lt == "statement":
+            # Repeating date+amount rows → statements/bills
+            for st in ("UTILITY", "TELECOM", "SUBSCRIPTION", "INSURANCE"):
+                if subtype_scores.get(st, 0) > 0:
+                    subtype_scores[st] += 1.0
+                    if "layout:statement" not in subtype_evidence[st]:
+                        subtype_evidence[st].append("layout:statement")
+
+        elif _lt == "wide_document":
+            # Dense wide text → logistics/commercial
+            for st in ("COMMERCIAL_INVOICE", "SHIPPING_INVOICE", "SHIPPING_BILL",
+                        "BILL_OF_LADING", "AIR_WAYBILL"):
+                if subtype_scores.get(st, 0) > 0:
+                    subtype_scores[st] += 0.8
+                    if "layout:wide_document" not in subtype_evidence[st]:
+                        subtype_evidence[st].append("layout:wide_document")
+
     # If we see strong logistics/customs headers, boost logistics/international invoice subtypes.
     logistics_markers = [
         "exporter", "shipper", "consignee",
@@ -1409,6 +1586,7 @@ def _detect_document_profile(full_text: str, lines: List[str]) -> Dict[str, Any]
             "best_score": round(best_score, 2),
             "logistics_hits": logistics_hits,
             "logistics_markers_found": logistics_markers_found,
+            "layout": layout if layout.get("layout_available") else None,
         }
     }
     
