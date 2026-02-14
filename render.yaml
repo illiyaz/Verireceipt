@@ -5,6 +5,7 @@ services:
     dockerfilePath: ./Dockerfile
     plan: pro
     region: oregon
+    autoDeploy: false
     envVars:
       # Set DATABASE_URL in Render dashboard (not in git for security)
       - key: DATABASE_URL

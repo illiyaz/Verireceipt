@@ -654,38 +654,49 @@ def _detect_india_hint(text: str) -> bool:
 
 def _detect_canada_hint(text: str) -> bool:
     """
-    Lightweight Canada signal: looks for province names, cities, tax terms, +1 with Canadian context,
-    or Canadian postal codes (e.g., M5V 2T6).
+    Lightweight Canada signal: looks for province names, cities, Canadian postal codes.
+
+    IMPORTANT: Short abbreviations (ON, BC, QC) use word-boundary matching to avoid
+    false positives inside words like 'london', 'hilton'. Tax terms (GST, HST, PST)
+    require Canada context since they're used in India, Australia, Singapore, etc.
     """
     t = (text or "").lower()
-    # Province/city/region hints
-    canada_hints = [
-        "canada",
-        "ontario",
-        "toronto",
-        "vancouver",
-        "british columbia",
-        "bc",
-        "on",
-        "qc",
-        "gst",
-        "hst",
-        "pst",
-        "cra",
-        # "+1" (Canadian context only - require another Canada hint to be present)
+    nt = _normalize_text_for_geo(t)  # " text "
+
+    # Strong signals (unambiguous)
+    strong_hints = [
+        "canada", "ontario", "toronto", "vancouver", "montreal", "ottawa",
+        "calgary", "edmonton", "winnipeg", "british columbia", "alberta",
+        "quebec", "nova scotia", "new brunswick", "manitoba", "saskatchewan",
     ]
-    if any(h in t for h in canada_hints):
+    if any(h in t for h in strong_hints):
         return True
+
+    # Province abbreviations with word boundaries (avoid matching inside words)
+    province_abbrs = [" on ", " bc ", " ab ", " sk ", " mb ", " nb ", " ns ", " pe ", " nl ", " qc "]
+    if any(a in nt for a in province_abbrs):
+        return True
+
+    # Tax terms only with Canada context (GST/HST/PST are used globally)
+    canada_context = any(h in t for h in ["canada", "ontario", "toronto", "vancouver", "calgary", "ottawa"])
+    if canada_context and any(tax in t for tax in ["gst", "hst", "pst", "cra"]):
+        return True
+
+    # HST is more Canada-specific than GST (only used in Canada)
+    if "hst" in t:
+        return True
+
     # "+1" as phone code, but only if another Canada hint is present
     if "+1" in t:
-        # Look for Canada context in a window of 50 chars around "+1"
         idx = t.find("+1")
         window = t[max(0, idx - 50): idx + 50]
-        if any(h in window for h in ["canada", "ontario", "toronto", "vancouver", "bc", "qc"]):
+        if any(h in window for h in ["canada", "ontario", "toronto", "vancouver"]):
             return True
+
     # Canadian postal code: [A-Z][0-9][A-Z] ?[0-9][A-Z][0-9]
     if re.search(r"\b[abceghjklmnprstvwxyz][0-9][abceghjklmnprstvwxyz][ -]?[0-9][abceghjklmnprstvwxyz][0-9]\b", t, re.I):
         return True
+
     return False
 
 # -----------------------------------------------------------------------------
@@ -697,34 +708,48 @@ def _normalize_text_for_geo(text: str) -> str:
 
 
 def _detect_uk_hint(text: str) -> bool:
-    """Lightweight UK signal: UK country/city terms, VAT, UK postcodes, +44."""
+    """Lightweight UK signal: UK country/city terms, UK postcodes, +44, £/GBP.
+
+    IMPORTANT: Does NOT match on generic "VAT" keyword because VAT is global
+    (EU, India, UAE, etc.) — not UK-specific.
+    """
     t = (text or "").lower()
-    if "+44" in t or "united kingdom" in t or "uk" in t or "london" in t or "england" in t or "scotland" in t:
+    if "+44" in t or "united kingdom" in t or "london" in t or "england" in t or "scotland" in t or "wales" in t:
+        return True
+    # " uk " with word boundaries to avoid matching "uk" inside words
+    if " uk " in _normalize_text_for_geo(t):
+        return True
+    # UK cities
+    if any(city in t for city in ["manchester", "birmingham", "edinburgh", "glasgow", "liverpool", "bristol", "leeds", "sheffield"]):
         return True
     # UK postcode (very loose) e.g., SW1A 1AA, EC1A 1BB
     if re.search(r"\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b", t, re.I):
-        return True
-    if "vat" in t:
         return True
     return False
 
 
 def _detect_eu_hint(text: str) -> bool:
-    """Lightweight EU signal: EUR, VAT, common EU country/city names, EU VAT ID-like patterns."""
+    """Lightweight EU signal: common EU country/city names, EU phone codes, EU VAT IDs.
+
+    IMPORTANT: Does NOT match on currency (€/EUR) or generic "VAT" keyword because:
+    - Currency is what we're testing for mismatch — using it as geo creates circular logic
+    - "VAT" is global (UK, India, UAE, etc.) — not EU-specific
+    """
     t = (text or "").lower()
     eu_hints = [
         "europe", "eu ", "germany", "berlin", "france", "paris", "spain", "madrid", "italy", "rome",
         "netherlands", "amsterdam", "ireland", "dublin", "belgium", "brussels", "austria", "vienna",
         "sweden", "stockholm", "denmark", "copenhagen", "finland", "helsinki", "poland", "warsaw",
+        "portugal", "lisbon", "greece", "athens", "czech", "prague", "romania", "bucharest",
     ]
     if any(h in t for h in eu_hints):
         return True
-    if "eur" in t or "€" in t:
+    # EU phone codes
+    if any(code in t for code in ["+49", "+33", "+34", "+39", "+31", "+353", "+32", "+43", "+46", "+45", "+358", "+48"]):
         return True
-    if "vat" in t:
-        return True
-    # EU VAT ID-ish (very rough): country code + 8-12 alnum
-    if re.search(r"\b[A-Z]{2}[A-Z0-9]{8,12}\b", (text or "").upper()):
+    # EU VAT ID: require known EU country prefix (DE, FR, ES, IT, NL, etc.)
+    eu_prefixes = "(?:DE|FR|ES|IT|NL|BE|AT|SE|DK|FI|PL|PT|GR|CZ|RO|HU|BG|HR|SK|SI|LT|LV|EE|CY|MT|LU|IE)"
+    if re.search(rf"\b{eu_prefixes}[A-Z0-9]{{8,12}}\b", (text or "").upper()):
         return True
     return False
 
@@ -768,7 +793,6 @@ def _detect_uae_hint(text: str) -> bool:
         "ras al khaimah", "rak", "umm al quwain", "uaq", "fujairah", "al ain",
         "+971",
         "aed", "dirham", "د.إ",
-        "vat",
     ]):
         return True
     return False
@@ -778,7 +802,7 @@ def _detect_saudi_hint(text: str) -> bool:
     return any(k in t for k in [
         "saudi", "saudi arabia", "kingdom of saudi arabia", "ksa",
         "riyadh", "jeddah", "dammam",
-        "+966", "sar", "riyal", "vat",
+        "+966", "sar", "riyal",
         "السعودية",
     ])
 
@@ -786,7 +810,7 @@ def _detect_oman_hint(text: str) -> bool:
     t = (text or "").lower()
     return any(k in t for k in [
         "oman", "sultanate of oman", "muscat",
-        "+968", "omr", "rial", "vat",
+        "+968", "omr", "rial",
         "عمان",
     ])
 
@@ -800,7 +824,7 @@ def _detect_kuwait_hint(text: str) -> bool:
 
 def _detect_bahrain_hint(text: str) -> bool:
     t = (text or "").lower()
-    return any(k in t for k in ["bahrain", "manama", "+973", "bhd", "dinar", "vat"])
+    return any(k in t for k in ["bahrain", "manama", "+973", "bhd", "dinar"])
 
 def _detect_jordan_hint(text: str) -> bool:
     t = (text or "").lower()
@@ -1696,30 +1720,50 @@ def _detect_document_type(text: str) -> str:
 # -----------------------------------------------------------------------------
 
 def _tax_regime_hint(text: str) -> Optional[str]:
-    """Best-effort tax regime hint: GST/HST/PST/VAT/SALES_TAX/None based on keywords."""
+    """Best-effort tax regime hint: GST/HST/PST/VAT/SALES_TAX/None based on keywords.
+
+    Priority: Explicit tax labels with amounts (e.g., 'VAT 5%', 'GST 18%')
+    take precedence over registration numbers (e.g., 'GSTIN').
+    """
     t = (text or "").lower()
 
-    # GST family (India/SG/AU + sometimes CA)
+    # 1. Check for explicit tax-with-percentage patterns first (highest confidence)
+    #    These are the actual tax labels on the receipt, not registration numbers
+    if re.search(r"\bvat\s*[\d.]+%", t) or re.search(r"\bvalue\s+added\s+tax\b", t):
+        return "VAT"
+    if re.search(r"\bsales\s+tax\b", t) or re.search(r"\bstate\s+tax\b", t):
+        return "SALES_TAX"
+
+    # 2. GST sub-types (always GST — CGST/SGST/IGST are India-specific)
     if "cgst" in t or "sgst" in t or "igst" in t:
         return "GST"
-    if "gst" in t or "goods and services tax" in t:
+
+    # 3. GST with word boundary (avoid matching inside 'GSTIN' registration number)
+    if re.search(r"\bgst\b", t) and not re.search(r"\bgstin\b", t):
+        return "GST"
+    # If both 'gst' and 'gstin' are present, check for standalone "GST X%" pattern
+    if re.search(r"\bgst\s*[\d.]+%", t) or "goods and services tax" in t:
         return "GST"
 
-    # Canada-specific
+    # 4. Canada-specific
     if "qst" in t or "quebec sales tax" in t:
         return "PST"
-    if "pst" in t or "provincial sales tax" in t:
+    if re.search(r"\bpst\b", t) or "provincial sales tax" in t:
         return "PST"
-    if "hst" in t or "harmonized sales tax" in t:
+    if re.search(r"\bhst\b", t) or "harmonized sales tax" in t:
         return "HST"
 
-    # VAT regions (UK/EU/Middle East etc.)
-    if "vat" in t or "value added tax" in t:
+    # 5. VAT without percentage (weaker signal)
+    if re.search(r"\bvat\b", t):
         return "VAT"
 
-    # US-style
-    if any(k in t for k in ["sales tax", "state tax", "county tax", "city tax", "local tax"]):
+    # 6. US-style (catch remaining)
+    if any(k in t for k in ["county tax", "city tax", "local tax"]):
         return "SALES_TAX"
+
+    # 7. Fallback: if GSTIN is present, the tax regime is GST (registration implies GST country)
+    if "gstin" in t:
+        return "GST"
 
     return None
 
@@ -2768,8 +2812,17 @@ def _score_and_explain(
     elif should_apply_rule(doc_profile_obj, "R7_TOTAL_MISMATCH"):
         total_mismatch = bool(tf.get("total_mismatch", False))
     else:
+        # RELAXATION: Even when profile gates it off, check for OBVIOUS mismatches
+        # (>20% discrepancy is too large to ignore regardless of doc type)
         total_mismatch = False
-        logger.info(f"R7_TOTAL_MISMATCH skipped for {doc_class} (profile: apply_total_reconciliation=False)")
+        _fallback_total = _normalize_amount_str(tf.get("total_amount"))
+        _fallback_sum = _normalize_amount_str(tf.get("line_items_sum"))
+        if (_fallback_total and _fallback_total > 0 and _fallback_sum is not None
+                and abs(_fallback_total - _fallback_sum) / _fallback_total > 0.20):
+            total_mismatch = True
+            logger.info(f"R7_TOTAL_MISMATCH: profile gated OFF for {doc_class} but >20% mismatch detected — applying as WARNING")
+        else:
+            logger.info(f"R7_TOTAL_MISMATCH skipped for {doc_class} (profile: apply_total_reconciliation=False)")
     
     if total_mismatch:
         # POS-SPECIFIC TOLERANCE: Allow small mismatch due to OCR errors on thermal prints
@@ -3352,7 +3405,6 @@ def _score_and_explain(
             )
 
     if not merchant_candidate:
-        # Only penalize if missing-field gate is enabled
         if missing_fields_enabled:
             score += emit_event(
                 events=events,
@@ -3367,6 +3419,24 @@ def _score_and_explain(
                     "missing_field_gate": _missing_field_gate_evidence(tf, legacy_doc_profile),
                 },
                 reason_text="🏪 No Merchant: Could not identify a merchant/vendor name.",
+            )
+        else:
+            # ENHANCEMENT: Still flag missing merchant as WARNING even when gate is off
+            # Missing merchant is always suspicious — just reduce severity when uncertain
+            score += emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="R9_NO_MERCHANT",
+                severity="WARNING",
+                weight=0.08,
+                message="No merchant name could be identified (reduced penalty — doc type uncertain)",
+                evidence={
+                    "merchant_candidate": None,
+                    "missing_fields_enabled": missing_fields_enabled,
+                    "gated_reduction": True,
+                    "missing_field_gate": _missing_field_gate_evidence(tf, legacy_doc_profile),
+                },
+                reason_text="🏪 No Merchant: Could not identify a merchant/vendor name (doc type uncertain — reduced penalty).",
             )
 
     # R8B: Date conflict - multiple distant dates in same receipt (HIGH VALUE FRAUD SIGNAL)
@@ -3751,6 +3821,102 @@ def _score_and_explain(
             evidence={"receipt_date_str": receipt_date_str},
             reason_text=f"📅❓ Unparsable Date: '{receipt_date_str}' cannot be parsed into known format.",
         )
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 5B: Address Validation (consumes features.py address signals)
+    # ---------------------------------------------------------------------------
+    # address_profile and merchant_address_consistency are extracted in features.py
+    # but were never consumed by the scoring engine — this is the bridge.
+    try:
+        address_profile = tf.get("address_profile") or {}
+        addr_classification = address_profile.get("address_classification", "")
+        merchant_addr_consistency = tf.get("merchant_address_consistency") or {}
+
+        # R_ADDRESS_FAKE: Detect known fake/placeholder address patterns
+        addr_evidence_list = address_profile.get("address_evidence", [])
+        if any("fake" in str(e).lower() or "placeholder" in str(e).lower() for e in addr_evidence_list):
+            score += emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="R_ADDRESS_FAKE",
+                severity="CRITICAL",
+                weight=0.30,
+                message="Address appears to be a fake/placeholder",
+                evidence={
+                    "address_classification": addr_classification,
+                    "address_evidence": addr_evidence_list,
+                },
+                reason_text="📍 Fake Address: Document contains a known fake/placeholder address pattern.",
+            )
+
+        # R_ADDRESS_MISSING: No address on document types that require one
+        # (invoices, commercial docs — but NOT POS receipts which often lack addresses)
+        doc_family_addr = legacy_doc_profile.get("family", "").upper()
+        doc_subtype_addr = legacy_doc_profile.get("subtype", "").upper()
+        expects_address = doc_family_addr in ("INVOICE", "COMMERCIAL") or "INVOICE" in doc_subtype_addr
+        is_pos_receipt = doc_subtype_addr.startswith("POS_")
+
+        if expects_address and addr_classification in ("NOT_AN_ADDRESS", ""):
+            dp_conf_addr = float(legacy_doc_profile.get("confidence", 0) or 0)
+            if dp_conf_addr >= 0.6:
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_ADDRESS_MISSING",
+                    severity="WARNING",
+                    weight=0.10,
+                    message="Invoice/commercial document has no detectable address",
+                    evidence={
+                        "address_classification": addr_classification,
+                        "doc_family": doc_family_addr,
+                        "doc_subtype": doc_subtype_addr,
+                        "doc_profile_confidence": dp_conf_addr,
+                    },
+                    reason_text="📍 No Address: Invoice/commercial document is missing an address — unusual for legitimate business documents.",
+                )
+
+        # R_ADDRESS_IMPLAUSIBLE: Weak address structure (not fake, but not convincing)
+        if addr_classification == "WEAK_ADDRESS" and not is_pos_receipt:
+            addr_score = address_profile.get("address_score", 0)
+            if addr_score <= 2:
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_ADDRESS_IMPLAUSIBLE",
+                    severity="WARNING",
+                    weight=0.08,
+                    message="Address structure is implausible (very weak evidence)",
+                    evidence={
+                        "address_classification": addr_classification,
+                        "address_score": addr_score,
+                        "address_evidence": addr_evidence_list,
+                    },
+                    reason_text="📍 Weak Address: Document address has very weak structural evidence — may be fabricated.",
+                )
+
+        # R_ADDRESS_MERCHANT_MISMATCH: Merchant name inconsistent with address
+        mac_verdict = merchant_addr_consistency.get("verdict", "")
+        if mac_verdict in ("INCONSISTENT", "SUSPICIOUS"):
+            mac_confidence = float(merchant_addr_consistency.get("confidence", 0) or 0)
+            if mac_confidence >= 0.6:
+                severity = "CRITICAL" if mac_verdict == "INCONSISTENT" else "WARNING"
+                weight = 0.15 if mac_verdict == "INCONSISTENT" else 0.08
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_ADDRESS_MERCHANT_MISMATCH",
+                    severity=severity,
+                    weight=weight,
+                    message=f"Merchant name inconsistent with address ({mac_verdict})",
+                    evidence={
+                        "verdict": mac_verdict,
+                        "confidence": mac_confidence,
+                        "merchant_address_consistency": merchant_addr_consistency,
+                    },
+                    reason_text=f"📍🏪 Merchant-Address Mismatch: The merchant name doesn't match the address on the document ({mac_verdict}).",
+                )
+    except Exception as e:
+        logger.warning(f"Address validation rules failed: {e}")
 
     # ---------------------------------------------------------------------------
     # RULE GROUP 6: Apply learned rules from feedback
