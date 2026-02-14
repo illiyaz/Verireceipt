@@ -3759,6 +3759,114 @@ def _score_and_explain(
         )
 
     # ---------------------------------------------------------------------------
+    # RULE GROUP 4B: Pixel-level image forensics
+    # ---------------------------------------------------------------------------
+    # Consumes forensic_features["image_forensics"] produced by image_forensics.py
+    img_forensics = fr.get("image_forensics") or {}
+    if img_forensics.get("forensics_available"):
+        _if_suspicious = img_forensics.get("overall_suspicious", False)
+        _if_signal_count = img_forensics.get("signal_count", 0)
+        _if_confidence = float(img_forensics.get("overall_confidence", 0) or 0)
+        _if_evidence_list = img_forensics.get("overall_evidence", [])
+
+        # Only emit if 2+ independent forensic signals are suspicious
+        # (single signal is too noisy — ELA alone fires on low-quality JPEGs)
+        if _if_suspicious and _if_signal_count >= 2 and _if_confidence >= 0.3:
+            severity = "CRITICAL" if _if_signal_count >= 3 else "WARNING"
+            weight = 0.25 if severity == "CRITICAL" else 0.12
+            score += emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="R_IMAGE_FORENSICS_TAMPERING",
+                severity=severity,
+                weight=weight,
+                message=f"Image forensics: {_if_signal_count} suspicious signals detected",
+                evidence={
+                    "signal_count": _if_signal_count,
+                    "confidence": _if_confidence,
+                    "evidence": _if_evidence_list[:5],
+                    "ela_suspicious": img_forensics.get("ela", {}).get("ela_suspicious"),
+                    "noise_suspicious": img_forensics.get("noise", {}).get("noise_suspicious"),
+                    "dpi_suspicious": img_forensics.get("dpi", {}).get("dpi_suspicious"),
+                    "histogram_suspicious": img_forensics.get("histogram", {}).get("histogram_suspicious"),
+                },
+                reason_text=(
+                    f"🔬 Image Forensics: {_if_signal_count} independent pixel-level "
+                    f"signals suggest possible image manipulation. "
+                    + "; ".join(_if_evidence_list[:3])
+                ),
+            )
+
+        # Individual high-confidence signals that are worth emitting on their own
+
+        # ELA with very high zone variance = strong splicing indicator
+        _ela = img_forensics.get("ela", {})
+        if _ela.get("ela_zone_variance", 0) > 25.0:
+            score += emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="R_IMAGE_ELA_SPLICE",
+                severity="CRITICAL",
+                weight=0.20,
+                message="ELA detects likely image splicing",
+                evidence={
+                    "ela_zone_variance": _ela.get("ela_zone_variance"),
+                    "ela_hotspot_ratio": _ela.get("ela_hotspot_ratio"),
+                    "ela_mean": _ela.get("ela_mean"),
+                    "ela_max": _ela.get("ela_max"),
+                },
+                reason_text=(
+                    f"🔬 ELA Splice Detection: Zone variance "
+                    f"{_ela.get('ela_zone_variance', 0):.1f} indicates different "
+                    f"parts of the image were saved at different JPEG quality levels. "
+                    f"This is a strong indicator of copy-paste editing."
+                ),
+            )
+
+        # Very low noise = digitally generated (not a photograph/scan)
+        _noise = img_forensics.get("noise", {})
+        if _noise.get("noise_mean", 99) < 1.0:
+            score += emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="R_IMAGE_DIGITAL_ORIGIN",
+                severity="WARNING",
+                weight=0.08,
+                message="Image appears digitally generated (no sensor noise)",
+                evidence={
+                    "noise_mean": _noise.get("noise_mean"),
+                    "noise_std": _noise.get("noise_std"),
+                },
+                reason_text=(
+                    f"🔬 Digital Origin: Image noise level "
+                    f"({_noise.get('noise_mean', 0):.2f}) is near zero, suggesting "
+                    f"the image was digitally created rather than photographed/scanned."
+                ),
+            )
+
+        # Very low resolution = suspicious
+        _dpi = img_forensics.get("dpi", {})
+        if _dpi.get("is_very_low_res"):
+            score += emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="R_IMAGE_LOW_RES",
+                severity="WARNING",
+                weight=0.08,
+                message=f"Very low resolution image ({_dpi.get('width')}×{_dpi.get('height')})",
+                evidence={
+                    "width": _dpi.get("width"),
+                    "height": _dpi.get("height"),
+                    "is_screenshot_size": _dpi.get("is_screenshot_size"),
+                },
+                reason_text=(
+                    f"🔬 Low Resolution: Image is only "
+                    f"{_dpi.get('width')}×{_dpi.get('height')} pixels — "
+                    f"too small for a legitimate receipt scan or photo."
+                ),
+            )
+
+    # ---------------------------------------------------------------------------
     # RULE GROUP 5: Date validation (impossible dates, suspicious gaps)
     # ---------------------------------------------------------------------------
     receipt_date_str = tf.get("date_extracted") or tf.get("receipt_date")

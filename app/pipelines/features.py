@@ -1930,12 +1930,24 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     }
 
     # --- Forensic-ish features ----------------------------------------------
-    # Simple heuristics - more advanced stuff can be added later
+    # Pixel-level image forensics + text-based heuristics
     forensic_features: Dict[str, Any] = {
         "uppercase_ratio": text_stats["uppercase_ratio"],
         "unique_char_count": text_stats["unique_char_count"],
-        # Room for future: compression artifacts, noise levels, etc.
     }
+
+    # Run pixel-level image forensics on the first page image
+    try:
+        from app.pipelines.image_forensics import run_image_forensics
+        image_path = raw.pdf_metadata.get("file_path") if raw.pdf_metadata else None
+        if image_path and os.path.exists(image_path):
+            img_forensics = run_image_forensics(image_path)
+            forensic_features["image_forensics"] = img_forensics
+        else:
+            forensic_features["image_forensics"] = {"forensics_available": False}
+    except Exception as e:
+        logger.warning(f"Image forensics skipped: {e}")
+        forensic_features["image_forensics"] = {"forensics_available": False}
 
     domain_hint = infer_domain_from_domainpacks(
         text_features=text_features,
