@@ -3345,46 +3345,6 @@ def _score_and_explain(
                     },
                     reason_text="📅 No Date Found: Receipt/invoice is missing a transaction date.",
                 )
-                
-                if has_alternative_identifier:
-                    # Downgrade to WARNING with reduced weight
-                    severity = "WARNING"
-                    weight = 0.10  # Half of original 0.20
-                    message = "No date found, but time or receipt number present"
-                elif low_ocr_quality:
-                    # Reduce penalty for poor OCR quality
-                    severity = "WARNING"
-                    weight = 0.12  # 60% of original 0.20
-                    message = "No date found (low OCR quality)"
-                else:
-                    # Full penalty
-                    severity = "CRITICAL"
-                    weight = 0.20
-                    message = "No date found in document"
-                
-                score += emit_event(
-                    events=events,
-                    reasons=reasons,
-                    rule_id="R8_NO_DATE",
-                    severity=severity,
-                    weight=weight,
-                    message=message,
-                    evidence={
-                        "has_date": False,
-                        "has_time": has_time,
-                        "has_receipt_number": has_receipt_num,
-                        "has_alternative_identifier": has_alternative_identifier,
-                        "ocr_confidence": ocr_confidence,
-                        "low_ocr_quality": low_ocr_quality,
-                        "doc_family": legacy_doc_profile.get("family"),
-                        "doc_subtype": legacy_doc_profile.get("subtype"),
-                        "doc_profile_confidence": legacy_doc_profile.get("confidence"),
-                        "missing_fields_enabled": missing_fields_enabled,
-                        "missing_field_gate": _missing_field_gate_evidence(tf, legacy_doc_profile),
-                        "severity_downgraded": has_alternative_identifier or low_ocr_quality,
-                    },
-                    reason_text="📅 No Date Found: Receipt/invoice is missing a transaction date.",
-                )
         else:
             minor_notes.append(
                 "Date was not detected, but this document subtype often omits dates (or date is not central)."
@@ -3823,7 +3783,98 @@ def _score_and_explain(
         )
 
     # ---------------------------------------------------------------------------
-    # RULE GROUP 5B: Address Validation (consumes features.py address signals)
+    # RULE GROUP 5B: Plausibility checks (expert-style analysis)
+    # ---------------------------------------------------------------------------
+
+    # R_ROUND_TOTAL: Suspiciously round total amounts
+    # Expert insight: Real receipts almost never have perfectly round totals
+    # (e.g., $500.00, $1000.00) because tax makes them uneven.
+    # Common in fabricated receipts where the fraudster picks a round number.
+    try:
+        _rt_val = _normalize_amount_str(tf.get("total_amount"))
+        if _rt_val is not None and _rt_val >= 50.0:
+            # Check if total is a "round" number (no cents, divisible by 50 or 100)
+            is_round = (_rt_val == int(_rt_val)) and (int(_rt_val) % 50 == 0)
+            # Don't flag small round amounts (coffee shops often have $5, $10 totals)
+            # Don't flag if tax was extracted (tax presence makes round totals less suspicious)
+            has_tax = bool(tf.get("tax_amount"))
+            if is_round and not has_tax and _rt_val >= 100.0:
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_ROUND_TOTAL",
+                    severity="WARNING",
+                    weight=0.08,
+                    message=f"Suspiciously round total amount (${_rt_val:.2f})",
+                    evidence={
+                        "total_amount": _rt_val,
+                        "is_round": True,
+                        "has_tax": has_tax,
+                    },
+                    reason_text=f"💰 Round Total: Total of ${_rt_val:.2f} is suspiciously round — real receipts rarely have perfectly round totals after tax.",
+                )
+    except Exception as e:
+        logger.warning(f"R_ROUND_TOTAL check failed: {e}")
+
+    # R_TAX_RATE_ANOMALY: Tax rate doesn't match country norms
+    # Expert insight: Each country has specific tax rates. A US receipt with 25% tax
+    # or an Indian receipt with 3% GST is suspicious.
+    try:
+        _tax_val = _normalize_amount_str(tf.get("tax_amount"))
+        _subtotal_val = _normalize_amount_str(tf.get("subtotal"))
+        _total_val = _normalize_amount_str(tf.get("total_amount"))
+        geo_country = tf.get("geo_country_guess", "").upper()
+        geo_conf = float(tf.get("geo_confidence", 0) or 0)
+
+        # Only check if we have tax, a base amount, and confident geo
+        if _tax_val is not None and _tax_val > 0 and geo_conf >= 0.6:
+            # Determine base amount (prefer subtotal, fall back to total - tax)
+            base = _subtotal_val
+            if base is None and _total_val is not None:
+                base = _total_val - _tax_val
+            if base is not None and base > 0:
+                tax_rate = (_tax_val / base) * 100  # as percentage
+
+                # Country-specific expected tax ranges
+                TAX_RANGES = {
+                    "US": (0.0, 12.0),   # US sales tax: 0-11.45%
+                    "IN": (4.5, 30.0),   # India GST: 5%, 12%, 18%, 28%
+                    "GB": (0.0, 22.0),   # UK VAT: 0%, 5%, 20%
+                    "CA": (4.5, 16.0),   # Canada GST+PST: 5-15%
+                    "AU": (9.0, 11.0),   # Australia GST: 10%
+                    "AE": (4.5, 6.0),    # UAE VAT: 5%
+                    "SA": (14.0, 16.0),  # Saudi VAT: 15%
+                    "DE": (0.0, 21.0),   # Germany VAT: 7%, 19%
+                    "FR": (0.0, 22.0),   # France VAT: 5.5%, 10%, 20%
+                }
+                expected_range = TAX_RANGES.get(geo_country)
+
+                if expected_range:
+                    low, high = expected_range
+                    if tax_rate < low - 1.0 or tax_rate > high + 2.0:
+                        # Tax rate is outside expected range (with tolerance)
+                        score += emit_event(
+                            events=events,
+                            reasons=reasons,
+                            rule_id="R_TAX_RATE_ANOMALY",
+                            severity="WARNING",
+                            weight=0.10,
+                            message=f"Tax rate {tax_rate:.1f}% unusual for {geo_country} (expected {low:.0f}-{high:.0f}%)",
+                            evidence={
+                                "tax_amount": _tax_val,
+                                "base_amount": base,
+                                "tax_rate_pct": round(tax_rate, 2),
+                                "geo_country": geo_country,
+                                "geo_confidence": geo_conf,
+                                "expected_range_pct": list(expected_range),
+                            },
+                            reason_text=f"💰 Tax Rate Anomaly: {tax_rate:.1f}% tax is unusual for {geo_country} (expected {low:.0f}-{high:.0f}%). May indicate amount manipulation.",
+                        )
+    except Exception as e:
+        logger.warning(f"R_TAX_RATE_ANOMALY check failed: {e}")
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 5C: Address Validation (consumes features.py address signals)
     # ---------------------------------------------------------------------------
     # address_profile and merchant_address_consistency are extracted in features.py
     # but were never consumed by the scoring engine — this is the bridge.

@@ -197,6 +197,40 @@ class TestAddressValidationRules:
         assert "R_ADDRESS_IMPLAUSIBLE" in source
         assert "R_ADDRESS_MERCHANT_MISMATCH" in source
 
+
+# =============================================================================
+# 5. Expert-Style Plausibility Rules
+# =============================================================================
+
+class TestPlausibilityRules:
+    """New expert-style plausibility checks."""
+
+    def test_round_total_rule_exists(self):
+        import app.pipelines.rules as rules_module
+        source = open(rules_module.__file__).read()
+        assert "R_ROUND_TOTAL" in source
+
+    def test_tax_rate_anomaly_rule_exists(self):
+        import app.pipelines.rules as rules_module
+        source = open(rules_module.__file__).read()
+        assert "R_TAX_RATE_ANOMALY" in source
+
+    def test_r8_no_date_not_duplicated(self):
+        """Verify R8_NO_DATE fires only once (regression test for double-emit bug)."""
+        import app.pipelines.rules as rules_module
+        source = open(rules_module.__file__).read()
+        # Count occurrences of the R8_NO_DATE emit block
+        # The rule_id string should appear exactly 3 times:
+        # 1. The emit_event call
+        # 2. The _OPTIONAL_FOR_DOC variant
+        # 3. Any comment references
+        r8_emit_count = source.count('rule_id="R8_NO_DATE"')
+        # Should be exactly 1 (the single emit), not 2 (the old double-emit)
+        assert r8_emit_count == 1, (
+            f"R8_NO_DATE should be emitted exactly once, found {r8_emit_count} emit calls. "
+            "Double-emit bug may have regressed."
+        )
+
     def test_address_profile_consumed_by_scoring(self):
         """Verify that address_profile from text_features is used in _score_and_explain."""
         from app.pipelines.rules import _score_and_explain
