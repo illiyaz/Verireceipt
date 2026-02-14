@@ -215,6 +215,15 @@ class TestPlausibilityRules:
         source = open(rules_module.__file__).read()
         assert "R_TAX_RATE_ANOMALY" in source
 
+    def test_amount_plausibility_rule_exists(self):
+        import app.pipelines.rules as rules_module
+        source = open(rules_module.__file__).read()
+        assert "R_AMOUNT_PLAUSIBILITY" in source
+        # Verify merchant range mapping exists
+        assert "_MERCHANT_RANGES" in source
+        assert "coffee" in source
+        assert "starbucks" in source
+
     def test_r8_no_date_not_duplicated(self):
         """Verify R8_NO_DATE fires only once (regression test for double-emit bug)."""
         import app.pipelines.rules as rules_module

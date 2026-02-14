@@ -3873,6 +3873,101 @@ def _score_and_explain(
     except Exception as e:
         logger.warning(f"R_TAX_RATE_ANOMALY check failed: {e}")
 
+    # R_AMOUNT_PLAUSIBILITY: Total amount implausible for merchant type
+    # Expert insight: A $5,000 coffee shop receipt or a $50,000 gas station receipt
+    # is highly suspicious. Real-world merchants have typical transaction ranges.
+    try:
+        _ap_total = _normalize_amount_str(tf.get("total_amount"))
+        _ap_merchant = (
+            tf.get("merchant_candidate") or tf.get("merchant") or ""
+        ).lower()
+        _ap_subtype = str(
+            legacy_doc_profile.get("subtype") or tf.get("doc_subtype_guess") or ""
+        ).upper()
+
+        if _ap_total is not None and _ap_total > 0 and (_ap_merchant or _ap_subtype):
+            # Merchant-type → (typical_max, label) mapping
+            # These are deliberately generous ceilings; only truly absurd values fire.
+            _MERCHANT_RANGES = {
+                "coffee":    (200,   "coffee shop"),
+                "cafe":      (200,   "cafe"),
+                "starbucks": (200,   "coffee shop"),
+                "dunkin":    (200,   "coffee shop"),
+                "bakery":    (300,   "bakery"),
+                "fast food": (300,   "fast food"),
+                "mcdonald":  (300,   "fast food"),
+                "burger":    (300,   "fast food"),
+                "kfc":       (300,   "fast food"),
+                "subway":    (200,   "fast food"),
+                "pizza":     (500,   "pizza"),
+                "restaurant":(2000,  "restaurant"),
+                "diner":     (500,   "diner"),
+                "bar":       (1000,  "bar"),
+                "pub":       (1000,  "pub"),
+                "gas station":(500,  "gas station"),
+                "fuel":      (500,   "fuel station"),
+                "petrol":    (500,   "fuel station"),
+                "parking":   (200,   "parking"),
+                "taxi":      (500,   "taxi/ride"),
+                "uber":      (500,   "taxi/ride"),
+                "lyft":      (500,   "taxi/ride"),
+                "ola":       (500,   "taxi/ride"),
+                "grocery":   (1000,  "grocery store"),
+                "supermarket":(2000, "supermarket"),
+                "pharmacy":  (1000,  "pharmacy"),
+                "convenience":(500,  "convenience store"),
+            }
+
+            # Also infer from doc_subtype
+            _SUBTYPE_RANGES = {
+                "POS_RESTAURANT": (3000,  "restaurant receipt"),
+                "FUEL":           (500,   "fuel receipt"),
+                "PARKING":        (200,   "parking receipt"),
+                "TRANSPORT":      (1000,  "transport receipt"),
+            }
+
+            matched_label = None
+            matched_max = None
+
+            # Check merchant name first (more specific)
+            for keyword, (max_amt, label) in _MERCHANT_RANGES.items():
+                if keyword in _ap_merchant:
+                    matched_label = label
+                    matched_max = max_amt
+                    break
+
+            # Fall back to subtype range
+            if matched_max is None and _ap_subtype in _SUBTYPE_RANGES:
+                matched_max, matched_label = _SUBTYPE_RANGES[_ap_subtype]
+
+            if matched_max is not None and _ap_total > matched_max * 2:
+                # Total is > 2× the generous ceiling — very suspicious
+                severity = "CRITICAL" if _ap_total > matched_max * 5 else "WARNING"
+                weight = 0.20 if severity == "CRITICAL" else 0.10
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_AMOUNT_PLAUSIBILITY",
+                    severity=severity,
+                    weight=weight,
+                    message=f"Total ${_ap_total:.2f} implausible for {matched_label} (typical max ~${matched_max})",
+                    evidence={
+                        "total_amount": _ap_total,
+                        "merchant_candidate": _ap_merchant,
+                        "doc_subtype": _ap_subtype,
+                        "matched_label": matched_label,
+                        "typical_max": matched_max,
+                        "ratio": round(_ap_total / matched_max, 1),
+                    },
+                    reason_text=(
+                        f"💰 Implausible Amount: ${_ap_total:.2f} at a {matched_label} "
+                        f"is unusually high (typical max ~${matched_max}). "
+                        f"May indicate amount inflation."
+                    ),
+                )
+    except Exception as e:
+        logger.warning(f"R_AMOUNT_PLAUSIBILITY check failed: {e}")
+
     # ---------------------------------------------------------------------------
     # RULE GROUP 5C: Address Validation (consumes features.py address signals)
     # ---------------------------------------------------------------------------
