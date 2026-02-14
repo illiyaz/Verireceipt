@@ -5433,6 +5433,10 @@ def _score_and_explain(
         "geo_evidence": tf.get("geo_evidence"),
     }
     
+    # Populate top-level tags for analytics/querying/audit
+    currency_symbols = tf.get("currency_symbols") or []
+    detected_currency = currency_symbols[0] if currency_symbols else None
+
     return ReceiptDecision(
         score=score,
         label=label,
@@ -5442,6 +5446,16 @@ def _score_and_explain(
         rule_version=RULE_VERSION,
         policy_version=POLICY_VERSION,
         engine_version=ENGINE_VERSION,
+        # Top-level doc/geo/lang tags (for analytics, audit report, and API)
+        doc_family=legacy_doc_profile.get("family"),
+        doc_subtype=legacy_doc_profile.get("subtype"),
+        doc_profile_confidence=legacy_doc_profile.get("confidence"),
+        lang_guess=tf.get("lang_guess"),
+        lang_confidence=tf.get("lang_confidence"),
+        geo_country_guess=tf.get("geo_country_guess"),
+        geo_confidence=tf.get("geo_confidence"),
+        currency=detected_currency,
+        missing_fields_enabled=missing_fields_enabled,
         debug={
             "doc_profile": geo_profile_debug,
             "vision_assessment": vision_assessment or {},

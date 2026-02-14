@@ -292,9 +292,9 @@ MISSING FIELD ANALYSIS
 Reason: {gate_event.get("message", "Unknown")}
 
 Gate Trigger Conditions:
-  • Geo Country: {evidence.get("geo_country_guess", "N/A")} (confidence: {evidence.get("geo_confidence", 0.0):.2f})
-  • Doc Subtype: {evidence.get("doc_subtype_guess", "N/A")} (confidence: {evidence.get("doc_profile_confidence", 0.0):.2f})
-  • Language: {evidence.get("lang_guess", "N/A")} (confidence: {evidence.get("lang_confidence", 0.0):.2f})
+  • Geo Country: {evidence.get("geo_country_guess") or "N/A"} (confidence: {evidence.get("geo_confidence") or 0.0:.2f})
+  • Doc Subtype: {evidence.get("doc_subtype_guess") or "N/A"} (confidence: {evidence.get("doc_profile_confidence") or 0.0:.2f})
+  • Language: {evidence.get("lang_guess") or "N/A"} (confidence: {evidence.get("lang_confidence") or 0.0:.2f})
 
 Auditor Guidance:
   ✓ Missing fields (merchant, date, phone, address, tax ID) were NOT penalized

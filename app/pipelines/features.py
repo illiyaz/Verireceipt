@@ -1792,6 +1792,18 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     # Merchant candidate (needed for bias calculation)
     merchant_candidate = _guess_merchant_line(lines)
     
+    # Post-process: Strip document-type keywords that OCR sometimes merges
+    # e.g. "Hunan Yusheng INVOICE" → "Hunan Yusheng"
+    if merchant_candidate:
+        _DOC_TYPE_SUFFIXES = re.compile(
+            r'\s+(?:INVOICE|RECEIPT|BILL|QUOTATION|ESTIMATE|STATEMENT|'
+            r'ORDER|VOUCHER|MEMO|CREDIT\s*NOTE|DEBIT\s*NOTE)\s*$',
+            re.IGNORECASE
+        )
+        cleaned = _DOC_TYPE_SUFFIXES.sub('', merchant_candidate).strip()
+        if cleaned and len(cleaned) >= 3:
+            merchant_candidate = cleaned
+    
     # Compute merchant confidence (heuristic scoring)
     merchant_confidence = _compute_merchant_confidence(merchant_candidate or "", lines, full_text)
     
@@ -1854,10 +1866,13 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         "doc_class": doc_class,
         "doc_subtype_guess": doc_subtype_guess,
         "doc_subtype_confidence": doc_subtype_confidence,
+        "doc_profile_confidence": doc_subtype_confidence,  # alias for backward compat
+        "doc_profile_evidence": doc_subtype_evidence,       # alias for backward compat
         "doc_subtype_source": doc_subtype_source,
         "doc_subtype_evidence": doc_subtype_evidence,
         "requires_corroboration": requires_corroboration,
         "family": doc_family_guess,
+        "doc_family_guess": doc_family_guess,
         "confidence": doc_subtype_confidence,
         "llm_classification_attempted": llm_classification_attempted,
         # Language fields will be populated after language ID runs

@@ -320,6 +320,80 @@ def _get_seed_cities() -> List[Tuple]:
         ("AU", "newcastle", "Newcastle", "New South Wales", "", 93),
         ("AU", "wollongong", "Wollongong", "New South Wales", "", 92),
         ("AU", "hobart", "Hobart", "Tasmania", "", 91),
+        
+        # Kenya (top cities)
+        ("KE", "nairobi", "Nairobi", "Nairobi County", "", 100),
+        ("KE", "mombasa", "Mombasa", "Mombasa County", "", 99),
+        ("KE", "kisumu", "Kisumu", "Kisumu County", "", 98),
+        ("KE", "nakuru", "Nakuru", "Nakuru County", "", 97),
+        ("KE", "eldoret", "Eldoret", "Uasin Gishu County", "", 96),
+        ("KE", "thika", "Thika", "Kiambu County", "", 95),
+        ("KE", "malindi", "Malindi", "Kilifi County", "", 94),
+        
+        # Nigeria (top cities)
+        ("NG", "lagos", "Lagos", "Lagos", "", 100),
+        ("NG", "abuja", "Abuja", "FCT", "", 99),
+        ("NG", "kano", "Kano", "Kano", "", 98),
+        ("NG", "ibadan", "Ibadan", "Oyo", "", 97),
+        ("NG", "port harcourt", "Port Harcourt", "Rivers", "", 96),
+        
+        # South Africa (top cities)
+        ("ZA", "johannesburg", "Johannesburg", "Gauteng", "joburg,jozi", 100),
+        ("ZA", "cape town", "Cape Town", "Western Cape", "kaapstad", 99),
+        ("ZA", "durban", "Durban", "KwaZulu-Natal", "ethekwini", 98),
+        ("ZA", "pretoria", "Pretoria", "Gauteng", "tshwane", 97),
+        ("ZA", "port elizabeth", "Port Elizabeth", "Eastern Cape", "gqeberha", 96),
+        
+        # Tanzania
+        ("TZ", "dar es salaam", "Dar es Salaam", "Dar es Salaam", "dar", 100),
+        ("TZ", "dodoma", "Dodoma", "Dodoma", "", 99),
+        ("TZ", "mwanza", "Mwanza", "Mwanza", "", 98),
+        
+        # Uganda
+        ("UG", "kampala", "Kampala", "Central", "", 100),
+        ("UG", "entebbe", "Entebbe", "Wakiso", "", 99),
+        
+        # Japan (top cities)
+        ("JP", "tokyo", "Tokyo", "Tokyo", "", 100),
+        ("JP", "osaka", "Osaka", "Osaka", "", 99),
+        ("JP", "yokohama", "Yokohama", "Kanagawa", "", 98),
+        ("JP", "nagoya", "Nagoya", "Aichi", "", 97),
+        ("JP", "sapporo", "Sapporo", "Hokkaido", "", 96),
+        ("JP", "fukuoka", "Fukuoka", "Fukuoka", "", 95),
+        ("JP", "kyoto", "Kyoto", "Kyoto", "", 94),
+        
+        # South Korea (top cities)
+        ("KR", "seoul", "Seoul", "Seoul", "", 100),
+        ("KR", "busan", "Busan", "Busan", "pusan", 99),
+        ("KR", "incheon", "Incheon", "Incheon", "", 98),
+        ("KR", "daegu", "Daegu", "Daegu", "taegu", 97),
+        
+        # Brazil (top cities)
+        ("BR", "sao paulo", "São Paulo", "São Paulo", "são paulo", 100),
+        ("BR", "rio de janeiro", "Rio de Janeiro", "Rio de Janeiro", "rio", 99),
+        ("BR", "brasilia", "Brasília", "Distrito Federal", "brasília", 98),
+        ("BR", "salvador", "Salvador", "Bahia", "", 97),
+        ("BR", "fortaleza", "Fortaleza", "Ceará", "", 96),
+        
+        # Mexico (top cities)
+        ("MX", "mexico city", "Mexico City", "CDMX", "ciudad de mexico,cdmx", 100),
+        ("MX", "guadalajara", "Guadalajara", "Jalisco", "", 99),
+        ("MX", "monterrey", "Monterrey", "Nuevo León", "", 98),
+        ("MX", "puebla", "Puebla", "Puebla", "", 97),
+        
+        # Saudi Arabia (top cities)
+        ("SA", "riyadh", "Riyadh", "Riyadh", "", 100),
+        ("SA", "jeddah", "Jeddah", "Makkah", "jidda", 99),
+        ("SA", "mecca", "Mecca", "Makkah", "makkah", 98),
+        ("SA", "medina", "Medina", "Madinah", "madinah", 97),
+        ("SA", "dammam", "Dammam", "Eastern Province", "", 96),
+        
+        # China (top cities)
+        ("CN", "shanghai", "Shanghai", "Shanghai", "", 100),
+        ("CN", "beijing", "Beijing", "Beijing", "peking", 99),
+        ("CN", "guangzhou", "Guangzhou", "Guangdong", "canton", 98),
+        ("CN", "shenzhen", "Shenzhen", "Guangdong", "", 97),
+        ("CN", "chengdu", "Chengdu", "Sichuan", "", 96),
     ]
 
 def _get_geo_profiles() -> List[Tuple]:
@@ -352,6 +426,25 @@ def _get_geo_profiles() -> List[Tuple]:
         ("AU", "Australia", "AUD", None, "RELAXED", "APAC", "2020-01-01", None),
         ("SG", "Singapore", "SGD", None, "RELAXED", "APAC", "2020-01-01", None),
         ("AE", "United Arab Emirates", "AED", None, "STRICT", "MENA", "2020-01-01", None),
+        
+        # Africa
+        ("KE", "Kenya", "KES", None, "RELAXED", "AFRICA", "2020-01-01", None),
+        ("NG", "Nigeria", "NGN", None, "RELAXED", "AFRICA", "2020-01-01", None),
+        ("ZA", "South Africa", "ZAR", None, "RELAXED", "AFRICA", "2020-01-01", None),
+        ("TZ", "Tanzania", "TZS", None, "RELAXED", "AFRICA", "2020-01-01", None),
+        ("UG", "Uganda", "UGX", None, "RELAXED", "AFRICA", "2020-01-01", None),
+        
+        # Asia (additional)
+        ("JP", "Japan", "JPY", None, "STRICT", "APAC", "2020-01-01", None),
+        ("KR", "South Korea", "KRW", None, "STRICT", "APAC", "2020-01-01", None),
+        ("CN", "China", "CNY", "RMB", "STRICT", "APAC", "2020-01-01", None),
+        
+        # Americas (additional)
+        ("BR", "Brazil", "BRL", None, "STRICT", "AMERICAS", "2020-01-01", None),
+        ("MX", "Mexico", "MXN", None, "STRICT", "AMERICAS", "2020-01-01", None),
+        
+        # Middle East (additional)
+        ("SA", "Saudi Arabia", "SAR", None, "STRICT", "MENA", "2020-01-01", None),
     ]
 
 def _get_vat_rules() -> List[Tuple]:
@@ -478,6 +571,25 @@ def _get_currency_country_map() -> List[Tuple]:
         
         # AED - UAE
         ("AED", "AE", True, 1.0, "2020-01-01", None),
+        
+        # Africa
+        ("KES", "KE", True, 1.0, "2020-01-01", None),
+        ("NGN", "NG", True, 1.0, "2020-01-01", None),
+        ("ZAR", "ZA", True, 1.0, "2020-01-01", None),
+        ("TZS", "TZ", True, 1.0, "2020-01-01", None),
+        ("UGX", "UG", True, 1.0, "2020-01-01", None),
+        
+        # Asia (additional)
+        ("JPY", "JP", True, 1.0, "2020-01-01", None),
+        ("KRW", "KR", True, 1.0, "2020-01-01", None),
+        ("CNY", "CN", True, 1.0, "2020-01-01", None),
+        
+        # Americas (additional)
+        ("BRL", "BR", True, 1.0, "2020-01-01", None),
+        ("MXN", "MX", True, 1.0, "2020-01-01", None),
+        
+        # Middle East (additional)
+        ("SAR", "SA", True, 1.0, "2020-01-01", None),
     ]
 
 def _get_seed_terms() -> List[Tuple]:
@@ -554,6 +666,81 @@ def _get_seed_terms() -> List[Tuple]:
         ("AU", "currency", "aud", 0.10, "AUD, A$"),
         ("AU", "phone", "+61", 0.20, "+61"),
         ("AU", "address", "postcode", 0.15, "Postcode"),
+        
+        # Kenya terms
+        ("KE", "address", "kenya", 0.25, "Kenya"),
+        ("KE", "address", "nairobi", 0.20, "Nairobi"),
+        ("KE", "address", "mombasa", 0.15, "Mombasa"),
+        ("KE", "currency", "kes", 0.20, "KES, Kenyan Shilling"),
+        ("KE", "currency", "ksh", 0.15, "KSh"),
+        ("KE", "phone", "+254", 0.20, "+254"),
+        ("KE", "business", "ltd", 0.05, "Ltd, Limited"),
+        ("KE", "tax", "kra", 0.20, "KRA (Kenya Revenue Authority)"),
+        ("KE", "tax", "pin", 0.10, "PIN (Personal Identification Number)"),
+        
+        # Nigeria terms
+        ("NG", "address", "nigeria", 0.25, "Nigeria"),
+        ("NG", "address", "lagos", 0.20, "Lagos"),
+        ("NG", "currency", "ngn", 0.20, "NGN, Naira"),
+        ("NG", "phone", "+234", 0.20, "+234"),
+        ("NG", "tax", "tin", 0.15, "TIN (Tax Identification Number)"),
+        ("NG", "tax", "firs", 0.15, "FIRS (Federal Inland Revenue Service)"),
+        
+        # South Africa terms
+        ("ZA", "address", "south africa", 0.25, "South Africa"),
+        ("ZA", "currency", "zar", 0.20, "ZAR, Rand"),
+        ("ZA", "phone", "+27", 0.20, "+27"),
+        ("ZA", "tax", "sars", 0.20, "SARS (South African Revenue Service)"),
+        
+        # Tanzania terms
+        ("TZ", "address", "tanzania", 0.25, "Tanzania"),
+        ("TZ", "currency", "tzs", 0.20, "TZS, Tanzanian Shilling"),
+        ("TZ", "phone", "+255", 0.20, "+255"),
+        
+        # Uganda terms
+        ("UG", "address", "uganda", 0.25, "Uganda"),
+        ("UG", "currency", "ugx", 0.20, "UGX, Ugandan Shilling"),
+        ("UG", "phone", "+256", 0.20, "+256"),
+        
+        # Japan terms
+        ("JP", "address", "japan", 0.25, "Japan"),
+        ("JP", "currency", "jpy", 0.20, "JPY, Yen"),
+        ("JP", "phone", "+81", 0.20, "+81"),
+        ("JP", "tax", "consumption tax", 0.20, "Consumption Tax"),
+        
+        # South Korea terms
+        ("KR", "address", "south korea", 0.25, "South Korea"),
+        ("KR", "address", "korea", 0.20, "Korea"),
+        ("KR", "currency", "krw", 0.20, "KRW, Won"),
+        ("KR", "phone", "+82", 0.20, "+82"),
+        
+        # Brazil terms
+        ("BR", "address", "brazil", 0.25, "Brazil, Brasil"),
+        ("BR", "currency", "brl", 0.20, "BRL, Real"),
+        ("BR", "phone", "+55", 0.20, "+55"),
+        ("BR", "tax", "cnpj", 0.25, "CNPJ (company tax ID)"),
+        ("BR", "tax", "cpf", 0.20, "CPF (individual tax ID)"),
+        
+        # Mexico terms
+        ("MX", "address", "mexico", 0.25, "Mexico, México"),
+        ("MX", "currency", "mxn", 0.20, "MXN, Peso"),
+        ("MX", "phone", "+52", 0.20, "+52"),
+        ("MX", "tax", "rfc", 0.25, "RFC (Registro Federal de Contribuyentes)"),
+        ("MX", "tax", "cfdi", 0.20, "CFDI (digital invoice)"),
+        
+        # Saudi Arabia terms
+        ("SA", "address", "saudi arabia", 0.25, "Saudi Arabia, KSA"),
+        ("SA", "currency", "sar", 0.20, "SAR, Riyal"),
+        ("SA", "phone", "+966", 0.20, "+966"),
+        ("SA", "tax", "vat", 0.15, "VAT"),
+        ("SA", "tax", "zatca", 0.20, "ZATCA"),
+        
+        # China terms
+        ("CN", "address", "china", 0.25, "China, PRC"),
+        ("CN", "currency", "cny", 0.20, "CNY, Yuan, RMB"),
+        ("CN", "currency", "rmb", 0.15, "RMB"),
+        ("CN", "phone", "+86", 0.20, "+86"),
+        ("CN", "tax", "fapiao", 0.25, "Fapiao (official invoice)"),
     ]
 
 if __name__ == "__main__":

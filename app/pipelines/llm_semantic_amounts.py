@@ -149,8 +149,8 @@ def llm_verify_amounts(
             logger.warning("LLM semantic verification failed - no response")
             return None
         
-        # Parse strict JSON response
-        semantic = _parse_semantic_response(response)
+        # Parse strict JSON response (pass original text for currency detection)
+        semantic = _parse_semantic_response(response, original_text=text)
         return semantic
     
     except Exception as e:
@@ -267,7 +267,7 @@ def _query_ollama(
         return None
 
 
-def _parse_semantic_response(response: str) -> Optional[SemanticAmounts]:
+def _parse_semantic_response(response: str, original_text: str = "") -> Optional[SemanticAmounts]:
     """
     Parse LLM response into SemanticAmounts structure.
     
@@ -278,6 +278,7 @@ def _parse_semantic_response(response: str) -> Optional[SemanticAmounts]:
     
     Args:
         response: Raw LLM response
+        original_text: Original receipt/invoice text (for currency detection)
     
     Returns:
         SemanticAmounts or None if parsing failed
@@ -348,7 +349,10 @@ def _parse_semantic_response(response: str) -> Optional[SemanticAmounts]:
         # Filter out unrealistic line item amounts (likely IDs/invoice numbers)
         # Use currency-aware threshold: high-nominal currencies (KES, JPY, etc.)
         # routinely have amounts in the millions.
-        currency_mult = _detect_currency_multiplier(response)
+        # Detect currency from original text first (more reliable), fall back to LLM response
+        currency_mult = _detect_currency_multiplier(original_text) if original_text else 1.0
+        if currency_mult <= 1.0:
+            currency_mult = _detect_currency_multiplier(response)
         MAX_LINE_ITEM = _BASE_MAX_LINE_ITEM * max(1.0, currency_mult)
         
         filtered_line_items = []
