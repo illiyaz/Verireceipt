@@ -437,7 +437,100 @@ Every document produces comprehensive audit events:
 7. **Negative Keywords:** Explicit exclusion prevents misclassification
 8. **Generic Fallbacks:** INVOICE/RECEIPT mappings reduce unknown noise
 
-## Recent Improvements (Jan 2026)
+### 9. ML Feedback & Learning System
+
+**Files:**
+- `app/api/feedback.py` (API endpoints)
+- `app/pipelines/learning.py` (learning logic)
+- `app/repository/feedback_store.py` (persistence)
+- `app/models/feedback.py` (data models)
+
+**Purpose:** Adapt fraud detection based on human feedback using rule-based local learning.
+
+**How It Works:**
+1. Human submits structured feedback via `review.html` → `/feedback/submit/structured`
+2. System extracts patterns (false negatives, false positives, missed indicators)
+3. Creates `LearningRule` objects stored in SQLite/PostgreSQL
+4. Rules applied during scoring via `_apply_learned_rules()` in `rules.py`
+
+**Safety Gates:**
+- Maximum ±0.05 score impact when `dp_conf < 0.55`
+- Missing-elements rules suppressed when missing-fields gate is OFF
+- Rules can be toggled on/off via API
+- JSONL export for future supervised ML training
+
+**See:** `docs/ML_FEEDBACK_SYSTEM.md` for full documentation.
+
+### 10. Geo Database (SQLite)
+
+**Files:**
+- `app/geo/bootstrap.py` (seed data)
+- `app/geo/db.py` (database queries)
+- `app/geo/infer.py` (inference logic)
+
+**Purpose:** Database-backed geographic detection using postal patterns, city names, and country-specific terms.
+
+**Supported Countries (30+):** US, UK, DE, FR, IN, AU, AE, SA, KE, NG, ZA, TZ, UG, JP, KR, BR, MX, CN, and more.
+
+**Output:**
+```python
+{
+    "geo_country_guess": "KE",
+    "geo_confidence": 0.53,
+    "geo_evidence": ["postal_pattern", "city:nairobi"]
+}
+```
+
+### 11. Audit Report Generator
+
+**File:** `app/utils/audit_formatter.py`
+
+**Purpose:** Generate human-readable audit reports for compliance review.
+
+**Sections:**
+- Executive Summary (verdict, score, classification)
+- Geo-Aware Context (language, country, document profile)
+- Decision Logic (rule-by-rule evidence)
+- Missing Field Analysis (gate status with ENABLED/DISABLED based on event message)
+- Critical Events (HARD_FAIL and CRITICAL events)
+- Auditor Recommendations
+
+---
+
+## Recent Improvements (Feb 2026)
+
+### Geo Detection Overhaul
+- ✅ Removed currency/tax keywords as geo indicators (eliminated circular logic)
+- ✅ Added Kenya, Nigeria, South Africa, Tanzania, Uganda, Japan, South Korea, Brazil, Mexico, Saudi Arabia, China to geo database
+- ✅ Word-boundary matching for ambiguous abbreviations (UK, BC, CA, ON)
+- ✅ 21/21 golden geo tests passing
+
+### Receipt Logic Enhancements
+- ✅ R7 Total Mismatch: WARNING with reduced weight when gate is off (>20% discrepancy)
+- ✅ R9 Merchant Check: WARNING (0.08) even when `missing_fields_enabled` is off
+- ✅ 4 new address validation rules (R_ADDRESS_FAKE, MISSING, IMPLAUSIBLE, MERCHANT_MISMATCH)
+- ✅ Merchant name post-processing to strip document-type keywords (INVOICE, RECEIPT, etc.)
+- ✅ Currency-aware semantic amount verification (KES, JPY, KRW multipliers)
+
+### Audit Report Fixes
+- ✅ Fixed NoneType.__format__ crash on None evidence values
+- ✅ Fixed logical bug: ENABLED/DISABLED status now derived from event message content
+- ✅ Classification context displayed for both ENABLED and DISABLED states
+
+### Analytics UI Consolidation
+- ✅ Merged duplicate "Receipt Analysis Overview" and "Receipt Analysis Feedback" into unified section
+- ✅ Enhanced with feedback accuracy metrics (accuracy %, false positives/negatives)
+- ✅ Human-corrected verdict breakdown
+- ✅ ML Feedback & Learned Rules section with time period selector
+
+### ML Feedback System
+- ✅ Full feedback loop: submit → learn → apply → review
+- ✅ Structured feedback with per-indicator review
+- ✅ Learned rules with enable/disable toggle
+- ✅ JSONL export for future supervised ML training
+- ✅ Safety gates: ±0.05 clamp, soft gating, pattern suppression
+
+## Previous Improvements (Jan 2026)
 
 ### Domain Pack Robustness
 - ✅ Hard-gating on `required_all` failures

@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "entity": "merchant",
+  "calibrator_type": "piecewise_linear",
+  "version": "merchant_v1_20260125",
+  "created_at": "2026-01-25T22:26:12.291245",
+  "feature_requirements": [
+    "raw_confidence"
+  ],
+  "notes": "Trained on 1000 samples using isotonic method",
+  "source_metrics": {
+    "ece": 0.017500000000000293,
+    "brier": 0.15728124999999998,
+    "accuracy": 0.805,
+    "n": 1000
+  },
+  "breakpoints": [
+    {
+      "x": 1.0,
+      "y": 0.7875
+    }
+  ],
+  "model_params": {
+    "X_min": 1.0,
+    "X_max": 1.0,
+    "y_min": 0.7875,
+    "y_max": 0.7875,
+    "n_thresholds": 1
+  },
+  "training_metadata": {
+    "features_used": [
+      "best_score",
+      "winner_margin",
+      "candidate_count_filtered",
+      "mode",
+      "seller_zone",
+      "buyer_zone_penalty",
+      "label_next_line",
+      "company_name",
+      "uppercase_header",
+      "title_like",
+      "ref_like",
+      "digit_heavy"
+    ],
+    "feature_types": {
+      "best_score": "float64",
+      "winner_margin": "float64",
+      "candidate_count_filtered": "int64",
+      "mode": "int64",
+      "seller_zone": "bool",
+      "buyer_zone_penalty": "bool",
+      "label_next_line": "bool",
+      "company_name": "bool",
+      "uppercase_header": "bool",
+      "title_like": "bool",
+      "ref_like": "bool",
+      "digit_heavy": "bool"
+    },
+    "bucket_thresholds": {
+      "HIGH": 0.8,
+      "MEDIUM": 0.55,
+      "LOW": 0.25,
+      "NONE": 0.0
+    },
+    "training_samples": 1000,
+    "metrics": {
+      "accuracy": 0.805,
+      "precision": 0.805,
+      "recall": 1.0,
+      "brier_score": 0.15728124999999998,
+      "ece": 0.017500000000000293,
+      "training_samples": 800,
+      "test_samples": 200,
+      "bucket_metrics": {
+        "MEDIUM": {
+          "precision": 0.805,
+          "count": 200,
+          "avg_confidence": 0.7874999999999998
+        }
+      }
+    }
+  }
+}

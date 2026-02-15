@@ -1,0 +1,2 @@
+confidence_bucket,count,precision,avg_raw_confidence,avg_calibrated_confidence
+MEDIUM,200,0.805,0.7874999999999998,0.7874999999999998

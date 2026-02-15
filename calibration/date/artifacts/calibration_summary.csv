@@ -1,0 +1,2 @@
+version,n_samples,accuracy,precision,recall,ece,brier,high_bucket_precision,medium_bucket_precision,low_bucket_precision,calibration_method,trained_at
+date_v1_20260125,200,0.675,0.6842105263157895,0.9629629629629629,0.15151907955247468,0.25365602895052713,0.7142857142857143,0.3333333333333333,0.5,piecewise_linear,2026-01-25T22:47:34.270431

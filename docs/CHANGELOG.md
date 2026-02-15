@@ -9,6 +9,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Audit Report Logic Bug (2026-02-xx)
+Fixed logical bug in `_format_missing_field_analysis` where the audit report always displayed "MISSING-FIELD PENALTIES DISABLED" when a `GATE_MISSING_FIELDS` event existed, regardless of actual status.
+
+**Root Cause:** The formatter checked for event *presence* rather than parsing the event's `message` content to determine ENABLED vs DISABLED state.
+
+**Fix:** Now parses the `gate_message` string to determine if "ENABLED" or "DISABLED" and renders the correct template with classification context for both states.
+
+**File Modified:** `app/utils/audit_formatter.py`
+
+#### Analytics UI Duplicate Sections (2026-02-xx)
+Merged duplicate "Receipt Analysis Overview" and "Receipt Analysis Feedback" sections in `web/stats.html` into a single unified "Receipt Analysis" section.
+
+**Changes:**
+- Combined analysis stats (from `/stats`) and feedback metrics (from `/feedback/stats`) into one section
+- Added feedback accuracy cards (Human Feedback count, System Accuracy %, False Positives, False Negatives)
+- Added Human-Corrected Verdicts breakdown
+- Reorganized "ML Feedback & Learned Rules" section with time period selector
+- Empty state for when no data exists
+
+**File Modified:** `web/stats.html`
+
+### Added
+
+#### ML Feedback System Documentation (2026-02-xx)
+Comprehensive documentation of the rule-based local learning system.
+
+**New File:** `docs/ML_FEEDBACK_SYSTEM.md`
+
+**Covers:**
+- Architecture (feedback → learning → persistence → application)
+- Data models (StructuredFeedback, LearningRule)
+- Learning algorithms (false negative/positive, missed indicators, reinforcement, corrections)
+- Rule application with safety gates (±0.05 clamp, soft gating, pattern suppression)
+- API endpoints for feedback submission and rule management
+- Storage schema (SQLite/PostgreSQL dual-mode)
+- Analytics integration
+
+#### Geo Database Expansion (2026-02-xx)
+Added 11 new countries to the geo bootstrap database.
+
+**New Countries:** Kenya (KE), Nigeria (NG), South Africa (ZA), Tanzania (TZ), Uganda (UG), Japan (JP), South Korea (KR), Brazil (BR), Mexico (MX), Saudi Arabia (SA), China (CN)
+
+**Data Added:** Postal patterns, cities, terms, geo profiles, VAT rules, and currency mappings for all new countries.
+
+**File Modified:** `app/geo/bootstrap.py`
+
+### Changed
+
+#### Geo Detection False Positive Overhaul (2026-02-xx)
+Eliminated circular logic where currency/tax keywords were used as geographic indicators.
+
+**Key Fixes:**
+- `_detect_eu_hint`: Removed €/EUR currency and "vat" keyword triggers
+- `_detect_uk_hint`: Removed "vat" trigger, added word-boundary matching for "uk"
+- `_detect_canada_hint`: Major rewrite — removed bare "on"/"gst"/"bc"/"ca" matches
+- `_detect_uae/saudi/oman/bahrain_hint`: Removed "vat" trigger
+- `_tax_regime_hint`: Rewritten to prioritize explicit tax labels over registration numbers
+- **Result:** 21/21 golden geo tests passing (was 14/21)
+
+**File Modified:** `app/pipelines/rules.py`
+
+#### Receipt Logic Enhancements (2026-02-xx)
+- R7 Total Mismatch: Still emits WARNING with reduced weight when gate is off (>20% discrepancy)
+- R9 Merchant Check: Emits WARNING (0.08) even when `missing_fields_enabled` is off
+- 4 new address validation rules (R_ADDRESS_FAKE, MISSING, IMPLAUSIBLE, MERCHANT_MISMATCH)
+- Merchant name post-processing to strip document-type keywords (INVOICE, RECEIPT, etc.)
+- Currency-aware semantic amount verification with correct multipliers for KES, JPY, KRW, IDR, VND
+
+**Files Modified:** `app/pipelines/rules.py`, `app/pipelines/features.py`, `app/pipelines/llm_semantic_amounts.py`
+
+#### ReceiptDecision Field Population (2026-02-xx)
+Top-level `ReceiptDecision` fields (`doc_family`, `doc_subtype`, `geo_country_guess`, `geo_confidence`, `lang_guess`, `lang_confidence`, `currency`) are now populated directly in the constructor instead of only being available in `debug.doc_profile`.
+
+**File Modified:** `app/pipelines/rules.py`
+
+### Fixed
+
 #### Geo Detection False Positives (2026-01-15)
 Complete overhaul to eliminate false country detections and ensure canonical data sourcing.
 

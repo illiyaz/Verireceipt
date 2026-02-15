@@ -4,10 +4,13 @@ from typing import List, Optional, Union, Literal, Dict, Any
 import os
 import shutil
 import uuid
+import logging
 from pathlib import Path
 import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+
+logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,7 +34,7 @@ try:
     PDF2IMAGE_AVAILABLE = True
 except ImportError:
     PDF2IMAGE_AVAILABLE = False
-    print("⚠️ pdf2image not available - PDFs will have limited support")
+    logger.warning("pdf2image not available - PDFs will have limited support")
 
 # Import hybrid analysis engines
 try:
@@ -192,7 +195,7 @@ def _save_upload_to_disk(upload: UploadFile) -> Path:
     # Validate and convert if needed (but keep original if validation fails)
     if suffix == ".pdf":
         # PDFs are handled by the pipelines directly
-        print(f"📄 PDF uploaded: {dest}")
+        logger.debug("PDF uploaded: %s", dest)
         return dest
     else:
         try:
@@ -221,7 +224,7 @@ def _save_upload_to_disk(upload: UploadFile) -> Path:
                 pass  # HEIF support not available, will fail on HEIC files
             
             img = Image.open(dest)
-            print(f"📷 Image opened: format={img.format}, mode={img.mode}, size={img.size}")
+            logger.debug("Image opened: format=%s, mode=%s, size=%s", img.format, img.mode, img.size)
             
             # Don't verify - it's too strict and closes the file
             # Just try to load the image data
@@ -229,7 +232,7 @@ def _save_upload_to_disk(upload: UploadFile) -> Path:
             
             # Convert to RGB if needed (handles RGBA, P, L, etc.)
             if img.mode not in ["RGB"]:
-                print(f"🔄 Converting from {img.mode} to RGB")
+                logger.debug("Converting from %s to RGB", img.mode)
                 img = img.convert("RGB")
             
             # Always save as JPEG for consistency
@@ -242,15 +245,12 @@ def _save_upload_to_disk(upload: UploadFile) -> Path:
                 dest.unlink()
             dest = jpeg_dest
             
-            print(f"✅ Image validated and saved: {dest}")
+            logger.debug("Image validated and saved: %s", dest)
         except HTTPException:
             raise
         except Exception as e:
             # Log error but don't fail - keep the original file
-            print(f"⚠️ Image validation warning: {str(e)}")
-            print(f"   File exists: {dest.exists()}")
-            print(f"   File size: {dest.stat().st_size if dest.exists() else 'N/A'}")
-            print(f"   Keeping original file: {dest}")
+            logger.warning("Image validation warning: %s — keeping original file: %s", e, dest)
             # Don't remove the file, just use it as-is
 
     return dest
@@ -534,28 +534,28 @@ def _convert_pdf_to_image(pdf_path: Path) -> Optional[Path]:
         Path to converted image, or None if conversion fails
     """
     if not PDF2IMAGE_AVAILABLE:
-        print("⚠️ pdf2image not available - cannot convert PDF")
+        logger.warning("pdf2image not available - cannot convert PDF")
         return None
     
     try:
-        print(f"🔄 Converting PDF to image: {pdf_path.name}")
+        logger.debug("Converting PDF to image: %s", pdf_path.name)
         
         # Convert first page only (receipts are typically 1 page)
         images = convert_from_path(str(pdf_path), first_page=1, last_page=1, dpi=200)
         
         if not images:
-            print("❌ No images extracted from PDF")
+            logger.warning("No images extracted from PDF")
             return None
         
         # Save as JPG in same directory
         image_path = pdf_path.parent / f"{pdf_path.stem}_page1.jpg"
         images[0].save(str(image_path), 'JPEG', quality=95)
         
-        print(f"✅ PDF converted to image: {image_path.name}")
+        logger.debug("PDF converted to image: %s", image_path.name)
         return image_path
         
     except Exception as e:
-        print(f"❌ PDF conversion failed: {e}")
+        logger.warning("PDF conversion failed: %s", e)
         return None
 
 
@@ -593,13 +593,13 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     is_pdf = temp_path.suffix.lower() == '.pdf'
     
     if is_pdf:
-        print(f"📄 PDF detected: {temp_path.name}")
+        logger.debug("PDF detected: %s", temp_path.name)
         converted_image = _convert_pdf_to_image(temp_path)
         if converted_image:
             image_path = converted_image
-            print(f"✅ Using converted image for LayoutLM/Vision: {image_path.name}")
+            logger.debug("Using converted image for LayoutLM/Vision: %s", image_path.name)
         else:
-            print(f"⚠️ PDF conversion failed - LayoutLM/Vision will use PDF (may fail)")
+            logger.warning("PDF conversion failed - LayoutLM/Vision will use PDF (may fail)")
             image_path = temp_path
     
     results = {
@@ -693,10 +693,10 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         try:
             # Use converted image for PDFs, original file otherwise
             layoutlm_path = image_path if is_pdf else temp_path
-            print(f"🔍 LayoutLM extracting from: {layoutlm_path.name}")
+            logger.debug("LayoutLM extracting from: %s", layoutlm_path.name)
             data = extract_receipt_with_layoutlm(str(layoutlm_path), method="simple")
             elapsed = time_module.time() - start
-            print(f"✅ LayoutLM extracted: {data}")
+            logger.debug("LayoutLM extracted: %s", data)
             return {
                 "merchant": data.get("merchant"),
                 "total": data.get("total"),
@@ -708,8 +708,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             }
         except Exception as e:
             import traceback
-            print(f"❌ LayoutLM error: {e}")
-            print(f"Traceback: {traceback.format_exc()}")
+            logger.warning("LayoutLM error: %s", e, exc_info=True)
             return {"error": str(e), "time_seconds": round(time_module.time() - start, 2)}
     
     def run_vision():
@@ -726,7 +725,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         try:
             # Use converted image for PDFs, original file otherwise
             vision_path = image_path if is_pdf else temp_path
-            print(f"🔍 Vision LLM analyzing (veto-only): {vision_path.name}")
+            logger.debug("Vision LLM analyzing (veto-only): %s", vision_path.name)
             
             # Use new veto-safe function
             vision_assessment = build_vision_assessment(str(vision_path))
@@ -739,7 +738,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             
             # Check if we got valid results
             if visual_integrity == "unknown" or confidence == 0.0:
-                print(f"⚠️ Vision LLM returned no assessment - likely service issue")
+                logger.warning("Vision LLM returned no assessment - likely service issue")
                 return {
                     "error": "Vision LLM service unavailable",
                     "visual_integrity": "unknown",
@@ -758,8 +757,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             }
         except Exception as e:
             import traceback
-            print(f"❌ Vision LLM exception: {e}")
-            traceback.print_exc()
+            logger.warning("Vision LLM exception: %s", e, exc_info=True)
             return {
                 "error": str(e),
                 "visual_integrity": "unknown",
@@ -772,44 +770,26 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     # Each engine benefits from previous engines' results
     start_time = time_module.time()
     
-    print("\n" + "="*60)
-    print("SEQUENTIAL INTELLIGENCE PIPELINE")
-    print("="*60)
+    logger.debug("Starting sequential intelligence pipeline")
     
     # STEP 1: Vision LLM (first - visual fraud detection, veto-only)
-    print("\n1️⃣ Running Vision LLM (veto-only)...")
+    logger.debug("Step 1: Running Vision LLM (veto-only)")
     results["vision_llm"] = run_vision()
-    if not results["vision_llm"].get("error"):
-        print(f"   ✅ Vision: {results['vision_llm'].get('visual_integrity')} (confidence: {results['vision_llm'].get('confidence', 0)*100:.0f}%)")
-    else:
-        print(f"   ❌ Vision failed: {results['vision_llm'].get('error')}")
     
     # STEP 2: LayoutLM (uses Vision context for better extraction)
-    print("\n2️⃣ Running LayoutLM...")
+    logger.debug("Step 2: Running LayoutLM")
     results["layoutlm"] = run_layoutlm()
-    if not results["layoutlm"].get("error"):
-        print(f"   ✅ LayoutLM: Total={results['layoutlm'].get('total')}, Words={results['layoutlm'].get('words_extracted')}")
-    else:
-        print(f"   ❌ LayoutLM failed: {results['layoutlm'].get('error')}")
     
     # STEP 3: DONUT (if available)
-    print("\n3️⃣ Running DONUT...")
+    logger.debug("Step 3: Running DONUT")
     results["donut"] = run_donut()
-    if not results["donut"].get("error"):
-        print(f"   ✅ DONUT: Total={results['donut'].get('total')}")
-    else:
-        print(f"   ⚠️ DONUT: {results['donut'].get('error')}")
     
     # STEP 4: Donut-Receipt (if available)
-    print("\n4️⃣ Running Donut-Receipt...")
+    logger.debug("Step 4: Running Donut-Receipt")
     results["donut_receipt"] = run_donut_receipt()
-    if not results["donut_receipt"].get("error"):
-        print(f"   ✅ Donut-Receipt: {results['donut_receipt'].get('data_quality')}")
-    else:
-        print(f"   ⚠️ Donut-Receipt: {results['donut_receipt'].get('error')}")
     
     # STEP 5: Rule-Based (uses ALL extracted data from above engines)
-    print("\n5️⃣ Running Rule-Based with extracted data...")
+    logger.debug("Step 5: Running Rule-Based with extracted data")
     # Pass LayoutLM data to Rule-Based for better analysis
     extracted_total = results["layoutlm"].get("total") if not results["layoutlm"].get("error") else None
     extracted_merchant = results["layoutlm"].get("merchant") if not results["layoutlm"].get("error") else None
@@ -825,7 +805,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         }
     
     if extracted_total or extracted_merchant or extracted_date:
-        print(f"   📊 Using extracted data: Total={extracted_total}, Merchant={extracted_merchant}")
+        logger.debug("Using extracted data: Total=%s, Merchant=%s", extracted_total, extracted_merchant)
         # Format total properly
         if extracted_total:
             if isinstance(extracted_total, (int, float)):
@@ -869,19 +849,18 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 ),
                 "debug": enhanced_dict.get("debug") or {},
             }
-            print(f"   ✅ Rule-Based (enhanced): {enhanced_decision.label} ({enhanced_decision.score*100:.0f}%)")
+            logger.debug("Rule-Based (enhanced): %s (%.0f%%)", enhanced_decision.label, enhanced_decision.score*100)
         except Exception as e:
-            print(f"   ⚠️ Enhanced Rule-Based failed, using basic: {e}")
+            logger.warning("Enhanced Rule-Based failed, using basic: %s", e)
             results["rule_based"] = run_rule_based()
     else:
         results["rule_based"] = run_rule_based()
         if not results["rule_based"].get("error"):
-            print(f"   ✅ Rule-Based: {results['rule_based'].get('label')} ({results['rule_based'].get('score', 0)*100:.0f}%)")
+            logger.debug("Rule-Based: %s (%.0f%%)", results['rule_based'].get('label'), results['rule_based'].get('score', 0)*100)
     
     total_time = time_module.time() - start_time
     results["timing"]["sequential_total_seconds"] = round(total_time, 2)
-    print(f"\n⏱️ Total pipeline time: {total_time:.1f}s")
-    print("="*60 + "\n")
+    logger.debug("Total pipeline time: %.1fs", total_time)
     
     # Track which engines were used
     if not results["rule_based"].get("error"):
@@ -1017,7 +996,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
     
     # Build final ensemble verdict (Rule-Based already enhanced with LayoutLM data)
     try:
-        print("\n6️⃣ Building ensemble verdict...")
+        logger.debug("Step 6: Building ensemble verdict")
         ensemble = get_ensemble()
         
         # Converge extraction data for transparency
@@ -1036,7 +1015,7 @@ async def analyze_hybrid(file: UploadFile = File(...)):
         
         # Update results with enhanced hybrid
         results["hybrid_verdict"] = hybrid
-        print(f"   ✅ Final verdict: {ensemble_verdict['final_label']} ({ensemble_verdict['confidence']*100:.0f}%)")
+        logger.debug("Final verdict: %s (%.0f%%)", ensemble_verdict['final_label'], ensemble_verdict['confidence']*100)
         
         # Save ensemble verdict to CSV for audit trail
         try:
@@ -1047,12 +1026,6 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             rule_events = rb.get("events") or rb.get("rule_events") or []
             doc_profile = rb.get("doc_profile") or (rb.get("debug") or {}).get("doc_profile") or {}
             
-            # DEBUG: Show what geo data we're getting from doc_profile
-            print(f"\n🔍 ENSEMBLE - doc_profile geo data:")
-            print(f"   geo_country_guess: {doc_profile.get('geo_country_guess')}")
-            print(f"   geo_confidence: {doc_profile.get('geo_confidence')}")
-            print(f"   doc_subtype: {doc_profile.get('subtype')}")
-            print(f"   doc_profile_confidence: {doc_profile.get('confidence')}")
             
             # Convert learned-rule events into LearnedRuleAudit
             learned_rule_audits = []
@@ -1079,19 +1052,10 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             # Convert rule-based events AND ensemble reconciliation events into AuditEvent
             audit_events = []
             try:
-                # DEBUG: Log rule events
-                print(f"🔍 DEBUG: Processing {len(rule_events or [])} rule events")
-                gate_found = False
-                
                 # First, add all rule-based events (including GATE_MISSING_FIELDS)
                 for ev in (rule_events or []):
                     if isinstance(ev, dict):
                         rule_id = str(ev.get("rule_id", ""))
-                        
-                        # DEBUG: Log each event
-                        if rule_id == "GATE_MISSING_FIELDS":
-                            gate_found = True
-                            print(f"   ✅ Found GATE_MISSING_FIELDS event: {ev}")
                         
                         # Skip learned rule events (they go in learned_rule_audits)
                         if rule_id == "LR_LEARNED_PATTERN":
@@ -1108,14 +1072,6 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                             evidence=ev.get("evidence", {}) or {},
                         )
                         audit_events.append(audit_event)
-                        
-                        # DEBUG: Log gate event conversion
-                        if rule_id == "GATE_MISSING_FIELDS":
-                            print(f"   ✅ Converted to AuditEvent with code: {audit_event.code}")
-                
-                if not gate_found:
-                    print(f"   ❌ GATE_MISSING_FIELDS event NOT found in rule_events!")
-                    print(f"   Rule event IDs: {[ev.get('rule_id') for ev in (rule_events or []) if isinstance(ev, dict)]}")
                 
                 # Then add ensemble reconciliation events
                 for ev in (ensemble_verdict or {}).get("reconciliation_events", []) or []:
@@ -1237,11 +1193,6 @@ async def analyze_hybrid(file: UploadFile = File(...)):
                 "learned_rule_audits": learned_rule_audits,
             }
 
-            # DEBUG: Show geo values in decision_payload before filtering
-            print(f"\n🔍 ENSEMBLE - decision_payload geo values (before filter):")
-            print(f"   geo_country_guess: {decision_payload.get('geo_country_guess')}")
-            print(f"   geo_confidence: {decision_payload.get('geo_confidence')}")
-            
             # Drop any keys not defined on the dataclass (prevents __init__ errors)
             try:
                 allowed_fields = set(getattr(ReceiptDecision, "__dataclass_fields__", {}).keys())
@@ -1250,101 +1201,33 @@ async def analyze_hybrid(file: UploadFile = File(...)):
             except Exception:
                 pass
 
-            # DEBUG: Show geo values after filtering
-            print(f"🔍 ENSEMBLE - decision_payload geo values (after filter):")
-            print(f"   geo_country_guess: {decision_payload.get('geo_country_guess')}")
-            print(f"   geo_confidence: {decision_payload.get('geo_confidence')}")
 
             ensemble_decision = ReceiptDecision(**decision_payload)
             
-            # DEBUG: Show geo values in final decision object
-            print(f"🔍 ENSEMBLE - ReceiptDecision object geo values:")
-            print(f"   geo_country_guess: {ensemble_decision.geo_country_guess}")
-            print(f"   geo_confidence: {ensemble_decision.geo_confidence}")
-            
-            # DEBUG: Show geo values in to_dict()
-            decision_dict = ensemble_decision.to_dict()
-            print(f"🔍 ENSEMBLE - to_dict() geo values:")
-            print(f"   geo_country_guess: {decision_dict.get('geo_country_guess')}")
-            print(f"   geo_confidence: {decision_dict.get('geo_confidence')}")
-            
-            # DEBUG: Print events list with severities and codes
-            print(f"\n🔍 ENSEMBLE - Events list from decision.to_dict():")
-            events_list = decision_dict.get('events') or []
-            audit_events_list = decision_dict.get('audit_events') or []
-            print(f"   Total events: {len(events_list)}")
-            print(f"   Total audit_events: {len(audit_events_list)}")
-            if events_list:
-                print(f"\n   Events (severity + code):")
-                for i, event in enumerate(events_list, 1):
-                    if isinstance(event, dict):
-                        severity = event.get('severity', 'UNKNOWN')
-                        code = event.get('code') or event.get('rule_id', 'UNKNOWN')
-                        print(f"      {i}. [{severity}] {code}")
-            if audit_events_list:
-                print(f"\n   Audit Events (severity + code):")
-                for i, event in enumerate(audit_events_list, 1):
-                    if isinstance(event, dict):
-                        severity = event.get('severity', 'UNKNOWN')
-                        code = event.get('code') or event.get('rule_id', 'UNKNOWN')
-                        print(f"      {i}. [{severity}] {code}")
-            print()
-
-    # Save ensemble decision to CSV
-            
             ensemble_decision.finalize_defaults()
             store.save_analysis(str(temp_path), ensemble_decision)
-            print(f"   💾 Ensemble verdict saved to CSV with {len(audit_events)} audit events")
+            logger.debug("Ensemble verdict saved with %d audit events", len(audit_events))
             
             # Generate audit report from ensemble decision
             try:
                 audit_report = format_audit_for_human_review(ensemble_decision.to_dict())
                 results["audit_report"] = audit_report
-                print(f"   📋 Audit report generated successfully")
+                logger.debug("Audit report generated successfully")
             except Exception as audit_err:
                 results["audit_report"] = f"Error generating audit report: {str(audit_err)}"
-                print(f"   ⚠️ Failed to generate audit report: {audit_err}")
+                logger.warning("Failed to generate audit report: %s", audit_err)
                 
         except Exception as save_err:
-            print(f"   ⚠️ Failed to save ensemble verdict: {save_err}")
+            logger.warning("Failed to save ensemble verdict: %s", save_err)
         
     except Exception as e:
-        import traceback
-        print(f"   ⚠️ Ensemble error: {e}")
-        print(f"   Using legacy hybrid verdict")
-        traceback.print_exc()
+        logger.warning("Ensemble error: %s — using legacy hybrid verdict", e, exc_info=True)
         # Legacy hybrid already in results
     
     # Don't cleanup - keep file for feedback submission
     # File will be cleaned up later or by a background job
     
-    # DEBUG: Verify audit_report is in results
-    print(f"\n🔍 FINAL RESPONSE - Checking audit_report:")
-    print(f"   'audit_report' in results: {'audit_report' in results}")
-    if 'audit_report' in results:
-        audit_len = len(results['audit_report']) if results['audit_report'] else 0
-        print(f"   audit_report length: {audit_len} chars")
-        if audit_len > 0:
-            print(f"   First 100 chars: {results['audit_report'][:100]}")
-    else:
-        print(f"   ❌ audit_report NOT in results dict!")
-        print(f"   Available keys: {list(results.keys())}")
-    
     response = HybridAnalyzeResponse(**results)
-    
-    # DEBUG: Verify audit_report is in the Pydantic model
-    print(f"\n🔍 PYDANTIC MODEL - Checking audit_report:")
-    print(f"   response.audit_report exists: {response.audit_report is not None}")
-    if response.audit_report:
-        print(f"   response.audit_report length: {len(response.audit_report)} chars")
-    
-    # DEBUG: Check JSON serialization
-    response_dict = response.model_dump()
-    print(f"\n🔍 JSON SERIALIZATION - Checking audit_report:")
-    print(f"   'audit_report' in response_dict: {'audit_report' in response_dict}")
-    if 'audit_report' in response_dict and response_dict['audit_report']:
-        print(f"   audit_report in JSON: {len(response_dict['audit_report'])} chars")
-    
     return response
 
 
@@ -1765,7 +1648,7 @@ async def submit_feedback(feedback: FeedbackRequest):
             )
             if all_receipts:
                 receipt_path = all_receipts[0]  # Use most recent
-                print(f"ℹ️ Receipt ID '{feedback.receipt_id}' not found, using most recent: {receipt_path.name}")
+                logger.info("Receipt ID '%s' not found, using most recent: %s", feedback.receipt_id, receipt_path.name)
             else:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -1811,7 +1694,7 @@ async def submit_feedback(feedback: FeedbackRequest):
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
-        print(f"❌ Error saving feedback: {error_details}")
+        logger.error("Error saving feedback: %s", error_details)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save feedback: {str(e)}"

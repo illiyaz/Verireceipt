@@ -2875,12 +2875,13 @@ def _score_and_explain(
     GOLDEN_TEST: tests/golden/pos_receipt.json
     VERSION: 1.0
     """
-    # Enforce Rule × Family Matrix
+    # Enforce Rule × Family Matrix (matrix keys are doc SUBTYPES, not families)
     doc_family = legacy_doc_profile.get("family", "UNKNOWN").upper()
-    execution_mode = get_execution_mode("R7_TOTAL_MISMATCH", doc_family)
+    doc_subtype_for_matrix = str(legacy_doc_profile.get("subtype") or tf.get("doc_subtype_guess") or "UNKNOWN").upper()
+    execution_mode = get_execution_mode("R7_TOTAL_MISMATCH", doc_subtype_for_matrix)
     
     if execution_mode == ExecutionMode.FORBIDDEN:
-        logger.debug(f"R7_TOTAL_MISMATCH skipped: {doc_family} not in allow-list")
+        logger.debug(f"R7_TOTAL_MISMATCH skipped: {doc_subtype_for_matrix} not in allow-list")
         total_mismatch = False
     # GATED by profile: Skip for commercial invoices (complex line items with shipping, duties, etc.)
     elif should_apply_rule(doc_profile_obj, "R7_TOTAL_MISMATCH"):
@@ -3015,11 +3016,11 @@ def _score_and_explain(
     )
     is_credit_note = tf.get("is_credit_note", False)
     
-    # Enforce Rule × Family Matrix
-    execution_mode = get_execution_mode("R7C_CREDIT_NOTE_RECONCILIATION", doc_family)
+    # Enforce Rule × Family Matrix (matrix keys are doc SUBTYPES)
+    execution_mode = get_execution_mode("R7C_CREDIT_NOTE_RECONCILIATION", doc_subtype or doc_family)
     
     if execution_mode == ExecutionMode.FORBIDDEN:
-        logger.debug(f"R7C_CREDIT_NOTE_RECONCILIATION skipped: {doc_family} forbidden")
+        logger.debug(f"R7C_CREDIT_NOTE_RECONCILIATION skipped: {doc_subtype or doc_family} forbidden")
         # Skip silently - forbidden
     elif not is_credit_note_family and execution_mode != ExecutionMode.SOFT:
         logger.debug(f"R7C_CREDIT_NOTE_RECONCILIATION skipped: not a credit note")
@@ -3211,11 +3212,12 @@ def _score_and_explain(
     # Uses looser tolerance (2-10%) based on OCR confidence and currency complexity
     # RUNS AFTER R7C - skips credit notes (R7C handles those)
     
-    # Enforce Rule × Family Matrix
-    execution_mode = get_execution_mode("R7B_INVOICE_TOTAL_RECONCILIATION", doc_family)
+    # Enforce Rule × Family Matrix (matrix keys are doc SUBTYPES)
+    r7b_subtype = str(legacy_doc_profile.get("subtype") or tf.get("doc_subtype_guess") or "UNKNOWN").upper()
+    execution_mode = get_execution_mode("R7B_INVOICE_TOTAL_RECONCILIATION", r7b_subtype)
     
     if execution_mode == ExecutionMode.FORBIDDEN:
-        logger.debug(f"R7B_INVOICE_TOTAL_RECONCILIATION skipped: {doc_family} forbidden")
+        logger.debug(f"R7B_INVOICE_TOTAL_RECONCILIATION skipped: {r7b_subtype} forbidden")
     # Guard: Skip credit notes (let R7C handle them)
     elif is_invoice_type and not is_credit_note:
         # Get doc_profile_confidence for gating
@@ -3587,11 +3589,12 @@ def _score_and_explain(
         doc_family = legacy_doc_profile.get("family", "").upper()
         doc_subtype = legacy_doc_profile.get("subtype", "").upper()
         
-        # Enforce Rule × Family Matrix
-        execution_mode = get_execution_mode("R9B_DOC_TYPE_UNKNOWN_OR_MIXED", doc_family)
+        # Enforce Rule × Family Matrix (matrix keys are doc SUBTYPES)
+        r9b_subtype = str(legacy_doc_profile.get("subtype") or tf.get("doc_subtype_guess") or "UNKNOWN").upper()
+        execution_mode = get_execution_mode("R9B_DOC_TYPE_UNKNOWN_OR_MIXED", r9b_subtype)
         
         if execution_mode == ExecutionMode.FORBIDDEN:
-            logger.debug(f"R9B_DOC_TYPE_UNKNOWN_OR_MIXED skipped: {doc_family} forbidden")
+            logger.debug(f"R9B_DOC_TYPE_UNKNOWN_OR_MIXED skipped: {r9b_subtype} forbidden")
         # GATE: Suppress R9B for high-confidence POS receipts
         # POS receipts are structurally noisy by nature - ambiguity ≠ fraud
         elif dp_conf_val >= 0.8 and doc_subtype.startswith("POS_"):
@@ -5319,12 +5322,13 @@ def _score_and_explain(
     
     VERSION: 1.0
     """
-    # Hard gates
+    # Hard gates (matrix keys are doc SUBTYPES)
     doc_family = legacy_doc_profile.get("family", "").upper()
-    execution_mode = get_execution_mode("R10_TEMPLATE_QUALITY", doc_family)
+    r10_subtype = str(legacy_doc_profile.get("subtype") or tf.get("doc_subtype_guess") or "UNKNOWN").upper()
+    execution_mode = get_execution_mode("R10_TEMPLATE_QUALITY", r10_subtype)
     
     if execution_mode == ExecutionMode.FORBIDDEN:
-        logger.debug(f"R10_TEMPLATE_QUALITY skipped: {doc_family} forbidden")
+        logger.debug(f"R10_TEMPLATE_QUALITY skipped: {r10_subtype} forbidden")
     else:
         dp_conf_val = tf.get("doc_profile_confidence") or legacy_doc_profile.get("confidence") or 0.0
         try:
@@ -5499,7 +5503,7 @@ def analyze_receipt(
     # 3. Build features from the raw receipt data
     features = build_features(raw)
     
-    # 3. If we have extracted data from other engines, enhance the features
+    # 4. If we have extracted data from other engines, enhance the features
     if extracted_total:
         features.text_features["total_amount"] = extracted_total
     if extracted_merchant:
@@ -5507,6 +5511,15 @@ def analyze_receipt(
     if extracted_date:
         features.text_features["date_extracted"] = extracted_date
     
-    # 4. Run rule-based analysis
+    # 5. Run Vision LLM structured extraction and merge into features
+    try:
+        from app.pipelines.vision_extract import extract_receipt_fields, merge_vlm_into_features
+        vlm_data = extract_receipt_fields(file_path)
+        features.text_features = merge_vlm_into_features(vlm_data, features.text_features)
+    except Exception as e:
+        logger.warning("Vision LLM extraction failed (non-fatal): %s", e)
+        features.text_features["vlm_extraction"] = {"success": False, "error": str(e)}
+    
+    # 6. Run rule-based analysis
     return _score_and_explain(features, apply_learned=apply_learned, vision_assessment=vision_assessment)
     

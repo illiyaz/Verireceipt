@@ -1,0 +1,26 @@
+{
+  "accuracy": 0.675,
+  "precision": 0.6842105263157895,
+  "recall": 0.9629629629629629,
+  "brier_score": 0.25365602895052713,
+  "ece": 0.15151907955247468,
+  "training_samples": 160,
+  "test_samples": 40,
+  "bucket_metrics": {
+    "HIGH": {
+      "precision": 0.7142857142857143,
+      "count": 35,
+      "avg_confidence": 0.8113052415210688
+    },
+    "MEDIUM": {
+      "precision": 0.3333333333333333,
+      "count": 3,
+      "avg_confidence": 0.75
+    },
+    "LOW": {
+      "precision": 0.5,
+      "count": 2,
+      "avg_confidence": 0.20753986443079184
+    }
+  }
+}

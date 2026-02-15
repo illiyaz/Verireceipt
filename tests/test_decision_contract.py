@@ -296,17 +296,14 @@ class TestBehavioralContracts:
         - Result: Should be "real" or "suspicious" (NOT "fake")
         """
         from app.pipelines.rules import _score_and_explain
-        from app.schemas.receipt import ReceiptFeatures, ReceiptRaw
+        from app.schemas.receipt import ReceiptFeatures
         
         # Simulate low-confidence logistics document
-        raw = ReceiptRaw(
-            file_path="/tmp/logistics_invoice.pdf",
-            full_text="COMMERCIAL INVOICE\nDate of Export: 2023-09-05\nExporter: ABC Corp",
-            metadata={"creation_date": "D:20241008184241+05'30'"},
-        )
-        
         features = ReceiptFeatures(
-            raw=raw,
+            file_features={
+                "file_size_bytes": 50000,
+                "source_type": "pdf",
+            },
             text_features={
                 "receipt_date": "2023-09-05",
                 "has_date": True,
@@ -317,11 +314,8 @@ class TestBehavioralContracts:
                 "total_line_present": False,
             },
             layout_features={},
-            metadata_features={"creation_date": "D:20241008184241+05'30'"},
-            doc_profile={
-                "family": "TRANSACTIONAL",
-                "subtype": "UTILITY",
-                "confidence": 0.2,
+            forensic_features={
+                "creation_date": "D:20241008184241+05'30'",
             },
         )
         
@@ -332,26 +326,38 @@ class TestBehavioralContracts:
         assert decision.label in ["real", "suspicious"], \
             f"Low-confidence doc with moderate gap should not be 'fake', got: {decision.label}"
         
+        # Helper to get rule_id from event (dict or dataclass)
+        def _rid(e):
+            return e.get("rule_id") if isinstance(e, dict) else getattr(e, "rule_id", "")
+        def _sev(e):
+            return e.get("severity") if isinstance(e, dict) else getattr(e, "severity", "")
+        def _wt(e):
+            return e.get("weight") if isinstance(e, dict) else getattr(e, "weight", 0)
+        def _msg(e):
+            return e.get("message", "") if isinstance(e, dict) else getattr(e, "message", "")
+        def _ev(e):
+            return e.get("evidence", {}) if isinstance(e, dict) else getattr(e, "evidence", {})
+
         # Verify R16 was downgraded
-        r16_events = [e for e in decision.events if e.rule_id == "R16_SUSPICIOUS_DATE_GAP"]
+        r16_events = [e for e in decision.events if _rid(e) == "R16_SUSPICIOUS_DATE_GAP"]
         if r16_events:
             r16 = r16_events[0]
-            assert r16.severity == "WARNING", "R16 should be downgraded to WARNING"
-            assert r16.weight == 0.10, "R16 weight should be 0.10"
-            assert r16.evidence.get("severity_downgraded") is True
+            assert _sev(r16) == "WARNING", "R16 should be downgraded to WARNING"
+            assert _wt(r16) == 0.10, "R16 weight should be 0.10"
+            assert _ev(r16).get("severity_downgraded") is True
         
         # Verify missing-field gate was OFF
-        gate_events = [e for e in decision.events if e.rule_id == "GATE_MISSING_FIELDS"]
+        gate_events = [e for e in decision.events if _rid(e) == "GATE_MISSING_FIELDS"]
         if gate_events:
             gate = gate_events[0]
-            assert "DISABLED" in gate.message or gate.evidence.get("missing_fields_enabled") is False, \
+            assert "DISABLED" in _msg(gate) or _ev(gate).get("missing_fields_enabled") is False, \
                 "Missing-field penalties should be gated OFF"
         
         # Verify merchant implausible was gated
-        merchant_events = [e for e in decision.events if "MERCHANT_IMPLAUSIBLE" in e.rule_id]
+        merchant_events = [e for e in decision.events if "MERCHANT_IMPLAUSIBLE" in _rid(e)]
         if merchant_events:
             # Should be GATED version (INFO only)
-            assert any("GATED" in e.rule_id for e in merchant_events), \
+            assert any("GATED" in _rid(e) for e in merchant_events), \
                 "Merchant implausible should be gated when missing_fields_enabled is OFF"
 
     def test_high_confidence_receipt_with_large_date_gap(self):
@@ -365,7 +371,7 @@ class TestBehavioralContracts:
         - Result: Should be "suspicious" or "fake"
         """
         from app.pipelines.rules import _score_and_explain
-        from app.schemas.receipt import ReceiptFeatures, ReceiptRaw
+        from app.schemas.receipt import ReceiptFeatures
         from datetime import datetime, timedelta
         
         # High-confidence receipt with extreme date gap
@@ -373,14 +379,12 @@ class TestBehavioralContracts:
         creation_datetime = datetime(2023, 1, 1) + timedelta(days=600)
         creation_date = creation_datetime.strftime("D:%Y%m%d120000+00'00'")
         
-        raw = ReceiptRaw(
-            file_path="/tmp/suspicious_receipt.pdf",
-            full_text="Restaurant Receipt\nDate: 2023-01-01\nTotal: $45.00\nTax: $3.60",
-            metadata={"creation_date": creation_date},
-        )
-        
         features = ReceiptFeatures(
-            raw=raw,
+            file_features={
+                "file_size_bytes": 50000,
+                "source_type": "pdf",
+                "creation_date": creation_date,
+            },
             text_features={
                 "receipt_date": receipt_date,
                 "has_date": True,
@@ -390,14 +394,13 @@ class TestBehavioralContracts:
                 "has_any_amount": True,
                 "total_line_present": True,
                 "total_amount": 45.00,
+                "geo_country_guess": "US",
+                "geo_confidence": 0.6,
+                "lang_guess": "en",
+                "lang_confidence": 0.9,
             },
             layout_features={},
-            metadata_features={"creation_date": creation_date},
-            doc_profile={
-                "family": "TRANSACTIONAL",
-                "subtype": "POS_RESTAURANT",
-                "confidence": 0.8,
-            },
+            forensic_features={},
         )
         
         # Run scoring
@@ -407,17 +410,28 @@ class TestBehavioralContracts:
         assert decision.label in ["suspicious", "fake"], \
             f"High-confidence receipt with extreme gap should be flagged, got: {decision.label}"
         
+        # Helper to get rule_id from event (dict or dataclass)
+        def _rid(e):
+            return e.get("rule_id") if isinstance(e, dict) else getattr(e, "rule_id", "")
+        def _sev(e):
+            return e.get("severity") if isinstance(e, dict) else getattr(e, "severity", "")
+        def _wt(e):
+            return e.get("weight") if isinstance(e, dict) else getattr(e, "weight", 0)
+
         # Verify R16 was NOT downgraded
-        r16_events = [e for e in decision.events if e.rule_id == "R16_SUSPICIOUS_DATE_GAP"]
+        r16_events = [e for e in decision.events if _rid(e) == "R16_SUSPICIOUS_DATE_GAP"]
         assert len(r16_events) > 0, "R16 should be triggered"
         
         r16 = r16_events[0]
-        assert r16.severity == "CRITICAL", "R16 should remain CRITICAL for extreme gap"
-        assert r16.weight == 0.35, "R16 weight should be 0.35"
-        assert r16.evidence.get("severity_downgraded") is False, "Should NOT be downgraded"
+        assert _sev(r16) == "CRITICAL", "R16 should remain CRITICAL for extreme gap"
+        # raw_weight is the base weight before confidence scaling
+        r16_raw = r16.get("raw_weight") if isinstance(r16, dict) else getattr(r16, "raw_weight", 0)
+        assert r16_raw == 0.35, f"R16 raw_weight should be 0.35, got {r16_raw}"
+        r16_ev = r16.get("evidence", {}) if isinstance(r16, dict) else getattr(r16, "evidence", {})
+        assert r16_ev.get("severity_downgraded") is False, "Should NOT be downgraded"
         
-        # Score should be significantly negative
-        assert decision.score < -0.2, f"Score should be significantly negative, got: {decision.score}"
+        # Score should reflect significant fraud signals
+        assert decision.score > 0.2, f"Score should reflect fraud signals, got: {decision.score}"
 
 
 if __name__ == "__main__":

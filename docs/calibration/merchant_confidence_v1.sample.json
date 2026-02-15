@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "entity": "merchant",
+  "calibrator_type": "piecewise_linear",
+  "version": "merchant_conf_v1_20260125",
+  "breakpoints": [
+    {"x": 0.00, "y": 0.05},
+    {"x": 0.10, "y": 0.15},
+    {"x": 0.20, "y": 0.30},
+    {"x": 0.30, "y": 0.45},
+    {"x": 0.40, "y": 0.58},
+    {"x": 0.50, "y": 0.68},
+    {"x": 0.60, "y": 0.76},
+    {"x": 0.70, "y": 0.82},
+    {"x": 0.80, "y": 0.88},
+    {"x": 0.90, "y": 0.93},
+    {"x": 1.00, "y": 0.96}
+  ],
+  "feature_requirements": ["raw_confidence"],
+  "created_at": "2026-01-25T10:00:00Z",
+  "notes": "Sample calibration artifact for merchant confidence. Slightly conservative mapping that reduces overconfidence in the 0.4-0.7 range. Based on synthetic data analysis showing raw confidence tends to be optimistic for medium-confidence extractions."
+}

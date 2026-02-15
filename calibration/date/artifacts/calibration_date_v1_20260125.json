@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "entity": "date",
+  "calibrator_type": "piecewise_linear",
+  "version": "date_v1_20260125",
+  "created_at": "2026-01-25T22:47:34.270431",
+  "feature_requirements": [
+    "raw_confidence"
+  ],
+  "notes": "Trained on 200 samples using isotonic method",
+  "source_metrics": {
+    "ece": 0.15151907955247468,
+    "brier": 0.25365602895052713,
+    "accuracy": 0.675,
+    "n": 200
+  },
+  "breakpoints": [
+    {
+      "x": 0.3059780835508092,
+      "y": 0.0
+    },
+    {
+      "x": 0.3100468007437638,
+      "y": 0.5
+    },
+    {
+      "x": 0.3118441866735073,
+      "y": 0.5
+    },
+    {
+      "x": 0.3151267582282868,
+      "y": 0.75
+    },
+    {
+      "x": 0.3610882608965648,
+      "y": 0.75
+    },
+    {
+      "x": 0.3613879244913534,
+      "y": 0.8057553956834532
+    },
+    {
+      "x": 0.9324568605890896,
+      "y": 0.8057553956834532
+    },
+    {
+      "x": 0.9343038516506474,
+      "y": 1.0
+    },
+    {
+      "x": 0.943535002567771,
+      "y": 1.0
+    }
+  ],
+  "model_params": {
+    "X_min": 0.3059780835508092,
+    "X_max": 0.943535002567771,
+    "y_min": 0.0,
+    "y_max": 1.0,
+    "n_thresholds": 9
+  },
+  "training_metadata": {
+    "features_used": [
+      "raw_confidence"
+    ],
+    "feature_types": {
+      "raw_confidence": "float64"
+    },
+    "training_samples": 200,
+    "metrics": {
+      "accuracy": 0.675,
+      "precision": 0.6842105263157895,
+      "recall": 0.9629629629629629,
+      "brier_score": 0.25365602895052713,
+      "ece": 0.15151907955247468,
+      "training_samples": 160,
+      "test_samples": 40,
+      "bucket_metrics": {
+        "HIGH": {
+          "precision": 0.7142857142857143,
+          "count": 35,
+          "avg_confidence": 0.8113052415210688
+        },
+        "MEDIUM": {
+          "precision": 0.3333333333333333,
+          "count": 3,
+          "avg_confidence": 0.75
+        },
+        "LOW": {
+          "precision": 0.5,
+          "count": 2,
+          "avg_confidence": 0.20753986443079184
+        }
+      }
+    }
+  }
+}

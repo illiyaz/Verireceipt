@@ -1,0 +1,16 @@
+{
+  "accuracy": 0.805,
+  "precision": 0.805,
+  "recall": 1.0,
+  "brier_score": 0.15728124999999998,
+  "ece": 0.017500000000000293,
+  "training_samples": 800,
+  "test_samples": 200,
+  "bucket_metrics": {
+    "MEDIUM": {
+      "precision": 0.805,
+      "count": 200,
+      "avg_confidence": 0.7874999999999998
+    }
+  }
+}

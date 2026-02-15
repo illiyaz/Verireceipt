@@ -1,0 +1,49 @@
+{
+  "calibration_version": "merchant_v1",
+  "method": "isotonic",
+  "trained_at": "2026-01-25T16:07:50.526323",
+  "features_used": [
+    "best_score",
+    "winner_margin",
+    "candidate_count_filtered",
+    "mode",
+    "seller_zone",
+    "buyer_zone_penalty",
+    "label_next_line",
+    "company_name",
+    "uppercase_header",
+    "title_like",
+    "ref_like",
+    "digit_heavy"
+  ],
+  "feature_types": {
+    "best_score": "float64",
+    "winner_margin": "float64",
+    "candidate_count_filtered": "int64",
+    "mode": "int64",
+    "seller_zone": "bool",
+    "buyer_zone_penalty": "bool",
+    "label_next_line": "bool",
+    "company_name": "bool",
+    "uppercase_header": "bool",
+    "title_like": "bool",
+    "ref_like": "bool",
+    "digit_heavy": "bool"
+  },
+  "bucket_thresholds": {
+    "HIGH": 0.8,
+    "MEDIUM": 0.55,
+    "LOW": 0.25,
+    "NONE": 0.0
+  },
+  "model_params": {},
+  "training_samples": 1000,
+  "metrics": {
+    "accuracy": 0.805,
+    "precision": 0.8080808080808081,
+    "recall": 0.9937888198757764,
+    "brier_score": 0.15119143590583284,
+    "training_samples": 800,
+    "test_samples": 200
+  }
+}

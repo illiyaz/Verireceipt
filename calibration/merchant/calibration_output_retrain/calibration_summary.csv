@@ -1,0 +1,2 @@
+version,n_samples,accuracy,precision,recall,ece,brier,high_bucket_precision,medium_bucket_precision,low_bucket_precision,calibration_method,trained_at
+merchant_v1_20260125,1000,0.805,0.805,1.0,0.017500000000000293,0.15728124999999998,0.0,0.805,0.0,piecewise_linear,2026-01-25T22:26:12.291245

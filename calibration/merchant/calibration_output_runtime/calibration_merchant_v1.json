@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "entity": "merchant",
+  "calibrator_type": "piecewise_linear",
+  "version": "merchant_v1",
+  "created_at": "2026-01-25T21:54:19.412146",
+  "feature_requirements": [
+    "raw_confidence"
+  ],
+  "notes": "Trained on 1000 samples using isotonic method",
+  "source_metrics": {
+    "ece": 0.15119143590583284,
+    "brier": 0.15119143590583284,
+    "accuracy": 0.805,
+    "n": 1000
+  },
+  "breakpoints": [
+    {
+      "x": 5.324131125821859,
+      "y": 0.0
+    },
+    {
+      "x": 5.358176036102832,
+      "y": 0.0
+    },
+    {
+      "x": 5.480017260324529,
+      "y": 0.5
+    },
+    {
+      "x": 6.733156541657325,
+      "y": 0.5
+    },
+    {
+      "x": 6.7347539615036816,
+      "y": 0.5714285714285714
+    },
+    {
+      "x": 7.558146031057666,
+      "y": 0.5714285714285714
+    },
+    {
+      "x": 7.581894912969379,
+      "y": 0.6
+    },
+    {
+      "x": 8.048054244809956,
+      "y": 0.6
+    },
+    {
+      "x": 8.10551953551552,
+      "y": 0.6428571428571429
+    },
+    {
+      "x": 9.090260048233018,
+      "y": 0.6428571428571429
+    },
+    {
+      "x": 9.112590607341025,
+      "y": 0.6666666666666666
+    },
+    {
+      "x": 9.16914705557045,
+      "y": 0.6666666666666666
+    },
+    {
+      "x": 9.185957302913954,
+      "y": 0.7525773195876289
+    },
+    {
+      "x": 12.86236067145495,
+      "y": 0.7525773195876289
+    },
+    {
+      "x": 12.871962236716143,
+      "y": 0.7759336099585062
+    },
+    {
+      "x": 17.506490883485526,
+      "y": 0.7759336099585062
+    },
+    {
+      "x": 17.521871031116234,
+      "y": 0.8333333333333334
+    },
+    {
+      "x": 17.918698778459834,
+      "y": 0.8333333333333334
+    },
+    {
+      "x": 17.930150652904043,
+      "y": 0.9013157894736842
+    },
+    {
+      "x": 20.918802679490234,
+      "y": 0.9013157894736842
+    },
+    {
+      "x": 20.940858798854094,
+      "y": 0.9574468085106383
+    },
+    {
+      "x": 22.702347123537105,
+      "y": 0.9574468085106383
+    },
+    {
+      "x": 22.73972914930779,
+      "y": 1.0
+    },
+    {
+      "x": 24.458538895417227,
+      "y": 1.0
+    }
+  ],
+  "model_params": {
+    "X_min": 5.324131125821859,
+    "X_max": 24.458538895417227,
+    "y_min": 0.0,
+    "y_max": 1.0,
+    "n_thresholds": 24
+  },
+  "training_metadata": {
+    "features_used": [
+      "best_score",
+      "winner_margin",
+      "candidate_count_filtered",
+      "mode",
+      "seller_zone",
+      "buyer_zone_penalty",
+      "label_next_line",
+      "company_name",
+      "uppercase_header",
+      "title_like",
+      "ref_like",
+      "digit_heavy"
+    ],
+    "feature_types": {
+      "best_score": "float64",
+      "winner_margin": "float64",
+      "candidate_count_filtered": "int64",
+      "mode": "int64",
+      "seller_zone": "bool",
+      "buyer_zone_penalty": "bool",
+      "label_next_line": "bool",
+      "company_name": "bool",
+      "uppercase_header": "bool",
+      "title_like": "bool",
+      "ref_like": "bool",
+      "digit_heavy": "bool"
+    },
+    "bucket_thresholds": {
+      "HIGH": 0.8,
+      "MEDIUM": 0.55,
+      "LOW": 0.25,
+      "NONE": 0.0
+    },
+    "training_samples": 1000,
+    "metrics": {
+      "accuracy": 0.805,
+      "precision": 0.8080808080808081,
+      "recall": 0.9937888198757764,
+      "brier_score": 0.15119143590583284,
+      "training_samples": 800,
+      "test_samples": 200
+    }
+  }
+}

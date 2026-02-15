@@ -20,6 +20,7 @@ Advantages:
 
 import json
 import base64
+import logging
 import requests
 import os
 from pathlib import Path
@@ -27,13 +28,16 @@ from typing import Dict, List, Optional, Any
 from PIL import Image
 import io
 
+logger = logging.getLogger(__name__)
 
 # Configuration
 USE_OLLAMA = os.getenv("USE_OLLAMA", "true").lower() == "true"
 OLLAMA_API_URL = os.getenv("OLLAMA_URL", "http://localhost:11434") + "/api/generate"
 DEFAULT_VISION_MODEL = os.getenv("VISION_MODEL", "llama3.2-vision:fp16")
 
-print(f"🔧 Vision LLM Mode: {'Ollama (Development)' if USE_OLLAMA else 'PyTorch (Production)'}")
+logger.info(
+    "Vision LLM Mode: %s", "Ollama (Development)" if USE_OLLAMA else "PyTorch (Production)"
+)
 
 
 def encode_image_to_base64(image_path: str) -> str:
@@ -87,21 +91,16 @@ def query_vision_model(
         return result.get("response", "")
         
     except requests.exceptions.Timeout:
-        print(f"⚠️ Vision model timeout after {timeout}s")
-        print(f"   Try increasing timeout or using a smaller model")
+        logger.warning("Vision model timeout after %ds. Try increasing timeout or using a smaller model.", timeout)
         return ""
     except requests.exceptions.ConnectionError as e:
-        print(f"⚠️ Cannot connect to Ollama service: {e}")
-        print(f"   Check if Ollama is running: ollama list")
-        print(f"   Start Ollama if needed: ollama serve")
+        logger.warning("Cannot connect to Ollama service: %s", e)
         return ""
     except requests.exceptions.RequestException as e:
-        print(f"⚠️ Vision model request error: {e}")
+        logger.warning("Vision model request error: %s", e)
         return ""
     except Exception as e:
-        print(f"⚠️ Vision model unexpected error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.warning("Vision model unexpected error: %s", e, exc_info=True)
         return ""
 
 
@@ -135,7 +134,7 @@ If any field is not visible or unclear, use null. Only return the JSON, no other
     data = _extract_json_object(response)
     if data is not None:
         return data
-    print(f"⚠️  No JSON found in response: {response[:100]}")
+    logger.warning("No JSON found in vision response: %s", response[:100])
     return {}
 
 
@@ -366,7 +365,7 @@ Only return the JSON, no other text."""
         data.setdefault("observable_reasons", [])
         return data
 
-    print(f"⚠️ Vision LLM response has no JSON: {response[:200]}")
+    logger.warning("Vision LLM response has no JSON: %s", response[:200])
     return {"visual_integrity": "suspicious", "confidence": 0.0, "observable_reasons": []}
 
 
@@ -434,18 +433,18 @@ def analyze_receipt_with_vision(
         "visual_integrity_assessment": None,
     }
     
-    print(f"🔍 Analyzing with vision model (Ollama): {model}")
+    logger.info("Analyzing with vision model (Ollama): %s", model)
     
     if extract_data:
-        print("   Extracting receipt data...")
+        logger.info("Extracting receipt data...")
         results["extracted_data"] = extract_receipt_data_with_vision(image_path, model)
     
     if detect_fraud:
-        print("   Detecting fraud indicators...")
+        logger.info("Detecting fraud indicators...")
         results["fraud_detection"] = detect_fraud_indicators_with_vision(image_path, model)
     
     if assess_authenticity:
-        print("   Assessing visual integrity...")
+        logger.info("Assessing visual integrity...")
         results["visual_integrity_assessment"] = assess_receipt_authenticity(image_path, model)
     
     return results
@@ -528,7 +527,7 @@ def build_vision_assessment(image_path: str, model: str = DEFAULT_VISION_MODEL) 
     Vision NEVER outputs "real" or "fake" verdicts.
     Vision ONLY provides evidence that rules.py can use to veto.
     """
-    print(f"🔍 Building vision assessment (veto-only): {Path(image_path).name}")
+    logger.info("Building vision assessment (veto-only): %s", Path(image_path).name)
     
     # Run forensic fraud detection (the good part of this file)
     fraud = detect_fraud_indicators_with_vision(image_path, model)
@@ -568,11 +567,11 @@ def build_vision_assessment(image_path: str, model: str = DEFAULT_VISION_MODEL) 
         visual_integrity = "clean"
         confidence = float(fraud.get("confidence", 0.0))
     
-    print(f"   → visual_integrity: {visual_integrity} (confidence: {confidence:.2f})")
+    logger.info("visual_integrity: %s (confidence: %.2f)", visual_integrity, confidence)
     if hard_fail_claims:
-        print(f"   → HARD_FAIL claims: {len(hard_fail_claims)}")
+        logger.info("HARD_FAIL claims: %d", len(hard_fail_claims))
         for c in hard_fail_claims[:3]:
-            print(f"      • {c.get('observable_claim', 'N/A')}")
+            logger.info("  claim: %s", c.get('observable_claim', 'N/A'))
     
     return {
         "visual_integrity": visual_integrity,
@@ -600,8 +599,7 @@ def get_hybrid_verdict_DEPRECATED(
     
     This function is kept only for backward compatibility and will be removed.
     """
-    print("⚠️ WARNING: get_hybrid_verdict() is DEPRECATED and violates veto-only design!")
-    print("   Use build_vision_assessment() instead.")
+    logger.warning("get_hybrid_verdict() is DEPRECATED and violates veto-only design. Use build_vision_assessment() instead.")
     # This function is deprecated and should not be used.
     # Return rule-based decision unchanged (vision does not interfere).
     return {

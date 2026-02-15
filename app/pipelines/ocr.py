@@ -3,9 +3,13 @@
 OCR pipeline for VeriReceipt.
 
 Supports multiple OCR engines with automatic fallback:
-1. EasyOCR (best accuracy, ~85-90%)
-2. Tesseract (fallback, ~60-70%)
+1. Tesseract (best accuracy on thermal/POS receipts, ~90%+)
+2. EasyOCR (fallback for non-Latin scripts)
 3. Empty strings (if no OCR available)
+
+Benchmark (Popeyes POS receipt, Feb 2026):
+- Tesseract: 8/10 accuracy, ~1s latency
+- EasyOCR:   1/10 accuracy, ~2s latency ($ -> S, garbled amounts)
 
 This allows the pipeline to continue even without OCR,
 using other signals (metadata, structure, etc.).
@@ -95,17 +99,49 @@ def _run_easyocr(img: Image.Image) -> tuple[str, float, list]:
         return "", 0.0, []
 
 
-def _run_tesseract(img: Image.Image) -> str:
-    """Run Tesseract OCR on a single image"""
+def _run_tesseract(img: Image.Image) -> tuple:
+    """
+    Run Tesseract OCR on a single image with confidence scoring.
+    
+    Returns:
+        (text, avg_confidence, detailed_results)
+    """
     try:
+        # Get full text
         text = pytesseract.image_to_string(img)
-        return text or ""
+        if not text:
+            return "", 0.0, []
+        
+        # Get per-word confidence via image_to_data
+        try:
+            data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+            word_confs = [int(c) for c in data.get("conf", []) if int(c) >= 0]
+            avg_conf = (sum(word_confs) / len(word_confs) / 100.0) if word_confs else 0.5
+            
+            # Build detailed results with bounding boxes
+            detailed = []
+            for i in range(len(data.get("text", []))):
+                word = data["text"][i].strip()
+                conf = int(data["conf"][i])
+                if word and conf >= 0:
+                    detailed.append({
+                        "text": word,
+                        "confidence": conf / 100.0,
+                        "bbox": [data["left"][i], data["top"][i],
+                                  data["left"][i] + data["width"][i],
+                                  data["top"][i] + data["height"][i]],
+                    })
+        except Exception:
+            avg_conf = 0.5
+            detailed = []
+        
+        return text, avg_conf, detailed
     except TesseractNotFoundError:
         logger.warning("Tesseract binary not found in PATH")
-        return ""
+        return "", 0.0, []
     except Exception as e:
         logger.warning(f"Tesseract error: {e}")
-        return ""
+        return "", 0.0, []
 
 
 def run_ocr_on_images(images: List[Image.Image], preprocess: bool = True) -> Tuple[List[str], Dict]:
@@ -146,32 +182,43 @@ def run_ocr_on_images(images: List[Image.Image], preprocess: bool = True) -> Tup
         images_processed = images
         preprocessing_meta = [{}] * len(images)
     
-    # Determine which engine to use
-    use_easyocr = HAS_EASYOCR and OCR_ENGINE in ["auto", "easyocr"]
-    use_tesseract = HAS_TESSERACT and (OCR_ENGINE == "tesseract" or (OCR_ENGINE == "auto" and not use_easyocr))
+    # Determine which engine to use (Tesseract preferred since Feb 2026 benchmark)
+    use_tesseract = HAS_TESSERACT and OCR_ENGINE in ["auto", "tesseract"]
+    use_easyocr = HAS_EASYOCR and (OCR_ENGINE == "easyocr" or (OCR_ENGINE == "auto" and not use_tesseract))
     
-    if not use_easyocr and not use_tesseract:
-        logger.warning("⚠️ No OCR engine available. Install easyocr or pytesseract.")
+    if not use_tesseract and not use_easyocr:
+        logger.warning("No OCR engine available. Install pytesseract or easyocr.")
         return [""] * len(images), {"engine": "none", "confidences": [0.0] * len(images)}
     
     results = []
     confidences = []
     detailed_results = []
     
-    for i, img in enumerate(images_processed):
+    for i, img in enumerate(images):
         logger.info(f"Running OCR on image {i+1}/{len(images)}...")
         
-        if use_easyocr:
-            text, conf, detailed = _run_easyocr(img)
-            engine = "easyocr"
-        elif use_tesseract:
-            text = _run_tesseract(img)
-            conf = None  # Tesseract doesn't provide confidence - use None not 0.0
-            detailed = []
+        if use_tesseract:
+            # Strategy: try Tesseract on ORIGINAL image first (preprocessing
+            # can degrade Tesseract output on clean images). Only retry with
+            # preprocessed image if confidence is low.
+            text, conf, detailed = _run_tesseract(img)
             engine = "tesseract"
+            
+            # If confidence is low and we have a preprocessed version, retry
+            if conf < 0.5 and i < len(images_processed) and images_processed[i] is not img:
+                text_pp, conf_pp, detailed_pp = _run_tesseract(images_processed[i])
+                if conf_pp > conf and len(text_pp) >= len(text) * 0.8:
+                    logger.info(f"Preprocessed image gave better Tesseract result ({conf_pp:.2f} vs {conf:.2f})")
+                    text, conf, detailed = text_pp, conf_pp, detailed_pp
+                    engine = "tesseract+preprocess"
+        elif use_easyocr:
+            # EasyOCR benefits from preprocessing, use preprocessed image
+            img_for_ocr = images_processed[i] if i < len(images_processed) else img
+            text, conf, detailed = _run_easyocr(img_for_ocr)
+            engine = "easyocr"
         else:
             text = ""
-            conf = None  # OCR not available - use None not 0.0
+            conf = None
             detailed = []
             engine = "none"
         
@@ -179,7 +226,7 @@ def run_ocr_on_images(images: List[Image.Image], preprocess: bool = True) -> Tup
         confidences.append(conf)
         detailed_results.append(detailed)
         conf_str = f"{conf:.2f}" if conf is not None else "N/A"
-        logger.info(f"✅ OCR completed for image {i+1} ({len(text)} chars, conf={conf_str})")
+        logger.info(f"OCR completed for image {i+1} ({engine}, {len(text)} chars, conf={conf_str})")
     
     # Calculate average confidence, filtering out None values
     valid_confidences = [c for c in confidences if c is not None]

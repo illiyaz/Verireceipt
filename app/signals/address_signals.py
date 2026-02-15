@@ -79,11 +79,21 @@ def signal_addr_merchant_consistency(
     """
     status_raw = merchant_address_consistency.get("status", "UNKNOWN")
     score = merchant_address_consistency.get("score", 0.0)
-    evidence_dict = merchant_address_consistency.get("evidence", {})
+    # evidence can be a list of strings (from assess_merchant_address_consistency)
+    # or a dict — handle both defensively
+    evidence_raw = merchant_address_consistency.get("evidence", [])
+    if isinstance(evidence_raw, dict):
+        evidence_list = list(evidence_raw.values())
+        evidence_dict = evidence_raw
+    else:
+        evidence_list = list(evidence_raw) if evidence_raw else []
+        evidence_dict = {}
     
     # Map status to signal
     if status_raw == "UNKNOWN":
-        gating_reason = evidence_dict.get("reason", "Unknown gating reason")
+        gating_reason = evidence_dict.get("reason") or (
+            evidence_list[0] if evidence_list else "Unknown gating reason"
+        )
         return SignalV1(
             name="addr.merchant_consistency",
             status="GATED",
@@ -100,7 +110,7 @@ def signal_addr_merchant_consistency(
             evidence={
                 "consistency_status": status_raw,
                 "score": score,
-                "overlap_signals": evidence_dict.get("overlap_signals", []),
+                "overlap_signals": evidence_list,
             },
             interpretation=f"Merchant and address are consistent (score: {score:.2f})",
         )
@@ -113,6 +123,7 @@ def signal_addr_merchant_consistency(
                 "consistency_status": status_raw,
                 "score": score,
                 "mismatch_type": status_raw,
+                "signals": evidence_list,
             },
             interpretation=f"Merchant-address mismatch detected: {status_raw} (score: {score:.2f})",
         )

@@ -259,12 +259,6 @@ Event Summary:
         """Format missing field analysis with gate reasoning."""
         audit_events = AuditFormatter._get_all_events(decision)
         
-        # DEBUG: Print all events to see what we're receiving
-        print(f"\n🔍 AUDIT FORMATTER - Missing Field Analysis:")
-        print(f"   Total events received: {len(audit_events)}")
-        event_codes = [e.get("code") or e.get("rule_id") for e in audit_events if isinstance(e, dict)]
-        print(f"   Event codes/rule_ids: {event_codes}")
-        
         # Check if missing-field gate was triggered
         # Note: Events may have either 'code' (from AuditEvent) or 'rule_id' (from RuleEvent)
         gate_event = None
@@ -272,11 +266,7 @@ Event Summary:
             event_code = event.get("code") or event.get("rule_id")
             if event_code == "GATE_MISSING_FIELDS":
                 gate_event = event
-                print(f"   ✅ Found GATE_MISSING_FIELDS event!")
                 break
-        
-        if not gate_event:
-            print(f"   ❌ GATE_MISSING_FIELDS event NOT found in audit events")
         
         section = f"""
 ═══════════════════════════════════════════════════════════════════════════
@@ -286,10 +276,37 @@ MISSING FIELD ANALYSIS
         
         if gate_event:
             evidence = gate_event.get("evidence", {})
-            section += f"""
+            gate_message = gate_event.get("message", "")
+            # Determine if penalties are ENABLED or DISABLED from the event message
+            penalties_enabled = "ENABLED" in gate_message.upper() and "DISABLED" not in gate_message.upper()
+            
+            if penalties_enabled:
+                section += f"""
+✓ Missing-field penalties ENABLED (normal mode)
+
+Classification Context:
+  • Geo Country: {evidence.get("geo_country_guess") or "N/A"} (confidence: {evidence.get("geo_confidence") or 0.0:.2f})
+  • Doc Subtype: {evidence.get("doc_subtype_guess") or "N/A"} (confidence: {evidence.get("doc_profile_confidence") or 0.0:.2f})
+  • Language: {evidence.get("lang_guess") or "N/A"} (confidence: {evidence.get("lang_confidence") or 0.0:.2f})
+
+This document has sufficient geo/doc classification confidence.
+Missing critical fields (merchant, date, etc.) are treated as fraud indicators.
+"""
+                # Check for missing field events
+                missing_events = [
+                    e for e in audit_events 
+                    if (e.get("code") or e.get("rule_id")) in ("R5_NO_AMOUNTS", "R6_NO_TOTAL_LINE", "R8_NO_DATE", "R9_NO_MERCHANT")
+                ]
+                if missing_events:
+                    section += "\nMissing Field Events Triggered:\n"
+                    for event in missing_events:
+                        code = event.get("code") or event.get("rule_id")
+                        section += f"  • {code}: {event.get('message')}\n"
+            else:
+                section += f"""
 ⚠️  MISSING-FIELD PENALTIES DISABLED
 
-Reason: {gate_event.get("message", "Unknown")}
+Reason: {gate_message}
 
 Gate Trigger Conditions:
   • Geo Country: {evidence.get("geo_country_guess") or "N/A"} (confidence: {evidence.get("geo_confidence") or 0.0:.2f})
@@ -308,23 +325,19 @@ Auditor Guidance:
   ✓ Do NOT mark suspicious solely due to missing fields when gate is active
 """
         else:
-            section += """
+            # No gate event at all — use top-level decision field
+            mfe = decision.get("missing_fields_enabled")
+            if mfe is False:
+                section += """
+⚠️  Missing-field penalties DISABLED (no gate event details available)
+"""
+            else:
+                section += """
 ✓ Missing-field penalties ENABLED (normal mode)
 
 This document has sufficient geo/doc classification confidence.
 Missing critical fields (merchant, date, etc.) are treated as fraud indicators.
 """
-            
-            # Check for missing field events
-            missing_events = [
-                e for e in audit_events 
-                if e.get("code") in ("R5_NO_AMOUNTS", "R6_NO_TOTAL_LINE", "R8_NO_DATE", "R9_NO_MERCHANT")
-            ]
-            
-            if missing_events:
-                section += "\nMissing Field Events Triggered:\n"
-                for event in missing_events:
-                    section += f"  • {event.get('code')}: {event.get('message')}\n"
         
         return section
     
