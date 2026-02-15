@@ -3723,6 +3723,9 @@ def _score_and_explain(
         # Reconstruct from lines if available
         lines = lf.get("lines", [])
         full_text = "\n".join(lines) if lines else ""
+    if not full_text:
+        # Final fallback: use full_text from text_features (e.g. in test context)
+        full_text = tf.get("full_text", "")
     
     tamper_keywords = [
         "receiptfaker", "receipt faker", "fake receipt", "receipt generator",
@@ -5601,6 +5604,273 @@ def _score_and_explain(
 
     except Exception as e:
         logger.warning(f"R7D_TAX_COMPONENT_VERIFICATION check failed: {e}")
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 5H: GSTIN / Tax Registration Validation (India-specific)
+    # ---------------------------------------------------------------------------
+    # Expert insight: Indian GSTIN is 15 chars: 2-digit state code + 10-char PAN
+    # + 1 entity code + 1 Z + 1 check digit. Fake receipts often have malformed GSTINs.
+    # VAT TIN is 11 digits for older registrations.
+    try:
+        _geo = str(tf.get("geo_country_guess") or "").upper()
+        _geo_conf_gstin = float(tf.get("geo_confidence") or 0)
+
+        if _geo == "IN" and _geo_conf_gstin >= 0.5:
+            _ft = full_text or ""
+            # Also check VLM-extracted GSTIN
+            _vlm_ext = tf.get("vlm_extraction") or {}
+            _vlm_gstin = ""
+            if isinstance(_vlm_ext, dict):
+                _vlm_gstin = str(_vlm_ext.get("gstin") or "")
+
+            # Find all GSTIN-like patterns in text (strict regex for well-formed)
+            _gstin_candidates = re.findall(r"\b(\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d][A-Z\d])\b", _ft.upper())
+            # Looser extraction: alphanumeric strings near GSTIN/GST keywords (~15 chars)
+            _gstin_context_matches = re.findall(
+                r"(?:GSTIN|GST\s*(?:NO|NUMBER|REG|ID))[:\s]*([A-Z0-9]{13,17})\b",
+                _ft.upper(),
+            )
+            for _gcm in _gstin_context_matches:
+                if _gcm not in _gstin_candidates:
+                    _gstin_candidates.append(_gcm)
+            if _vlm_gstin and len(_vlm_gstin) >= 15:
+                _vlm_gstin_clean = _vlm_gstin.upper().replace(" ", "")
+                if _vlm_gstin_clean not in _gstin_candidates:
+                    _gstin_candidates.append(_vlm_gstin_clean)
+
+            _gstin_issues = []
+            for _gstin in set(_gstin_candidates):
+                if len(_gstin) != 15:
+                    _gstin_issues.append({"gstin": _gstin, "issue": "wrong_length", "length": len(_gstin)})
+                    continue
+                _state_code = _gstin[:2]
+                # Valid Indian state codes: 01-38 (including union territories)
+                try:
+                    _sc = int(_state_code)
+                    if _sc < 1 or _sc > 38:
+                        _gstin_issues.append({"gstin": _gstin, "issue": "invalid_state_code", "state_code": _state_code})
+                except ValueError:
+                    _gstin_issues.append({"gstin": _gstin, "issue": "non_numeric_state_code", "state_code": _state_code})
+
+                # Check PAN structure (chars 3-12): AAAAA0000A
+                _pan = _gstin[2:12]
+                if not re.match(r"^[A-Z]{5}\d{4}[A-Z]$", _pan):
+                    _gstin_issues.append({"gstin": _gstin, "issue": "invalid_pan_format", "pan": _pan})
+
+                # 13th char must be a digit (1-9) or Z for entity code
+                _entity = _gstin[12]
+                if _entity not in "123456789Z":
+                    _gstin_issues.append({"gstin": _gstin, "issue": "invalid_entity_code", "char": _entity})
+
+                # 14th char is typically Z
+                if _gstin[13] != "Z":
+                    _gstin_issues.append({"gstin": _gstin, "issue": "missing_z_at_pos14", "char": _gstin[13]})
+
+            # Also cross-check state code against address
+            _vlm_addr = str(tf.get("vlm_address") or "").lower()
+            _pin_code = str(tf.get("pin_code") or "")
+            if _gstin_candidates and _pin_code and len(_pin_code) >= 6:
+                _pin_state = _pin_code[:2]  # First 2 digits of PIN indicate postal circle
+                for _gstin in set(_gstin_candidates):
+                    if len(_gstin) >= 2:
+                        _gstin_state = _gstin[:2]
+                        # Map GSTIN state codes to PIN postal circles (approximate)
+                        _GSTIN_TO_PIN_MAP = {
+                            "36": ["50"],  # Telangana → 50xxxx
+                            "37": ["51", "52", "53"],  # Andhra Pradesh → 51-53
+                            "29": ["56", "57", "58"],  # Karnataka → 56-58
+                            "33": ["60", "61", "62", "63", "64"],  # Tamil Nadu → 60-64
+                            "27": ["40", "41", "42", "43", "44"],  # Maharashtra → 40-44
+                            "07": ["11"],  # Delhi → 11xxxx
+                        }
+                        _expected_pins = _GSTIN_TO_PIN_MAP.get(_gstin_state, [])
+                        if _expected_pins and _pin_state not in _expected_pins:
+                            _gstin_issues.append({
+                                "gstin": _gstin, "issue": "state_pin_mismatch",
+                                "gstin_state_code": _gstin_state,
+                                "pin_prefix": _pin_state,
+                                "expected_pin_prefixes": _expected_pins,
+                            })
+
+            if _gstin_issues:
+                _worst = _gstin_issues[0]
+                _sev = "CRITICAL" if _worst["issue"] in ("invalid_pan_format", "invalid_state_code", "state_pin_mismatch") else "WARNING"
+                _wt = 0.15 if _sev == "CRITICAL" else 0.08
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_GSTIN_FORMAT",
+                    severity=_sev,
+                    weight=_wt,
+                    message=f"GSTIN format issue: {_worst['issue']} ({_worst.get('gstin', '')[:15]})",
+                    evidence={
+                        "issues": _gstin_issues[:3],
+                        "gstin_candidates": list(set(_gstin_candidates))[:3],
+                    },
+                    reason_text=(
+                        f"🔢 GSTIN Validation: {_worst['issue'].replace('_', ' ').title()} detected in "
+                        f"GSTIN '{_worst.get('gstin', '')}'. Indian GSTIN must be 15 characters: "
+                        f"2-digit state code + 10-char PAN + entity code + Z + check digit. "
+                        f"Invalid GSTIN strongly suggests a fabricated document."
+                    ),
+                )
+            elif _gstin_candidates:
+                # GSTIN found and valid — emit info
+                emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_GSTIN_FORMAT",
+                    severity="INFO",
+                    weight=0.0,
+                    message=f"GSTIN validated: {list(set(_gstin_candidates))[0][:15]}",
+                    evidence={"gstin_candidates": list(set(_gstin_candidates))[:3], "valid": True},
+                )
+    except Exception as e:
+        logger.warning(f"R_GSTIN_FORMAT check failed: {e}")
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 5I: No Electronic ID Detection (Handwritten / Manual Receipts)
+    # ---------------------------------------------------------------------------
+    # Expert insight: Legitimate modern receipts have POS terminal IDs, transaction
+    # numbers, barcodes, QR codes, or electronic receipt numbers. Handwritten bills
+    # that lack ANY electronic identifier are trivially easy to fabricate.
+    try:
+        _ft_lower = (full_text or "").lower()
+        _is_handwritten = any(
+            e.get("rule_id") == "R_HANDWRITTEN_RECEIPT"
+            for e in events
+            if isinstance(e, dict) and e.get("weight", 0) > 0
+        )
+        _doc_sub = str(legacy_doc_profile.get("subtype") or tf.get("doc_subtype_guess") or "").upper()
+
+        # Only check for transaction-type documents (not invoices which may be typed)
+        _is_transactional = _doc_sub in (
+            "FUEL", "POS_RETAIL", "POS_RESTAURANT", "POS_GROCERY",
+            "RECEIPT", "TAXI", "AUTO_RICKSHAW", "PARKING",
+        )
+
+        if _is_transactional:
+            _electronic_patterns = [
+                r"\b(transaction|trans|txn)\s*[#:]?\s*\d{4,}", # Transaction ID
+                r"\b(invoice|inv|bill)\s*[#:]?\s*\d{4,}",     # Invoice/bill number
+                r"\b(receipt|rcpt)\s*[#:]?\s*\d{4,}",          # Receipt number
+                r"\b(terminal|tid|mid)\s*[#:]?\s*\d{3,}",     # Terminal/MID
+                r"\bpos\s*[#:]?\s*\d{2,}",                     # POS number
+                r"\b(auth|approval)\s*[#:]?\s*\d{4,}",        # Authorization code
+                r"\b(barcode|qr\s*code|upi)\b",               # Digital identifiers
+                r"\bref\s*[#:]?\s*\d{4,}",                    # Reference number
+                r"\b\d{4}\s*\*{4,}\s*\d{4}\b",                # Card number pattern
+            ]
+
+            _has_electronic_id = False
+            for pat in _electronic_patterns:
+                if re.search(pat, _ft_lower):
+                    _has_electronic_id = True
+                    break
+
+            # Also check VLM extraction for receipt_number
+            _vlm_ext_eid = tf.get("vlm_extraction") or {}
+            if isinstance(_vlm_ext_eid, dict):
+                _vlm_rcpt_no = _vlm_ext_eid.get("receipt_number")
+                if _vlm_rcpt_no and str(_vlm_rcpt_no).strip():
+                    _has_electronic_id = True
+
+            if not _has_electronic_id:
+                _eid_weight = 0.10 if _is_handwritten else 0.05
+                _eid_severity = "WARNING" if _is_handwritten else "INFO"
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_NO_ELECTRONIC_ID",
+                    severity=_eid_severity,
+                    weight=_eid_weight,
+                    message=f"No electronic transaction ID, POS terminal number, or receipt number found",
+                    evidence={
+                        "doc_subtype": _doc_sub,
+                        "is_handwritten": _is_handwritten,
+                        "has_electronic_id": False,
+                        "patterns_checked": len(_electronic_patterns),
+                    },
+                    reason_text=(
+                        f"🔖 No Electronic ID: This {_doc_sub.lower()} receipt has no transaction number, "
+                        f"POS terminal ID, authorization code, or other electronic identifier. "
+                        f"{'Combined with handwritten text, this strongly suggests a manually fabricated document.' if _is_handwritten else 'Modern legitimate receipts typically include at least one electronic identifier.'}"
+                    ),
+                )
+    except Exception as e:
+        logger.warning(f"R_NO_ELECTRONIC_ID check failed: {e}")
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 5J: PIN Code ↔ City Cross-Validation (India-specific)
+    # ---------------------------------------------------------------------------
+    # Expert insight: Indian PIN codes map to specific postal circles/cities.
+    # A PIN that doesn't match the stated city suggests fabrication.
+    try:
+        _geo_pin = str(tf.get("geo_country_guess") or "").upper()
+        if _geo_pin == "IN":
+            _pin = str(tf.get("pin_code") or "").strip()
+            _vlm_addr_pin = str(tf.get("vlm_address") or "").lower()
+            _city = str(tf.get("city") or "").lower().strip()
+
+            # Also extract PIN from VLM address if not from features
+            if not _pin and _vlm_addr_pin:
+                _pin_match = re.search(r"\b(\d{6})\b", _vlm_addr_pin)
+                if _pin_match:
+                    _pin = _pin_match.group(1)
+
+            if _pin and len(_pin) == 6 and _pin.isdigit():
+                _pin_prefix = _pin[:3]  # First 3 digits = postal district
+
+                # Map of PIN prefixes to expected cities/areas
+                _PIN_CITY_MAP = {
+                    "500": ["hyderabad", "secunderabad", "telangana"],
+                    "501": ["hyderabad", "medchal", "telangana"],
+                    "400": ["mumbai", "thane", "maharashtra"],
+                    "110": ["delhi", "new delhi"],
+                    "560": ["bangalore", "bengaluru", "karnataka"],
+                    "600": ["chennai", "tamil nadu"],
+                    "700": ["kolkata", "west bengal"],
+                    "411": ["pune", "maharashtra"],
+                    "380": ["ahmedabad", "gujarat"],
+                    "302": ["jaipur", "rajasthan"],
+                    "226": ["lucknow", "uttar pradesh"],
+                    "201": ["noida", "ghaziabad", "uttar pradesh"],
+                    "122": ["gurgaon", "gurugram", "haryana"],
+                    "160": ["chandigarh", "punjab"],
+                    "682": ["kochi", "cochin", "ernakulam", "kerala"],
+                    "695": ["trivandrum", "thiruvananthapuram", "kerala"],
+                }
+
+                _expected_cities = _PIN_CITY_MAP.get(_pin_prefix, [])
+                if _expected_cities:
+                    # Check if city or VLM address mentions any expected city
+                    _addr_text = _city + " " + _vlm_addr_pin
+                    _city_match = any(c in _addr_text for c in _expected_cities)
+
+                    if not _city_match:
+                        score += emit_event(
+                            events=events,
+                            reasons=reasons,
+                            rule_id="R_PIN_CITY_MISMATCH",
+                            severity="WARNING",
+                            weight=0.08,
+                            message=f"PIN code {_pin} doesn't match stated city/address",
+                            evidence={
+                                "pin_code": _pin,
+                                "pin_prefix": _pin_prefix,
+                                "expected_cities": _expected_cities,
+                                "detected_city": _city or "(none)",
+                                "vlm_address_snippet": _vlm_addr_pin[:80],
+                            },
+                            reason_text=(
+                                f"📮 PIN-City Mismatch: PIN code {_pin} (prefix {_pin_prefix}) "
+                                f"maps to {'/'.join(_expected_cities[:3])}, but the address doesn't "
+                                f"mention any of these locations. This suggests the PIN code or "
+                                f"address may be fabricated."
+                            ),
+                        )
+    except Exception as e:
+        logger.warning(f"R_PIN_CITY_MISMATCH check failed: {e}")
 
     # ---------------------------------------------------------------------------
     # RULE GROUP 6: Apply learned rules from feedback

@@ -1263,3 +1263,131 @@ class TestHandwrittenAndAmountRules:
         })
         vlm_events = [e for e in result.events if e.get("rule_id") == "R_OCR_DEGRADED_VLM_ONLY"]
         assert len(vlm_events) == 0
+
+
+# =============================================================================
+# New Rules: GSTIN, No Electronic ID, PIN-City
+# =============================================================================
+
+class TestGSTINAndElectronicIDRules:
+    """Tests for R_GSTIN_FORMAT, R_NO_ELECTRONIC_ID, R_PIN_CITY_MISMATCH."""
+
+    def _make_features(self, text_features, layout_features=None, forensic_features=None):
+        from app.pipelines.rules import _score_and_explain, ReceiptFeatures
+        defaults = {
+            "full_text": "STORE\nItem 1  10.00\nTotal  10.00",
+            "has_total": True, "total_amount": 10.0, "total_line_present": True,
+            "has_date": True, "receipt_date": "2024-01-15",
+            "has_merchant": True, "merchant_candidate": "Test Store",
+            "has_line_items": True, "line_items_sum": 10.0, "line_items_count": 1,
+            "ocr_confidence": 0.90, "ocr_low_conf_word_ratio": 0.05,
+            "ocr_engine": "tesseract",
+            "geo_country_guess": "US", "geo_confidence": 0.8,
+            "doc_family_guess": "TRANSACTIONAL", "doc_subtype_guess": "POS_RETAIL",
+            "doc_profile_confidence": 0.7,
+        }
+        defaults.update(text_features)
+        lf = layout_features or {"num_lines": 5, "numeric_line_ratio": 0.3, "lines": []}
+        ff = forensic_features or {}
+        features = ReceiptFeatures(
+            file_features={}, text_features=defaults,
+            layout_features=lf, forensic_features=ff,
+        )
+        return _score_and_explain(features)
+
+    # --- R_GSTIN_FORMAT ---
+
+    def test_gstin_valid_emits_info(self):
+        """Valid GSTIN emits INFO (weight=0) not WARNING."""
+        result = self._make_features({
+            "full_text": "GSTIN: 36ACMPK4116D1ZV\nTotal 3000",
+            "geo_country_guess": "IN", "geo_confidence": 0.8,
+        })
+        gstin_events = [e for e in result.events if e.get("rule_id") == "R_GSTIN_FORMAT"]
+        assert len(gstin_events) == 1
+        assert gstin_events[0]["severity"] == "INFO"
+        assert gstin_events[0]["weight"] == 0.0
+
+    def test_gstin_invalid_pan_fires(self):
+        """Invalid PAN in GSTIN fires CRITICAL."""
+        result = self._make_features({
+            "full_text": "GSTIN: 36123456789A1ZV\nTotal 3000",
+            "geo_country_guess": "IN", "geo_confidence": 0.8,
+        })
+        gstin_events = [e for e in result.events if e.get("rule_id") == "R_GSTIN_FORMAT" and e.get("weight", 0) > 0]
+        assert len(gstin_events) == 1
+        assert gstin_events[0]["severity"] == "CRITICAL"
+
+    def test_gstin_not_checked_for_non_india(self):
+        """GSTIN rule does NOT check for non-India geo."""
+        result = self._make_features({
+            "full_text": "GSTIN: 99INVALID0000X0XX\nTotal 3000",
+            "geo_country_guess": "US", "geo_confidence": 0.8,
+        })
+        gstin_events = [e for e in result.events if e.get("rule_id") == "R_GSTIN_FORMAT"]
+        assert len(gstin_events) == 0
+
+    # --- R_NO_ELECTRONIC_ID ---
+
+    def test_no_electronic_id_fires_on_fuel_without_ids(self):
+        """R_NO_ELECTRONIC_ID fires on fuel receipt without any electronic IDs."""
+        result = self._make_features({
+            "full_text": "FUEL STATION\nPetrol 30L\nTotal Rs.3000\nThank you",
+            "doc_subtype_guess": "FUEL",
+            "geo_country_guess": "IN",
+        })
+        eid_events = [e for e in result.events if e.get("rule_id") == "R_NO_ELECTRONIC_ID"]
+        assert len(eid_events) == 1
+
+    def test_no_electronic_id_does_not_fire_with_txn(self):
+        """R_NO_ELECTRONIC_ID does NOT fire when transaction ID present."""
+        result = self._make_features({
+            "full_text": "FUEL STATION\nTransaction #12345\nPetrol 30L\nTotal Rs.3000",
+            "doc_subtype_guess": "FUEL",
+            "geo_country_guess": "IN",
+        })
+        eid_events = [e for e in result.events if e.get("rule_id") == "R_NO_ELECTRONIC_ID"]
+        assert len(eid_events) == 0
+
+    def test_no_electronic_id_does_not_fire_with_vlm_receipt_number(self):
+        """R_NO_ELECTRONIC_ID does NOT fire when VLM extracts receipt number."""
+        result = self._make_features({
+            "full_text": "FUEL STATION\nPetrol 30L\nTotal Rs.3000",
+            "doc_subtype_guess": "FUEL",
+            "vlm_extraction": {"receipt_number": "6289"},
+        })
+        eid_events = [e for e in result.events if e.get("rule_id") == "R_NO_ELECTRONIC_ID"]
+        assert len(eid_events) == 0
+
+    # --- R_PIN_CITY_MISMATCH ---
+
+    def test_pin_city_match_no_fire(self):
+        """R_PIN_CITY_MISMATCH does NOT fire when PIN matches city."""
+        result = self._make_features({
+            "geo_country_guess": "IN", "geo_confidence": 0.8,
+            "pin_code": "500008",
+            "vlm_address": "#9-4-82, Nanal Nagar, Hyderabad - 500 008",
+        })
+        pin_events = [e for e in result.events if e.get("rule_id") == "R_PIN_CITY_MISMATCH"]
+        assert len(pin_events) == 0
+
+    def test_pin_city_mismatch_fires(self):
+        """R_PIN_CITY_MISMATCH fires when PIN doesn't match city."""
+        result = self._make_features({
+            "geo_country_guess": "IN", "geo_confidence": 0.8,
+            "pin_code": "400001",  # Mumbai PIN
+            "city": "",
+            "vlm_address": "123 Some Street, Bangalore - 400 001",  # Claims Bangalore but Mumbai PIN
+        })
+        pin_events = [e for e in result.events if e.get("rule_id") == "R_PIN_CITY_MISMATCH"]
+        assert len(pin_events) == 1
+        assert pin_events[0]["evidence"]["expected_cities"] == ["mumbai", "thane", "maharashtra"]
+
+    def test_pin_city_not_checked_for_non_india(self):
+        """R_PIN_CITY_MISMATCH does NOT check for non-India geo."""
+        result = self._make_features({
+            "geo_country_guess": "US", "geo_confidence": 0.8,
+            "pin_code": "500008",
+        })
+        pin_events = [e for e in result.events if e.get("rule_id") == "R_PIN_CITY_MISMATCH"]
+        assert len(pin_events) == 0
