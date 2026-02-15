@@ -711,12 +711,28 @@ def _extract_receipt_date(text: str) -> Optional[str]:
     from datetime import datetime
     
     for rx in _DATE_REGEXES:
-        match = rx.search(text)
-        if match:
+        for match in rx.finditer(text):
             date_str = match.group(0)
+            
+            # --- Address-context filter ---
+            # Skip date-like patterns embedded in addresses (e.g., "#9-4-82 Nanal Nagar")
+            start = match.start()
+            end = match.end()
+            # Check if preceded by '#' (Indian address number prefix)
+            prefix = text[max(0, start - 3):start].strip()
+            if prefix.endswith("#") or prefix.endswith("No.") or prefix.endswith("no."):
+                continue
+            # Check if followed by address keywords
+            suffix = text[end:end + 30].lower().strip()
+            _addr_keywords = ("nagar", "road", "rd", "street", "st,", "lane", "marg",
+                              "avenue", "ave", "colony", "sector", "block", "plot",
+                              "house", "floor", "building", "bldg", "cross", "main")
+            if any(suffix.startswith(kw) or suffix.startswith(", " + kw) or suffix.startswith(" " + kw)
+                   for kw in _addr_keywords):
+                continue
+            
             # Try to parse and normalize the date
             try:
-                # Try various date formats
                 formats = [
                     "%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y", "%d.%m.%Y",
                     "%d %b %Y", "%d %B %Y",  # 14 Nov 2025, 14 November 2025
@@ -747,6 +763,21 @@ def _extract_all_dates(text: str) -> List[str]:
     for rx in _DATE_REGEXES:
         for match in rx.finditer(text):
             date_str = match.group(0).strip()
+            
+            # --- Address-context filter (same as _extract_receipt_date) ---
+            start = match.start()
+            end = match.end()
+            prefix = text[max(0, start - 3):start].strip()
+            if prefix.endswith("#") or prefix.endswith("No.") or prefix.endswith("no."):
+                continue
+            suffix = text[end:end + 30].lower().strip()
+            _addr_keywords = ("nagar", "road", "rd", "street", "st,", "lane", "marg",
+                              "avenue", "ave", "colony", "sector", "block", "plot",
+                              "house", "floor", "building", "bldg", "cross", "main")
+            if any(suffix.startswith(kw) or suffix.startswith(", " + kw) or suffix.startswith(" " + kw)
+                   for kw in _addr_keywords):
+                continue
+            
             # Try to parse and normalize
             try:
                 formats = [

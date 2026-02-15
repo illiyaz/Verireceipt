@@ -728,7 +728,7 @@ GEO_SUBTYPE_KEYWORDS = {
         "POS_RETAIL": ["store", "retail", "merchandise", "item"],
         "TAX_INVOICE": ["invoice", "tax id", "ein", "bill to"],
         "ECOMMERCE": ["order", "shipping", "tracking", "package"],
-        "FUEL": ["gas", "fuel", "gallons", "pump"],
+        "FUEL": ["gas", "fuel", "gallons", "pump", "gasoline", "diesel", "unleaded", "octane"],
         "PARKING": ["parking", "ticket", "meter"],
         "HOTEL_FOLIO": ["hotel", "room", "night", "check-in", "check-out", "folio"],
     },
@@ -737,7 +737,9 @@ GEO_SUBTYPE_KEYWORDS = {
         "POS_RETAIL": ["shop", "store", "retail", "item"],
         "TAX_INVOICE": ["tax invoice", "gstin", "hsn", "sac", "bill of supply"],
         "ECOMMERCE": ["order", "delivery", "tracking", "awb"],
-        "FUEL": ["petrol", "diesel", "fuel", "litres"],
+        "FUEL": ["petrol", "diesel", "fuel", "litres", "litre", "ltr",
+                 "oil", "pump", "petrol pump", "filling station", "nozzle",
+                 "essar", "indian oil", "iocl", "hpcl", "bpcl", "reliance"],
         "UTILITY": ["electricity", "water", "gas", "bill", "consumer"],
         "TELECOM": ["mobile", "recharge", "plan", "data"],
         # Logistics/customs documents
@@ -1080,6 +1082,12 @@ def _detect_doc_subtype_geo_aware(
             confidence = min(1.0, float(winner_score) / max(10.0, float(total_score)))
     else:
         confidence = min(1.0, float(winner_score) / max(10.0, float(total_score)))
+
+    # Geo-corroboration boost: strong geo detection validates subtype classification
+    # If geo is confident (>= 0.6), boost subtype confidence by up to 0.15
+    if geo_confidence >= 0.6 and confidence >= 0.35:
+        geo_boost = min(0.15, geo_confidence * 0.15)
+        confidence = min(1.0, confidence + geo_boost)
 
     return {
         "doc_family_guess": family,

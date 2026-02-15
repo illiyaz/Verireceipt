@@ -42,10 +42,13 @@ def infer_geo(text: str) -> Dict[str, Any]:
     # 3. Term matching (tax, currency, phone, address keywords)
     _match_terms(text_norm, country_scores, evidence)
     
-    # 4. Apply caps and compute final scores
+    # 4. Strong country-specific regex patterns (GSTIN, PAN, EIN, etc.)
+    _match_strong_patterns(text, country_scores, evidence)
+    
+    # 5. Apply caps and compute final scores
     _apply_caps(country_scores, evidence)
     
-    # 5. Determine winner and confidence
+    # 6. Determine winner and confidence
     return _compute_result(country_scores, evidence)
 
 def _match_postal_patterns(text: str, country_scores: Dict[str, float], evidence: List[Dict[str, Any]]):
@@ -157,6 +160,93 @@ def _match_terms(text_norm: str, country_scores: Dict[str, float], evidence: Lis
         # Cap total term contribution at 0.35
         capped_weight = min(total_weight, 0.35)
         country_scores[country] = country_scores.get(country, 0.0) + capped_weight
+
+# Strong country-specific regex patterns (high confidence, unambiguous)
+_STRONG_PATTERNS = [
+    # Indian GSTIN: 15 chars — 2-digit state code + 10-char PAN + 1 entity + Z + 1 check
+    # e.g. 36ACMPK4116D1ZV, 27AAPFU0939F1ZV
+    {
+        "country": "IN",
+        "pattern": r"\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b",
+        "weight": 0.45,
+        "label": "gstin_pattern",
+    },
+    # Indian PAN: 10 chars — 5 letters + 4 digits + 1 letter (only boost if other India signal present)
+    {
+        "country": "IN",
+        "pattern": r"\bPAN\s*:?\s*[A-Z]{5}\d{4}[A-Z]\b",
+        "weight": 0.25,
+        "label": "pan_with_label",
+    },
+    # Indian PIN code with optional space: "500 008", "110001", "PIN: 600001"
+    {
+        "country": "IN",
+        "pattern": r"\b(?:pin\s*(?:code)?\s*:?\s*)?([1-9]\d{2})\s?(\d{3})\b",
+        "weight": 0.15,
+        "label": "in_pin_code",
+        "validator": "_validate_indian_pin",
+    },
+    # Indian VAT TIN: "VAT TIN" is India-specific (other countries say "VAT No" or "TRN")
+    {
+        "country": "IN",
+        "pattern": r"\bVAT\s+TIN\b",
+        "weight": 0.30,
+        "label": "vat_tin_india",
+    },
+]
+
+# Valid Indian PIN code first-digit ranges (1-8, not 0 or 9)
+_INDIAN_PIN_PREFIXES = {
+    "11", "12", "13", "14", "15", "16", "17", "18", "19",
+    "20", "21", "22", "23", "24", "25", "26", "27", "28",
+    "30", "31", "32", "33", "34", "36", "37", "38", "39",
+    "40", "41", "42", "43", "44", "45", "46", "47", "48", "49",
+    "50", "51", "52", "53", "56", "57", "58", "59",
+    "60", "61", "62", "63", "64", "67", "68", "69",
+    "70", "71", "72", "73", "74", "75", "76", "77", "78", "79",
+    "80", "81", "82", "83", "84", "85",
+}
+
+
+def _validate_indian_pin(match_str: str) -> bool:
+    """Validate that a 6-digit number looks like a real Indian PIN code."""
+    digits = re.sub(r"\s+", "", match_str)
+    # Extract just the 6 digits
+    m = re.search(r"(\d{6})", digits)
+    if not m:
+        # Try with space: "500 008"
+        m2 = re.search(r"(\d{3})\s+(\d{3})", match_str)
+        if m2:
+            digits = m2.group(1) + m2.group(2)
+        else:
+            return False
+    else:
+        digits = m.group(1)
+    return len(digits) == 6 and digits[:2] in _INDIAN_PIN_PREFIXES
+
+
+def _match_strong_patterns(text: str, country_scores: Dict[str, float], evidence: List[Dict[str, Any]]):
+    """Match strong country-specific regex patterns (GSTIN, PAN, VAT TIN, etc.)."""
+    for spec in _STRONG_PATTERNS:
+        matches = re.findall(spec["pattern"], text, re.IGNORECASE)
+        if not matches:
+            continue
+        
+        match_str = matches[0] if isinstance(matches[0], str) else "".join(matches[0])
+        
+        # Optional validator (e.g., Indian PIN code validation)
+        if spec.get("validator") == "_validate_indian_pin":
+            if not _validate_indian_pin(match_str):
+                continue
+        
+        country_scores[spec["country"]] = country_scores.get(spec["country"], 0.0) + spec["weight"]
+        evidence.append({
+            "type": spec["label"],
+            "country": spec["country"],
+            "match": match_str[:30],  # Truncate for privacy
+            "weight": spec["weight"]
+        })
+
 
 def _apply_caps(country_scores: Dict[str, float], evidence: List[Dict[str, Any]]):
     """Apply any additional caps or adjustments."""

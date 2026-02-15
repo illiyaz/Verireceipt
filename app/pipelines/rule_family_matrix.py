@@ -37,6 +37,7 @@ RULE_FAMILY_MATRIX: Dict[str, Dict[str, ExecutionMode]] = {
         "POS_RECEIPT": ExecutionMode.BLOCK,
         "POS_RESTAURANT": ExecutionMode.BLOCK,
         "POS_RETAIL": ExecutionMode.BLOCK,
+        "FUEL": ExecutionMode.BLOCK,
         "COMMERCIAL_INVOICE": ExecutionMode.FORBIDDEN,
         "TAX_INVOICE": ExecutionMode.FORBIDDEN,
         "CREDIT_NOTE": ExecutionMode.FORBIDDEN,
@@ -71,6 +72,7 @@ RULE_FAMILY_MATRIX: Dict[str, Dict[str, ExecutionMode]] = {
         "POS_RECEIPT": ExecutionMode.BLOCK,
         "POS_RESTAURANT": ExecutionMode.BLOCK,
         "POS_RETAIL": ExecutionMode.BLOCK,
+        "FUEL": ExecutionMode.BLOCK,
         "COMMERCIAL_INVOICE": ExecutionMode.FORBIDDEN,  # Invoices can have mixed language
         "TAX_INVOICE": ExecutionMode.FORBIDDEN,
         "CREDIT_NOTE": ExecutionMode.FORBIDDEN,
@@ -83,6 +85,7 @@ RULE_FAMILY_MATRIX: Dict[str, Dict[str, ExecutionMode]] = {
         "POS_RECEIPT": ExecutionMode.SOFT,  # Template quality is a soft heuristic
         "POS_RESTAURANT": ExecutionMode.SOFT,
         "POS_RETAIL": ExecutionMode.SOFT,
+        "FUEL": ExecutionMode.SOFT,
         "COMMERCIAL_INVOICE": ExecutionMode.SOFT,
         "TAX_INVOICE": ExecutionMode.SOFT,
         "CREDIT_NOTE": ExecutionMode.FORBIDDEN,

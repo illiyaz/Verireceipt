@@ -597,6 +597,7 @@ def _get_seed_terms() -> List[Tuple]:
     return [
         # India terms
         ("IN", "tax", "gstin", 0.25, "GSTIN, GST Identification Number"),
+        ("IN", "tax", "gst", 0.15, "GST (shared with SG/CA/AU, lower weight)"),
         ("IN", "tax", "cgst", 0.20, "CGST (Central GST)"),
         ("IN", "tax", "sgst", 0.20, "SGST (State GST)"),
         ("IN", "tax", "igst", 0.20, "IGST (Integrated GST)"),
@@ -604,6 +605,8 @@ def _get_seed_terms() -> List[Tuple]:
         ("IN", "address", "pin code", 0.15, "PIN Code, Pincode"),
         ("IN", "address", "pin", 0.10, "PIN"),
         ("IN", "currency", "inr", 0.10, "INR, ₹, Rs"),
+        ("IN", "currency", "₹", 0.20, "₹ (Rupee symbol - strong India signal)"),
+        ("IN", "currency", "rs", 0.10, "Rs, Rs."),
         ("IN", "currency", "rupees", 0.10, "Rupees, Rs."),
         ("IN", "phone", "+91", 0.20, "+91, 91"),
         
