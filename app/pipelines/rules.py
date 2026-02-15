@@ -2899,6 +2899,24 @@ def _score_and_explain(
         else:
             logger.info(f"R7_TOTAL_MISMATCH skipped for {doc_class} (profile: apply_total_reconciliation=False)")
     
+    # VLM CONSISTENCY CHECK: If VLM extracted both total and line items that are
+    # internally consistent (within 2%), the "mismatch" is OCR garbage vs VLM truth.
+    # Suppress R7 in this case — the receipt itself is consistent.
+    vlm_internally_consistent = False
+    if total_mismatch and tf.get("total_source") == "vlm":
+        _vlm_total = _normalize_amount_str(tf.get("total_amount"))
+        _vlm_sum = _normalize_amount_str(tf.get("vlm_line_items_sum"))
+        if _vlm_total and _vlm_total > 0 and _vlm_sum and _vlm_sum > 0:
+            _vlm_ratio = abs(_vlm_total - _vlm_sum) / _vlm_total
+            if _vlm_ratio < 0.02:
+                vlm_internally_consistent = True
+                total_mismatch = False
+                logger.info(
+                    "R7_TOTAL_MISMATCH suppressed: VLM total=%.2f and VLM items_sum=%.2f "
+                    "are consistent (%.1f%% diff). OCR amounts are garbage.",
+                    _vlm_total, _vlm_sum, _vlm_ratio * 100
+                )
+    
     if total_mismatch:
         # POS-SPECIFIC TOLERANCE: Allow small mismatch due to OCR errors on thermal prints
         doc_subtype = str(legacy_doc_profile.get("subtype") or tf.get("doc_subtype_guess") or "").upper()
@@ -4093,6 +4111,10 @@ def _score_and_explain(
     # R_AMOUNT_PLAUSIBILITY: Total amount implausible for merchant type
     # Expert insight: A $5,000 coffee shop receipt or a $50,000 gas station receipt
     # is highly suspicious. Real-world merchants have typical transaction ranges.
+    #
+    # REGIONAL AWARENESS: Thresholds are in USD. A geo-based multiplier converts
+    # local currency amounts to USD-equivalent before comparison, so ₹3000 (India)
+    # is correctly treated as ~$36 USD, not $3000.
     try:
         _ap_total = _normalize_amount_str(tf.get("total_amount"))
         _ap_merchant = (
@@ -4101,9 +4123,59 @@ def _score_and_explain(
         _ap_subtype = str(
             legacy_doc_profile.get("subtype") or tf.get("doc_subtype_guess") or ""
         ).upper()
+        _ap_geo = str(tf.get("geo_country_guess") or "UNKNOWN").upper()
 
         if _ap_total is not None and _ap_total > 0 and (_ap_merchant or _ap_subtype):
-            # Merchant-type → (typical_max, label) mapping
+            # Approximate local-currency-to-USD conversion factors.
+            # These are deliberately conservative (use weaker currency rate)
+            # to avoid false positives. Updated periodically.
+            _GEO_TO_USD = {
+                "IN": 0.012,   # 1 INR ≈ $0.012 (₹84/$1)
+                "JP": 0.0067,  # 1 JPY ≈ $0.0067 (¥150/$1)
+                "KR": 0.00075, # 1 KRW ≈ $0.00075 (₩1330/$1)
+                "ID": 0.000063,# 1 IDR ≈ $0.000063
+                "TH": 0.028,   # 1 THB ≈ $0.028
+                "MY": 0.22,    # 1 MYR ≈ $0.22
+                "PH": 0.018,   # 1 PHP ≈ $0.018
+                "VN": 0.000041,# 1 VND ≈ $0.000041
+                "PK": 0.0036,  # 1 PKR ≈ $0.0036
+                "BD": 0.0091,  # 1 BDT ≈ $0.0091
+                "LK": 0.0031,  # 1 LKR ≈ $0.0031
+                "NP": 0.0075,  # 1 NPR ≈ $0.0075
+                "MX": 0.058,   # 1 MXN ≈ $0.058
+                "BR": 0.20,    # 1 BRL ≈ $0.20
+                "ZA": 0.055,   # 1 ZAR ≈ $0.055
+                "NG": 0.00065, # 1 NGN ≈ $0.00065
+                "EG": 0.032,   # 1 EGP ≈ $0.032
+                "TR": 0.031,   # 1 TRY ≈ $0.031
+                "AE": 0.27,    # 1 AED ≈ $0.27
+                "SA": 0.27,    # 1 SAR ≈ $0.27
+                "GB": 1.27,    # 1 GBP ≈ $1.27
+                "EU": 1.08,    # 1 EUR ≈ $1.08
+                "AU": 0.65,    # 1 AUD ≈ $0.65
+                "CA": 0.74,    # 1 CAD ≈ $0.74
+                "SG": 0.74,    # 1 SGD ≈ $0.74
+                "HK": 0.13,    # 1 HKD ≈ $0.13
+                "CN": 0.14,    # 1 CNY ≈ $0.14
+                "US": 1.0,
+            }
+            # Convert to USD-equivalent for threshold comparison
+            usd_factor = _GEO_TO_USD.get(_ap_geo, 1.0)
+            _ap_total_usd = _ap_total * usd_factor
+
+            # Currency symbol from text_features (for display)
+            _currency_sym = "$"
+            _currency_symbols = tf.get("currency_symbols") or []
+            if _currency_symbols:
+                _currency_sym = str(_currency_symbols[0])
+            elif _ap_geo == "IN":
+                _currency_sym = "₹"
+            elif _ap_geo == "GB":
+                _currency_sym = "£"
+            elif _ap_geo in ("EU", "DE", "FR", "IT", "ES", "NL", "BE", "AT", "IE", "PT"):
+                _currency_sym = "€"
+
+            # Merchant-type → (typical_max_USD, label) mapping
             # These are deliberately generous ceilings; only truly absurd values fire.
             _MERCHANT_RANGES = {
                 "coffee":    (200,   "coffee shop"),
@@ -4135,7 +4207,7 @@ def _score_and_explain(
                 "convenience":(500,  "convenience store"),
             }
 
-            # Also infer from doc_subtype
+            # Also infer from doc_subtype (thresholds in USD)
             _SUBTYPE_RANGES = {
                 "POS_RESTAURANT": (3000,  "restaurant receipt"),
                 "FUEL":           (500,   "fuel receipt"),
@@ -4144,41 +4216,50 @@ def _score_and_explain(
             }
 
             matched_label = None
-            matched_max = None
+            matched_max_usd = None
 
             # Check merchant name first (more specific)
             for keyword, (max_amt, label) in _MERCHANT_RANGES.items():
                 if keyword in _ap_merchant:
                     matched_label = label
-                    matched_max = max_amt
+                    matched_max_usd = max_amt
                     break
 
             # Fall back to subtype range
-            if matched_max is None and _ap_subtype in _SUBTYPE_RANGES:
-                matched_max, matched_label = _SUBTYPE_RANGES[_ap_subtype]
+            if matched_max_usd is None and _ap_subtype in _SUBTYPE_RANGES:
+                matched_max_usd, matched_label = _SUBTYPE_RANGES[_ap_subtype]
 
-            if matched_max is not None and _ap_total > matched_max * 2:
-                # Total is > 2× the generous ceiling — very suspicious
-                severity = "CRITICAL" if _ap_total > matched_max * 5 else "WARNING"
+            if matched_max_usd is not None and _ap_total_usd > matched_max_usd * 2:
+                # Total (in USD) is > 2× the generous ceiling — very suspicious
+                severity = "CRITICAL" if _ap_total_usd > matched_max_usd * 5 else "WARNING"
                 weight = 0.20 if severity == "CRITICAL" else 0.10
+                # Display threshold in local currency for clarity
+                local_max = matched_max_usd / usd_factor if usd_factor > 0 else matched_max_usd
                 score += emit_event(
                     events=events,
                     reasons=reasons,
                     rule_id="R_AMOUNT_PLAUSIBILITY",
                     severity=severity,
                     weight=weight,
-                    message=f"Total ${_ap_total:.2f} implausible for {matched_label} (typical max ~${matched_max})",
+                    message=(
+                        f"Total {_currency_sym}{_ap_total:,.2f} implausible for {matched_label} "
+                        f"(typical max ~{_currency_sym}{local_max:,.0f})"
+                    ),
                     evidence={
                         "total_amount": _ap_total,
+                        "total_amount_usd": round(_ap_total_usd, 2),
                         "merchant_candidate": _ap_merchant,
                         "doc_subtype": _ap_subtype,
+                        "geo": _ap_geo,
+                        "usd_factor": usd_factor,
                         "matched_label": matched_label,
-                        "typical_max": matched_max,
-                        "ratio": round(_ap_total / matched_max, 1),
+                        "typical_max_usd": matched_max_usd,
+                        "typical_max_local": round(local_max, 0),
+                        "ratio_usd": round(_ap_total_usd / matched_max_usd, 1),
                     },
                     reason_text=(
-                        f"💰 Implausible Amount: ${_ap_total:.2f} at a {matched_label} "
-                        f"is unusually high (typical max ~${matched_max}). "
+                        f"💰 Implausible Amount: {_currency_sym}{_ap_total:,.2f} at a {matched_label} "
+                        f"is unusually high (typical max ~{_currency_sym}{local_max:,.0f}). "
                         f"May indicate amount inflation."
                     ),
                 )
@@ -4278,6 +4359,68 @@ def _score_and_explain(
                     },
                     reason_text=f"📍🏪 Merchant-Address Mismatch: The merchant name doesn't match the address on the document ({mac_verdict}).",
                 )
+        # R_ADDRESS_GEO_MISMATCH: VLM address conflicts with detected geo
+        # When VLM extracts an address, cross-validate city/state names against
+        # the detected geo. A Dubai address on an Indian-geo receipt is suspicious.
+        # NOTE: Only uses city/state name patterns (NOT postal codes which are ambiguous).
+        vlm_address = tf.get("vlm_address") or ""
+        if vlm_address and len(vlm_address) > 10:
+            _geo_guess = str(tf.get("geo_country_guess") or "").upper()
+            _geo_conf = float(tf.get("geo_confidence") or 0)
+            if _geo_guess and _geo_guess != "UNKNOWN" and _geo_conf >= 0.6:
+                # City/state name indicators only (no postal patterns — too ambiguous)
+                _ADDR_GEO_NAMES = {
+                    "IN": r"\b(india|hyderabad|mumbai|delhi|bangalore|bengaluru|chennai|kolkata|pune|ahmedabad|jaipur|lucknow|telangana|maharashtra|karnataka|tamil\s*nadu|kerala|gujarat)\b",
+                    "US": r"\b(usa|united\s*states|california|texas|new\s*york|florida|illinois|tennessee|georgia|virginia|ohio|michigan|arizona|north\s*carolina|washington)\b",
+                    "GB": r"\b(uk|united\s*kingdom|england|scotland|wales|london|manchester|birmingham|leeds|glasgow|liverpool)\b",
+                    "AE": r"\b(dubai|abu\s*dhabi|sharjah|ajman|uae|united\s*arab\s*emirates|rak|fujairah)\b",
+                    "SA": r"\b(riyadh|jeddah|makkah|mecca|medina|saudi|ksa|dammam)\b",
+                    "CA": r"\b(canada|ontario|quebec|toronto|vancouver|alberta|british\s*columbia|montreal|calgary|ottawa)\b",
+                    "AU": r"\b(australia|sydney|melbourne|brisbane|perth|adelaide|canberra)\b",
+                    "SG": r"\b(singapore)\b",
+                    "DE": r"\b(germany|deutschland|berlin|munich|frankfurt|hamburg|cologne)\b",
+                    "FR": r"\b(france|paris|lyon|marseille|toulouse|nice)\b",
+                    "JP": r"\b(japan|tokyo|osaka|kyoto|yokohama|nagoya)\b",
+                }
+                addr_lower = vlm_address.lower()
+
+                # Check if address has city/state names matching detected geo
+                geo_name_pat = _ADDR_GEO_NAMES.get(_geo_guess)
+                address_matches_geo = bool(
+                    re.search(geo_name_pat, addr_lower) if geo_name_pat else True
+                )
+
+                # Only flag conflict if address has city/state names from a DIFFERENT country
+                # AND does NOT have names from the detected geo
+                address_conflicts_with = None
+                if not address_matches_geo:
+                    for other_geo, other_pattern in _ADDR_GEO_NAMES.items():
+                        if other_geo == _geo_guess:
+                            continue
+                        if re.search(other_pattern, addr_lower):
+                            address_conflicts_with = other_geo
+                            break
+
+                if address_conflicts_with:
+                    score += emit_event(
+                        events=events,
+                        reasons=reasons,
+                        rule_id="R_ADDRESS_GEO_MISMATCH",
+                        severity="WARNING",
+                        weight=0.10,
+                        message=f"Address suggests {address_conflicts_with} but document geo is {_geo_guess}",
+                        evidence={
+                            "vlm_address": vlm_address[:100],
+                            "geo_country_guess": _geo_guess,
+                            "geo_confidence": _geo_conf,
+                            "address_suggests_country": address_conflicts_with,
+                        },
+                        reason_text=(
+                            f"📍🌍 Address-Geo Mismatch: Address appears to be from {address_conflicts_with} "
+                            f"but other document signals point to {_geo_guess}. May indicate address forgery."
+                        ),
+                    )
+
     except Exception as e:
         logger.warning(f"Address validation rules failed: {e}")
 

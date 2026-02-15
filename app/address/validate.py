@@ -31,26 +31,59 @@ import re
 from typing import Dict, Any, List, Tuple
 from app.schemas.receipt import SignalV1
 
-# Universal street indicators (English-based, expandable)
+# Universal street indicators (multi-geo, expandable)
 STREET_KEYWORDS = [
+    # English
     "street", "st", "road", "rd", "avenue", "ave",
     "boulevard", "blvd", "lane", "ln", "drive", "dr",
     "way", "circle", "cir", "court", "ct", "place", "pl",
-    "terrace", "ter", "parkway", "pkwy", "highway", "hwy"
+    "terrace", "ter", "parkway", "pkwy", "highway", "hwy",
+    # India
+    "nagar", "marg", "path", "gali", "colony", "sector",
+    "cross", "main", "layout", "extension", "phase",
+    # Middle East / Gulf
+    "souq", "souk", "corniche", "madinat",
+    # Europe (French/German/Spanish/Italian)
+    "rue", "strasse", "straße", "calle", "via", "piazza",
+    "platz", "allee", "paseo", "avenida", "rua",
+    # General
+    "block", "plot", "complex", "tower", "junction",
 ]
 
 # Building/unit indicators
 UNIT_KEYWORDS = [
     "apt", "apartment", "suite", "ste", "unit",
     "floor", "fl", "building", "bldg", "#", "no",
-    "room", "rm"
+    "room", "rm", "flat", "house", "villa", "plot",
+    "shop", "office", "warehouse", "godown",
 ]
 
-# Country/state indicators (explicit mentions)
+# Country/state indicators (explicit mentions — global)
 LOCATION_KEYWORDS = [
-    "usa", "canada", "india", "uk", "australia",
-    "singapore", "malaysia", "thailand", "indonesia",
-    "california", "texas", "ontario", "delhi", "mumbai"
+    # Countries
+    "usa", "canada", "india", "uk", "australia", "germany", "france",
+    "italy", "spain", "japan", "china", "brazil", "mexico",
+    "singapore", "malaysia", "thailand", "indonesia", "philippines",
+    "south africa", "nigeria", "egypt", "turkey", "pakistan",
+    "bangladesh", "sri lanka", "nepal",
+    # US states
+    "california", "texas", "new york", "florida", "illinois",
+    # India states/cities
+    "delhi", "mumbai", "bangalore", "bengaluru", "hyderabad", "chennai",
+    "kolkata", "pune", "ahmedabad", "jaipur", "lucknow",
+    "maharashtra", "karnataka", "telangana", "tamil nadu", "kerala",
+    "gujarat", "rajasthan", "uttar pradesh", "west bengal",
+    # Gulf / Middle East
+    "dubai", "abu dhabi", "sharjah", "riyadh", "jeddah", "doha",
+    "muscat", "manama", "kuwait",
+    # Europe cities
+    "london", "paris", "berlin", "rome", "madrid", "amsterdam",
+    "zurich", "geneva", "vienna", "brussels",
+    # SE Asia
+    "bangkok", "jakarta", "kuala lumpur", "manila", "ho chi minh",
+    # Other
+    "toronto", "vancouver", "sydney", "melbourne", "auckland",
+    "johannesburg", "cape town", "lagos", "nairobi",
 ]
 
 # --- V2.2: Multi-address detection (feature-only) ---------------------------
@@ -374,12 +407,38 @@ def validate_address(text: str) -> Dict[str, Any]:
         score += 1
         evidence.append("locality_tokens")
     
-    # 4. Postal-like token (very weak, +1)
-    # Alphanumeric 4-8 chars (could be postal code)
-    postal_matches = re.findall(r"\b[a-zA-Z0-9]{4,8}\b", text_norm)
-    if len(postal_matches) >= 1:
-        score += 1
-        evidence.append("postal_like_token")
+    # 4. Postal code detection (geo-specific patterns, +1 to +2)
+    # Strong postal patterns that identify specific countries
+    _POSTAL_PATTERNS = [
+        # India PIN: 6 digits (110001, 500008)
+        (r"\b[1-9]\d{5}\b", "postal:india_pin", 2),
+        # US ZIP: 5 digits or 5+4 (90210, 10001-1234)
+        (r"\b\d{5}(-\d{4})?\b", "postal:us_zip", 2),
+        # UK postcode: A9 9AA, A99 9AA, A9A 9AA, AA9 9AA, AA99 9AA, AA9A 9AA
+        (r"\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b", "postal:uk_postcode", 2),
+        # Canada: A9A 9A9
+        (r"\b[A-Z]\d[A-Z]\s*\d[A-Z]\d\b", "postal:canada", 2),
+        # Germany/Austria/Switzerland: 4-5 digits
+        (r"\b\d{4,5}\b", "postal:eu_numeric", 1),
+        # Japan: 3-4 digits (NNN-NNNN)
+        (r"\b\d{3}-\d{4}\b", "postal:japan", 2),
+        # Australia: 4 digits
+        (r"\b\d{4}\b", "postal:au_nz", 1),
+        # UAE/Gulf: no standard postal code — skip
+    ]
+    postal_found = False
+    for pattern, label, pts in _POSTAL_PATTERNS:
+        if re.search(pattern, text, re.IGNORECASE):
+            score += pts
+            evidence.append(label)
+            postal_found = True
+            break
+    if not postal_found:
+        # Fallback: generic alphanumeric token
+        postal_matches = re.findall(r"\b[a-zA-Z0-9]{4,8}\b", text_norm)
+        if postal_matches:
+            score += 1
+            evidence.append("postal_like_token")
     
     # 5. Country/state explicit mention ( +1 )
     location_found = False
