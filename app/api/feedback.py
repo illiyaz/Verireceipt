@@ -55,6 +55,20 @@ async def submit_feedback(
         feedback_type = FeedbackType.VERDICT_CORRECTION
         
         # Create feedback object
+        # Build user_notes with all review sections
+        notes_parts = []
+        if submission.user_notes:
+            notes_parts.append(submission.user_notes)
+        if submission.font_manipulation:
+            notes_parts.append("[FONT_MANIPULATION_DETECTED]")
+        if submission.address_issues:
+            notes_parts.append(f"[ADDRESS] {submission.address_issues}")
+        if submission.visual_integrity_issues:
+            notes_parts.append(f"[VISUAL] {submission.visual_integrity_issues}")
+        if submission.amount_verification_notes:
+            notes_parts.append(f"[AMOUNT] {submission.amount_verification_notes}")
+        combined_notes = " | ".join(notes_parts) if notes_parts else None
+
         feedback = ReceiptFeedback(
             feedback_id=feedback_id,
             receipt_id=submission.receipt_id,
@@ -62,9 +76,11 @@ async def submit_feedback(
             system_confidence=0.0,  # Would come from session
             correct_verdict=submission.correct_verdict,
             feedback_type=feedback_type,
-            user_notes=submission.user_notes,
+            user_notes=combined_notes,
             missed_indicators=submission.missed_indicators,
             false_indicators=submission.false_indicators,
+            confirmed_indicators=submission.confirmed_indicators,
+            data_corrections=submission.data_corrections,
             session_id=session_id
         )
         

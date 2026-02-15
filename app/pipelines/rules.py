@@ -4021,35 +4021,7 @@ def _score_and_explain(
     # RULE GROUP 5B: Plausibility checks (expert-style analysis)
     # ---------------------------------------------------------------------------
 
-    # R_ROUND_TOTAL: Suspiciously round total amounts
-    # Expert insight: Real receipts almost never have perfectly round totals
-    # (e.g., $500.00, $1000.00) because tax makes them uneven.
-    # Common in fabricated receipts where the fraudster picks a round number.
-    try:
-        _rt_val = _normalize_amount_str(tf.get("total_amount"))
-        if _rt_val is not None and _rt_val >= 50.0:
-            # Check if total is a "round" number (no cents, divisible by 50 or 100)
-            is_round = (_rt_val == int(_rt_val)) and (int(_rt_val) % 50 == 0)
-            # Don't flag small round amounts (coffee shops often have $5, $10 totals)
-            # Don't flag if tax was extracted (tax presence makes round totals less suspicious)
-            has_tax = bool(tf.get("tax_amount"))
-            if is_round and not has_tax and _rt_val >= 100.0:
-                score += emit_event(
-                    events=events,
-                    reasons=reasons,
-                    rule_id="R_ROUND_TOTAL",
-                    severity="WARNING",
-                    weight=0.08,
-                    message=f"Suspiciously round total amount (${_rt_val:.2f})",
-                    evidence={
-                        "total_amount": _rt_val,
-                        "is_round": True,
-                        "has_tax": has_tax,
-                    },
-                    reason_text=f"💰 Round Total: Total of ${_rt_val:.2f} is suspiciously round — real receipts rarely have perfectly round totals after tax.",
-                )
-    except Exception as e:
-        logger.warning(f"R_ROUND_TOTAL check failed: {e}")
+    # R_ROUND_TOTAL: Moved to RULE GROUP 5B3 (geo/subtype-aware version)
 
     # R_TAX_RATE_ANOMALY: Tax rate doesn't match country norms
     # Expert insight: Each country has specific tax rates. A US receipt with 25% tax
@@ -4265,6 +4237,272 @@ def _score_and_explain(
                 )
     except Exception as e:
         logger.warning(f"R_AMOUNT_PLAUSIBILITY check failed: {e}")
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 5B2: Handwritten Receipt Detection & OCR Quality
+    # ---------------------------------------------------------------------------
+    # Expert insight: Handwritten receipts are trivially easy to fabricate.
+    # When OCR confidence is very low, it usually means the text is handwritten
+    # or the image is poor quality — either way, the extracted amounts are
+    # unreliable and the document warrants extra scrutiny.
+    try:
+        _ocr_conf = tf.get("ocr_confidence")
+        _ocr_engine = tf.get("ocr_engine", "unknown")
+        _low_conf_ratio = tf.get("ocr_low_conf_word_ratio")
+
+        # Two detection modes:
+        # 1. Average OCR confidence < 0.35 → entirely handwritten/degraded
+        # 2. Low-confidence word ratio > 0.30 → partially handwritten
+        #    (printed header inflates average, but data fields are handwritten)
+        _hw_triggered = False
+        _hw_reason = ""
+
+        if _ocr_conf is not None and _ocr_conf < 0.35:
+            _hw_triggered = True
+            _hw_weight = 0.12 if _ocr_conf < 0.20 else 0.08
+            _hw_reason = (
+                f"📝 Low OCR Confidence: OCR engine scored only {_ocr_conf:.0%} confidence "
+                f"(threshold: 35%). This usually indicates a handwritten document, which is "
+                f"trivially easy to fabricate. Extracted amounts and dates should not be trusted "
+                f"without manual verification."
+            )
+            _hw_msg = f"Very low OCR confidence ({_ocr_conf:.0%}) — likely handwritten or degraded document"
+        elif _low_conf_ratio is not None and _low_conf_ratio > 0.20:
+            _hw_triggered = True
+            _hw_weight = 0.10 if _low_conf_ratio > 0.40 else 0.07
+            _hw_reason = (
+                f"📝 Partially Handwritten: {_low_conf_ratio:.0%} of OCR words have low confidence "
+                f"(< 50%), even though the overall average is {(_ocr_conf or 0):.0%}. This pattern "
+                f"indicates a document with printed headers but handwritten data fields (amounts, "
+                f"dates, quantities). Handwritten entries are trivially easy to fabricate."
+            )
+            _hw_msg = (
+                f"Partially handwritten document ({_low_conf_ratio:.0%} low-confidence words) "
+                f"— data fields may be unreliable"
+            )
+
+        if _hw_triggered:
+            score += emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="R_HANDWRITTEN_RECEIPT",
+                severity="WARNING",
+                weight=_hw_weight,
+                message=_hw_msg,
+                evidence={
+                    "ocr_confidence": round(_ocr_conf, 3) if _ocr_conf is not None else None,
+                    "ocr_low_conf_word_ratio": round(_low_conf_ratio, 3) if _low_conf_ratio is not None else None,
+                    "ocr_engine": _ocr_engine,
+                    "detection_mode": "avg_confidence" if (_ocr_conf is not None and _ocr_conf < 0.35) else "low_conf_word_ratio",
+                    "implication": "Extracted amounts/dates may be unreliable",
+                },
+                reason_text=_hw_reason,
+            )
+
+            # R_OCR_DEGRADED_VLM_ONLY: When OCR fails, check if VLM data is available
+            _vlm_total = tf.get("vlm_extraction", {}).get("total") if isinstance(tf.get("vlm_extraction"), dict) else None
+            _ocr_total = tf.get("total_amount")
+            _total_source = tf.get("total_source", "")
+            _effective_ocr_conf = _ocr_conf if _ocr_conf is not None else (1.0 - (_low_conf_ratio or 0))
+            if _total_source == "vlm" and _effective_ocr_conf < 0.40:
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_OCR_DEGRADED_VLM_ONLY",
+                    severity="INFO",
+                    weight=0.04,
+                    message="Amount data relies solely on VLM (OCR too degraded to cross-validate)",
+                    evidence={
+                        "ocr_confidence": round(_ocr_conf, 3) if _ocr_conf is not None else None,
+                        "ocr_low_conf_word_ratio": round(_low_conf_ratio, 3) if _low_conf_ratio is not None else None,
+                        "total_source": _total_source,
+                        "vlm_total": _vlm_total,
+                        "ocr_total_raw": _ocr_total,
+                    },
+                    reason_text=(
+                        "🤖 VLM-Only Data: OCR confidence is too low to extract reliable text. "
+                        "All amount data comes from the Vision Language Model, which cannot be "
+                        "cross-validated against OCR. Manual verification recommended."
+                    ),
+                )
+    except Exception as e:
+        logger.warning(f"R_HANDWRITTEN_RECEIPT check failed: {e}")
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 5B3: Round Number Detection
+    # ---------------------------------------------------------------------------
+    # Expert insight: Real fuel purchases, restaurant bills, and retail receipts
+    # almost never have perfectly round totals (e.g. $50.00, ₹3000.00).
+    # Round numbers suggest the amount was decided first and the receipt fabricated.
+    # Exception: parking, tolls, subscriptions which ARE often round.
+    try:
+        _rn_total = _normalize_amount_str(tf.get("total_amount"))
+        _rn_subtype = str(
+            legacy_doc_profile.get("subtype") or tf.get("doc_subtype_guess") or ""
+        ).upper()
+        _rn_geo = str(tf.get("geo_country_guess") or "UNKNOWN").upper()
+
+        if _rn_total is not None and _rn_total > 0:
+            # Determine if the total is suspiciously round
+            # "Round" means divisible by a significant unit for the currency
+            _round_unit = 100 if _rn_geo in ("IN", "JP", "KR", "ID") else 10
+            _is_perfectly_round = (_rn_total % _round_unit) == 0 and _rn_total >= _round_unit * 2
+
+            # Even rounder: divisible by 500 or 1000
+            _is_very_round = (_rn_total % (_round_unit * 10)) == 0 and _rn_total >= _round_unit * 10
+
+            # Subtypes where round totals are normal (don't flag)
+            _round_exempt_subtypes = {
+                "PARKING", "TOLL", "SUBSCRIPTION", "MEMBERSHIP", "DONATION",
+                "RENT", "UTILITY", "INSURANCE",
+            }
+            _is_exempt = _rn_subtype in _round_exempt_subtypes
+
+            # Subtypes where round totals are extra suspicious
+            _round_suspicious_subtypes = {"FUEL", "POS_RESTAURANT", "POS_RETAIL", "GROCERY", "PHARMACY"}
+            _is_extra_suspicious = _rn_subtype in _round_suspicious_subtypes
+
+            if _is_perfectly_round and not _is_exempt:
+                _rn_severity = "WARNING"
+                _rn_weight = 0.06
+                if _is_very_round:
+                    _rn_weight = 0.10
+                if _is_extra_suspicious:
+                    _rn_weight += 0.04
+
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_ROUND_TOTAL",
+                    severity=_rn_severity,
+                    weight=_rn_weight,
+                    message=f"Suspiciously round total amount ({_rn_total:,.0f})",
+                    evidence={
+                        "total_amount": _rn_total,
+                        "round_unit": _round_unit,
+                        "is_very_round": _is_very_round,
+                        "doc_subtype": _rn_subtype,
+                        "geo": _rn_geo,
+                    },
+                    reason_text=(
+                        f"🎯 Round Total: The total amount of {_rn_total:,.0f} is suspiciously round. "
+                        f"Real {'fuel' if _rn_subtype == 'FUEL' else 'retail'} transactions "
+                        f"almost never land on an exact round number. This is a common indicator "
+                        f"of fabricated receipts where the amount was chosen before the receipt was created."
+                    ),
+                )
+    except Exception as e:
+        logger.warning(f"R_ROUND_TOTAL check failed: {e}")
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 5B4: Qty x Rate Verification (Line Item Math Cross-Check)
+    # ---------------------------------------------------------------------------
+    # Expert insight: When a receipt shows qty, rate, and amount for a line item,
+    # qty * rate should equal the amount. A mismatch suggests manual fabrication
+    # (someone wrote the wrong numbers). This is especially useful for fuel receipts
+    # where qty (liters) x rate (price/liter) = total should match.
+    try:
+        _vlm_extraction = tf.get("vlm_extraction")
+        if isinstance(_vlm_extraction, dict):
+            _vlm_items_raw = _vlm_extraction.get("items") or []
+        else:
+            _vlm_items_raw = []
+
+        _qr_mismatches = []
+        for _item in _vlm_items_raw:
+            if not isinstance(_item, dict):
+                continue
+            _qty = _item.get("qty")
+            _price = _item.get("price")
+            _name = _item.get("name", "item")
+
+            if _qty is not None and _price is not None:
+                try:
+                    _qty_f = float(_qty)
+                    _price_f = float(_price)
+                    if _qty_f > 0 and _price_f > 0:
+                        _expected = _qty_f * _price_f
+                        # Check if there's a separate "amount" or "total" per line
+                        _line_total = _item.get("amount") or _item.get("total") or _item.get("line_total")
+                        if _line_total is not None:
+                            try:
+                                _line_total_f = float(_line_total)
+                                if _line_total_f > 0:
+                                    _diff_pct = abs(_expected - _line_total_f) / _line_total_f * 100
+                                    if _diff_pct > 1.5:  # More than 1.5% off
+                                        _qr_mismatches.append({
+                                            "item": str(_name)[:40],
+                                            "qty": _qty_f,
+                                            "rate": _price_f,
+                                            "expected": round(_expected, 2),
+                                            "actual": _line_total_f,
+                                            "diff_pct": round(_diff_pct, 1),
+                                        })
+                            except (ValueError, TypeError):
+                                pass
+                except (ValueError, TypeError):
+                    pass
+
+        # Also check: for fuel receipts, if VLM gives qty (liters) and rate (price/liter),
+        # compare computed total vs the receipt total
+        if not _qr_mismatches and _vlm_items_raw:
+            _rn_subtype_qr = str(
+                legacy_doc_profile.get("subtype") or tf.get("doc_subtype_guess") or ""
+            ).upper()
+            if _rn_subtype_qr == "FUEL" and len(_vlm_items_raw) <= 3:
+                for _item in _vlm_items_raw:
+                    if not isinstance(_item, dict):
+                        continue
+                    _qty = _item.get("qty")
+                    _price = _item.get("price")
+                    _name = _item.get("name", "fuel")
+                    if _qty is not None and _price is not None:
+                        try:
+                            _qty_f = float(_qty)
+                            _price_f = float(_price)
+                            if _qty_f > 1 and _price_f > 1:
+                                _computed = _qty_f * _price_f
+                                # Compare against receipt total
+                                _receipt_total = _normalize_amount_str(tf.get("total_amount"))
+                                if _receipt_total and _receipt_total > 0:
+                                    _diff_pct = abs(_computed - _receipt_total) / _receipt_total * 100
+                                    if _diff_pct > 1.5:  # Fuel math should be exact
+                                        _qr_mismatches.append({
+                                            "item": str(_name)[:40],
+                                            "qty": _qty_f,
+                                            "rate": _price_f,
+                                            "expected": round(_computed, 2),
+                                            "actual": _receipt_total,
+                                            "diff_pct": round(_diff_pct, 1),
+                                            "comparison": "qty*rate vs receipt_total",
+                                        })
+                        except (ValueError, TypeError):
+                            pass
+
+        if _qr_mismatches:
+            _worst = max(_qr_mismatches, key=lambda m: m["diff_pct"])
+            _qr_weight = 0.10 if _worst["diff_pct"] > 5.0 else 0.06
+            score += emit_event(
+                events=events,
+                reasons=reasons,
+                rule_id="R_QTY_RATE_MISMATCH",
+                severity="WARNING",
+                weight=_qr_weight,
+                message=f"Line item math error: qty x rate does not match amount ({_worst['diff_pct']:.1f}% off)",
+                evidence={
+                    "mismatches": _qr_mismatches,
+                    "worst_item": _worst["item"],
+                    "worst_diff_pct": _worst["diff_pct"],
+                },
+                reason_text=(
+                    f"🧮 Math Error: For '{_worst['item']}', qty ({_worst['qty']}) x rate ({_worst['rate']}) "
+                    f"= {_worst['expected']:,.2f}, but the receipt shows {_worst['actual']:,.2f} "
+                    f"({_worst['diff_pct']:.1f}% discrepancy). This arithmetic error suggests "
+                    f"the receipt was manually created with incorrect calculations."
+                ),
+            )
+    except Exception as e:
+        logger.warning(f"R_QTY_RATE_MISMATCH check failed: {e}")
 
     # ---------------------------------------------------------------------------
     # RULE GROUP 5C: Address Validation (consumes features.py address signals)

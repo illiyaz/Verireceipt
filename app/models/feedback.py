@@ -155,6 +155,12 @@ class FeedbackSubmission(BaseModel):
     user_notes: Optional[str] = None
     missed_indicators: List[str] = Field(default_factory=list)
     false_indicators: List[str] = Field(default_factory=list)
+    confirmed_indicators: List[str] = Field(default_factory=list)
+    data_corrections: Dict[str, Any] = Field(default_factory=dict)
+    font_manipulation: bool = Field(False, description="Reviewer detected font manipulation")
+    address_issues: Optional[str] = Field(None, description="Address validation notes")
+    visual_integrity_issues: Optional[str] = Field(None, description="Visual integrity notes")
+    amount_verification_notes: Optional[str] = Field(None, description="Amount verification notes")
 
 
 class FeedbackResponse(BaseModel):

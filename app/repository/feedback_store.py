@@ -131,6 +131,10 @@ class FeedbackStore:
                 detected_indicators TEXT,  -- JSON array
                 missed_indicators TEXT,  -- JSON array
                 false_indicators TEXT,  -- JSON array
+                confirmed_indicators TEXT,  -- JSON array
+
+                -- Data corrections
+                data_corrections TEXT,  -- JSON object
 
                 -- Learning data (anonymized)
                 merchant_pattern TEXT,
@@ -203,6 +207,8 @@ class FeedbackStore:
                 detected_indicators TEXT,
                 missed_indicators TEXT,
                 false_indicators TEXT,
+                confirmed_indicators TEXT,
+                data_corrections TEXT,
                 merchant_pattern TEXT,
                 software_detected TEXT,
                 has_date_issue BOOLEAN DEFAULT FALSE,
@@ -262,6 +268,8 @@ class FeedbackStore:
                 json.dumps(feedback.detected_indicators),
                 json.dumps(feedback.missed_indicators),
                 json.dumps(feedback.false_indicators),
+                json.dumps(feedback.confirmed_indicators),
+                json.dumps(feedback.data_corrections),
                 feedback.merchant_pattern,
                 feedback.software_detected,
                 feedback.has_date_issue,
@@ -278,9 +286,10 @@ class FeedbackStore:
                         correct_verdict, feedback_type, user_notes,
                         engines_used, rule_based_score, vision_llm_verdict,
                         detected_indicators, missed_indicators, false_indicators,
+                        confirmed_indicators, data_corrections,
                         merchant_pattern, software_detected, has_date_issue, has_spacing_issue,
                         user_id, session_id
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (feedback_id) DO NOTHING
                 """, params)
             else:
@@ -291,9 +300,10 @@ class FeedbackStore:
                         correct_verdict, feedback_type, user_notes,
                         engines_used, rule_based_score, vision_llm_verdict,
                         detected_indicators, missed_indicators, false_indicators,
+                        confirmed_indicators, data_corrections,
                         merchant_pattern, software_detected, has_date_issue, has_spacing_issue,
                         user_id, session_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, params)
             
             return feedback.feedback_id
@@ -485,6 +495,8 @@ class FeedbackStore:
             detected_indicators=json.loads(row['detected_indicators'] or '[]'),
             missed_indicators=json.loads(row['missed_indicators'] or '[]'),
             false_indicators=json.loads(row['false_indicators'] or '[]'),
+            confirmed_indicators=json.loads(row.get('confirmed_indicators', None) or '[]') if hasattr(row, 'get') else json.loads((row['confirmed_indicators'] if 'confirmed_indicators' in row.keys() else None) or '[]'),
+            data_corrections=json.loads(row.get('data_corrections', None) or '{}') if hasattr(row, 'get') else json.loads((row['data_corrections'] if 'data_corrections' in row.keys() else None) or '{}'),
             merchant_pattern=row['merchant_pattern'],
             software_detected=row['software_detected'],
             has_date_issue=bool(row['has_date_issue']),

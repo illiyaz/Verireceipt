@@ -3,36 +3,37 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Human Review - VeriReceipt</title>
+    <title>VeriReceipt Auditor - Document Review Console</title>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        body { margin:0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        body { margin:0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background:#f1f5f9; }
         .split-screen { display:grid; grid-template-columns:1fr 1fr; height:100vh; overflow:hidden; }
-        .left-panel { background:#0f172a; overflow:auto; }
-        .right-panel { background:#f8fafc; overflow:auto; border-left:2px solid #e2e8f0; }
-        .receipt-image { transition:transform 0.2s; transform-origin:top left; }
-        .severity-critical { border-left:4px solid #ef4444; background:#fef2f2; }
-        .severity-warning { border-left:4px solid #f59e0b; background:#fffbeb; }
-        .severity-info { border-left:4px solid #3b82f6; background:#eff6ff; }
-        .severity-hard_fail { border-left:4px solid #7c3aed; background:#f5f3ff; }
-        .badge-critical { background:#ef4444; color:white; }
-        .badge-warning { background:#f59e0b; color:white; }
-        .badge-info { background:#3b82f6; color:white; }
-        .badge-hard_fail { background:#7c3aed; color:white; }
-        .verdict-real { background:#dcfce7; border-color:#16a34a; color:#15803d; }
-        .verdict-suspicious { background:#fef9c3; border-color:#ca8a04; color:#a16207; }
-        .verdict-fake { background:#fee2e2; border-color:#dc2626; color:#dc2626; }
-        .review-option { cursor:pointer; transition:all 0.15s; }
-        .review-option:hover { transform:translateY(-1px); box-shadow:0 4px 6px -1px rgba(0,0,0,0.1); }
-        .evidence-tag { display:inline-block; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:4px; padding:2px 8px; margin:2px; font-size:11px; color:#475569; }
-        .section-collapse { cursor:pointer; user-select:none; }
-        .tab-active { border-bottom:3px solid #6366f1; color:#4338ca; font-weight:600; }
-        .tab-inactive { border-bottom:3px solid transparent; color:#64748b; }
-        .tab-inactive:hover { color:#334155; }
+        .left-panel { background:#f8fafc; overflow:auto; border-right:1px solid #e2e8f0; }
+        .right-panel { background:#f8fafc; overflow:auto; }
+        .receipt-image { transition:transform 0.2s; transform-origin:center center; }
+        .step-card { background:white; border:1px solid #e2e8f0; border-radius:12px; margin-bottom:16px; overflow:hidden; }
+        .step-header { padding:16px 20px; cursor:pointer; user-select:none; display:flex; align-items:center; justify-content:space-between; }
+        .step-header:hover { background:#f8fafc; }
+        .step-body { padding:0 20px 20px; }
+        .step-number { width:28px; height:28px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; margin-right:10px; flex-shrink:0; }
+        .verdict-option { cursor:pointer; transition:all 0.15s; border:2px solid #e2e8f0; border-radius:12px; padding:16px; text-align:center; }
+        .verdict-option:hover { border-color:#94a3b8; box-shadow:0 2px 8px rgba(0,0,0,0.06); }
+        .verdict-option.selected-real { border-color:#16a34a; background:#f0fdf4; }
+        .verdict-option.selected-suspicious { border-color:#ca8a04; background:#fefce8; }
+        .verdict-option.selected-fake { border-color:#dc2626; background:#fef2f2; }
+        .tag-btn { display:inline-flex; align-items:center; gap:6px; padding:8px 14px; border:1px solid #e2e8f0; border-radius:8px; cursor:pointer; font-size:13px; color:#475569; transition:all 0.15s; background:white; }
+        .tag-btn:hover { border-color:#94a3b8; background:#f8fafc; }
+        .tag-btn.active { border-color:#6366f1; background:#eef2ff; color:#4338ca; font-weight:600; }
+        .indicator-review { border:1px solid #e2e8f0; border-radius:8px; padding:12px; margin-bottom:8px; background:white; }
+        .review-btn { padding:4px 12px; border-radius:6px; font-size:12px; font-weight:600; cursor:pointer; border:1px solid #e2e8f0; transition:all 0.12s; }
+        .review-btn:hover { opacity:0.85; }
+        .review-btn.sel-correct { background:#dcfce7; border-color:#16a34a; color:#15803d; }
+        .review-btn.sel-wrong { background:#fef2f2; border-color:#dc2626; color:#dc2626; }
+        .review-btn.sel-unsure { background:#f1f5f9; border-color:#64748b; color:#475569; }
     </style>
 </head>
 <body>
@@ -42,83 +43,59 @@
         const { useState, useEffect, useMemo } = React;
 
         // =====================================================================
-        // Utility Components
+        // Step Card Component (collapsible section with step number)
         // =====================================================================
-
-        function SeverityBadge({ severity }) {
-            const s = (severity || 'info').toLowerCase();
-            const labels = { hard_fail:'HARD FAIL', critical:'CRITICAL', warning:'WARNING', info:'INFO' };
-            const icons = { hard_fail:'fa-skull-crossbones', critical:'fa-exclamation-circle', warning:'fa-exclamation-triangle', info:'fa-info-circle' };
-            return (
-                <span className={`badge-${s} text-xs font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1`}>
-                    <i className={`fas ${icons[s] || 'fa-info-circle'} text-[10px]`}></i>
-                    {labels[s] || s.toUpperCase()}
-                </span>
-            );
-        }
-
-        function VerdictBadge({ verdict, size = 'lg' }) {
-            const v = (verdict || 'unknown').toLowerCase();
-            const colors = { real:'verdict-real', suspicious:'verdict-suspicious', fake:'verdict-fake' };
-            const icons = { real:'fa-check-circle', suspicious:'fa-exclamation-triangle', fake:'fa-times-circle' };
-            const cls = size === 'lg' ? 'text-2xl font-bold px-6 py-3' : 'text-sm font-semibold px-3 py-1';
-            return (
-                <div className={`${colors[v] || 'bg-gray-100 border-gray-400 text-gray-600'} border-2 rounded-xl ${cls} inline-flex items-center gap-2 uppercase`}>
-                    <i className={`fas ${icons[v] || 'fa-question-circle'}`}></i>
-                    {verdict || 'unknown'}
-                </div>
-            );
-        }
-
-        function ConfidenceBar({ value }) {
-            const pct = Math.round((value || 0) * 100);
-            const color = pct >= 70 ? 'bg-red-500' : pct >= 40 ? 'bg-yellow-500' : 'bg-green-500';
-            return (
-                <div className="flex items-center gap-3">
-                    <div className="flex-1 bg-gray-200 rounded-full h-3 overflow-hidden">
-                        <div className={`${color} h-full rounded-full transition-all`} style={{ width: `${pct}%` }}></div>
-                    </div>
-                    <span className="text-sm font-bold text-gray-700 w-12 text-right">{pct}%</span>
-                </div>
-            );
-        }
-
-        function CollapsibleSection({ title, icon, badge, defaultOpen = true, children }) {
+        function StepCard({ stepNum, icon, iconColor, title, defaultOpen = true, children }) {
             const [open, setOpen] = useState(defaultOpen);
             return (
-                <div className="mb-4">
-                    <div className="section-collapse flex items-center justify-between p-3 bg-white rounded-t-lg border border-b-0 border-gray-200" onClick={() => setOpen(!open)}>
-                        <div className="flex items-center gap-2">
-                            {icon && <i className={`fas ${icon} text-indigo-500`}></i>}
-                            <h3 className="font-semibold text-gray-800">{title}</h3>
-                            {badge && <span className="bg-indigo-100 text-indigo-700 text-xs font-bold px-2 py-0.5 rounded-full">{badge}</span>}
+                <div className="step-card">
+                    <div className="step-header" onClick={() => setOpen(!open)}>
+                        <div className="flex items-center">
+                            <span className={`step-number ${iconColor || 'bg-indigo-100 text-indigo-600'}`}>
+                                {icon ? <i className={`fas ${icon} text-xs`}></i> : stepNum}
+                            </span>
+                            <h3 className="font-semibold text-gray-800 text-[15px]">{title}</h3>
                         </div>
-                        <i className={`fas fa-chevron-${open ? 'up' : 'down'} text-gray-400`}></i>
+                        <i className={`fas fa-chevron-${open ? 'up' : 'down'} text-gray-400 text-sm`}></i>
                     </div>
-                    {open && <div className="bg-white rounded-b-lg border border-gray-200 p-4">{children}</div>}
+                    {open && <div className="step-body">{children}</div>}
                 </div>
             );
         }
 
         // =====================================================================
-        // Main Review Page
+        // Main Review Page - 8-Step Auditor Workflow
         // =====================================================================
-
         function ReviewPage() {
             const [receipt, setReceipt] = useState(null);
             const [loading, setLoading] = useState(true);
-            const [humanLabel, setHumanLabel] = useState('');
-            const [indicatorReviews, setIndicatorReviews] = useState({});
-            const [missedIndicators, setMissedIndicators] = useState([]);
-            const [corrections, setCorrections] = useState({});
-            const [additionalNotes, setAdditionalNotes] = useState('');
             const [zoom, setZoom] = useState(1.0);
+
+            // Step 1: Verdict
+            const [humanLabel, setHumanLabel] = useState('');
+            // Step 2: Indicator reviews
+            const [indicatorReviews, setIndicatorReviews] = useState({});
+            // Step 3: Missed issues
+            const [missedIndicators, setMissedIndicators] = useState([]);
+            // Step 4: Data corrections
+            const [corrections, setCorrections] = useState({});
+            // Step 5: Font analysis
+            const [fontManipulation, setFontManipulation] = useState(false);
+            const [fontNotes, setFontNotes] = useState('');
+            // Step 6: Address validation
+            const [addressIssues, setAddressIssues] = useState('');
+            // Step 7: Visual integrity
+            const [visualIssues, setVisualIssues] = useState('');
+            // Step 8: Amount verification
+            const [amountNotes, setAmountNotes] = useState('');
+            // Additional notes
+            const [additionalNotes, setAdditionalNotes] = useState('');
+            // Submission
             const [submitting, setSubmitting] = useState(false);
             const [submitted, setSubmitted] = useState(false);
-            const [activeTab, setActiveTab] = useState('indicators');
-            
+
             const receiptId = new URLSearchParams(window.location.search).get('id');
-            
+
             useEffect(() => {
                 const storedData = sessionStorage.getItem('currentReceipt');
                 if (storedData) {
@@ -133,45 +110,29 @@
                             image_url: imageUrl,
                             verdict: data.verdict || 'suspicious',
                             confidence: data.confidence || 0.5,
-                            recommended_action: data.recommended_action || 'review',
-                            reasoning: data.reasoning || [],
-                            audit_report: data.audit_report || null,
                             models: data.models || {},
                             extracted: data.extracted || {},
-                            _fullData: data._fullData || null,
                         });
                     } catch (e) {
-                        setReceipt({ id: receiptId || 'unknown', image_url:'', verdict:'suspicious', confidence:0.5, models:{}, extracted:{}, reasoning:[] });
+                        setReceipt({ id: receiptId || 'unknown', image_url:'', verdict:'suspicious', confidence:0.5, models:{}, extracted:{} });
                     }
                 } else {
-                    setReceipt({ id: receiptId || 'unknown', image_url:'', verdict:'suspicious', confidence:0.5, models:{}, extracted:{}, reasoning:[] });
+                    setReceipt({ id: receiptId || 'unknown', image_url:'', verdict:'suspicious', confidence:0.5, models:{}, extracted:{} });
                 }
                 setLoading(false);
             }, [receiptId]);
 
-            // Parse events from rule_based model into severity groups
-            const eventGroups = useMemo(() => {
-                if (!receipt) return { hard_fail:[], critical:[], warning:[], info:[] };
-                const events = receipt.models?.rule_based?.events || [];
-                const groups = { hard_fail:[], critical:[], warning:[], info:[] };
-                events.forEach(ev => {
-                    const sev = (ev.severity || 'info').toLowerCase();
-                    if (groups[sev]) groups[sev].push(ev);
-                    else groups.info.push(ev);
-                });
-                return groups;
-            }, [receipt]);
-
-            const totalEvents = useMemo(() => {
-                return Object.values(eventGroups).reduce((s, g) => s + g.length, 0);
-            }, [eventGroups]);
+            const events = useMemo(() => receipt?.models?.rule_based?.events || [], [receipt]);
+            const scorableEvents = useMemo(() => events.filter(e => (e.severity||'').toUpperCase() !== 'INFO' && (e.weight||0) > 0), [events]);
+            const ruleScore = receipt?.models?.rule_based?.score;
+            const confidencePct = Math.round((ruleScore || receipt?.confidence || 0) * 100);
 
             const handleIndicatorReview = (ruleId, status, note = '') => {
                 setIndicatorReviews(prev => ({ ...prev, [ruleId]: { status, note } }));
             };
 
             const handleSubmit = async () => {
-                if (!humanLabel) { alert('Please select a verdict'); return; }
+                if (!humanLabel) { alert('Please select your verdict in Step 1'); return; }
                 setSubmitting(true);
 
                 const falseIndicators = Object.entries(indicatorReviews)
@@ -189,6 +150,10 @@
                     false_indicators: falseIndicators,
                     confirmed_indicators: confirmedIndicators,
                     data_corrections: corrections,
+                    font_manipulation: fontManipulation,
+                    address_issues: addressIssues || null,
+                    visual_integrity_issues: visualIssues || null,
+                    amount_verification_notes: amountNotes || null,
                 };
 
                 try {
@@ -197,7 +162,6 @@
                         body: JSON.stringify(feedbackData)
                     });
                     if (res.ok) {
-                        const result = await res.json();
                         setSubmitted(true);
                         setTimeout(() => { window.location.href = '/'; }, 2000);
                     } else {
@@ -213,474 +177,360 @@
 
             if (loading) return (
                 <div className="flex items-center justify-center h-screen bg-slate-50">
-                    <div className="text-center"><i className="fas fa-spinner fa-spin text-4xl text-indigo-600 mb-4"></i><p className="text-gray-500">Loading...</p></div>
+                    <div className="text-center"><i className="fas fa-spinner fa-spin text-4xl text-indigo-600 mb-4"></i><p className="text-gray-500 mt-3">Loading review...</p></div>
                 </div>
             );
             if (submitted) return (
                 <div className="flex items-center justify-center h-screen bg-green-50">
                     <div className="text-center">
                         <i className="fas fa-check-circle text-6xl text-green-600 mb-4"></i>
-                        <h2 className="text-2xl font-bold text-gray-800 mb-2">Feedback Submitted</h2>
-                        <p className="text-gray-600">Redirecting...</p>
+                        <h2 className="text-2xl font-bold text-gray-800 mb-2">Review Submitted</h2>
+                        <p className="text-gray-600">System will learn from your corrections. Redirecting...</p>
                     </div>
                 </div>
             );
 
-            const ruleBasedScore = receipt.models?.rule_based?.score;
-            const reasons = receipt.models?.rule_based?.reasons || [];
-            const minorNotes = receipt.models?.rule_based?.minor_notes || [];
-            const events = receipt.models?.rule_based?.events || [];
-
-            // Extract document classification info from full data
-            const fullData = receipt._fullData || {};
-            const ruleBasedData = receipt.models?.rule_based || {};
-
             return (
                 <div className="split-screen">
-                    {/* ============== LEFT PANEL: Image + Classification ============== */}
+                    {/* ============== LEFT PANEL: Document Preview ============== */}
                     <div className="left-panel">
-                        {/* Sticky top bar */}
-                        <div className="sticky top-0 z-10 bg-slate-900/95 backdrop-blur border-b border-slate-700 px-4 py-3">
+                        {/* Header bar */}
+                        <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-5 py-3">
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-3">
-                                    <a href="index.html" className="text-slate-400 hover:text-white transition"><i className="fas fa-arrow-left"></i></a>
-                                    <span className="text-white font-semibold">Receipt Review</span>
-                                    <span className="text-slate-500 text-sm">#{receipt.id?.substring(0, 8)}</span>
+                                    <i className="fas fa-file-image text-indigo-500"></i>
+                                    <span className="font-semibold text-gray-800">Document Preview</span>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    <button onClick={() => setZoom(z => Math.max(z-0.2, 0.3))} className="text-slate-400 hover:text-white px-2 py-1 rounded hover:bg-slate-700"><i className="fas fa-search-minus"></i></button>
-                                    <span className="text-slate-500 text-xs w-10 text-center">{Math.round(zoom*100)}%</span>
-                                    <button onClick={() => setZoom(z => Math.min(z+0.2, 4))} className="text-slate-400 hover:text-white px-2 py-1 rounded hover:bg-slate-700"><i className="fas fa-search-plus"></i></button>
-                                    <button onClick={() => setZoom(1)} className="text-slate-400 hover:text-white px-2 py-1 rounded hover:bg-slate-700 text-xs">Reset</button>
+                                <div className="flex items-center gap-2 bg-gray-100 rounded-full px-3 py-1">
+                                    <button onClick={() => setZoom(z => Math.max(z-0.2, 0.3))} className="text-gray-500 hover:text-gray-800 px-1"><i className="fas fa-minus text-xs"></i></button>
+                                    <input type="range" min="30" max="300" value={zoom*100}
+                                        onChange={e => setZoom(parseInt(e.target.value)/100)}
+                                        className="w-24 h-1 accent-indigo-500" />
+                                    <button onClick={() => setZoom(z => Math.min(z+0.2, 3))} className="text-gray-500 hover:text-gray-800 px-1"><i className="fas fa-plus text-xs"></i></button>
+                                    <span className="text-xs text-gray-500 font-mono w-10 text-center">{Math.round(zoom*100)}%</span>
                                 </div>
-                            </div>
-                        </div>
-
-                        {/* Verdict summary card */}
-                        <div className="mx-4 mt-4 mb-3 bg-slate-800 rounded-xl p-4 border border-slate-700">
-                            <div className="flex items-center justify-between mb-3">
-                                <VerdictBadge verdict={receipt.verdict} size="sm" />
-                                {receipt.recommended_action && (
-                                    <span className="text-xs text-slate-400 bg-slate-700 px-2 py-1 rounded">
-                                        <i className="fas fa-hand-point-right mr-1"></i>{receipt.recommended_action}
-                                    </span>
-                                )}
-                            </div>
-                            <div className="mb-2">
-                                <div className="text-xs text-slate-500 mb-1">Fraud Score</div>
-                                <ConfidenceBar value={ruleBasedScore || receipt.confidence} />
-                            </div>
-                            <div className="grid grid-cols-3 gap-2 mt-3 text-center">
-                                <div className="bg-slate-700/50 rounded-lg p-2">
-                                    <div className="text-red-400 font-bold text-lg">{eventGroups.hard_fail.length + eventGroups.critical.length}</div>
-                                    <div className="text-slate-500 text-[10px]">CRITICAL</div>
-                                </div>
-                                <div className="bg-slate-700/50 rounded-lg p-2">
-                                    <div className="text-yellow-400 font-bold text-lg">{eventGroups.warning.length}</div>
-                                    <div className="text-slate-500 text-[10px]">WARNING</div>
-                                </div>
-                                <div className="bg-slate-700/50 rounded-lg p-2">
-                                    <div className="text-blue-400 font-bold text-lg">{eventGroups.info.length}</div>
-                                    <div className="text-slate-500 text-[10px]">INFO</div>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Model agreement */}
-                        <div className="mx-4 mb-3 bg-slate-800 rounded-xl p-4 border border-slate-700">
-                            <div className="text-xs text-slate-500 mb-2 font-semibold uppercase tracking-wider">Engine Agreement</div>
-                            <div className="space-y-2 text-sm">
-                                {[
-                                    { name:'Rule Engine', data: receipt.models?.rule_based, key:'label' },
-                                    { name:'DONUT', data: receipt.models?.donut, key:'data_quality' },
-                                    { name:'LayoutLM', data: receipt.models?.layoutlm, key:'data_quality' },
-                                    { name:'Vision LLM', data: receipt.models?.vision_llm, key:'verdict' },
-                                ].map(({ name, data, key }) => {
-                                    const val = data?.[key] || data?.verdict || 'N/A';
-                                    const color = val === 'fake' ? 'text-red-400' : val === 'suspicious' ? 'text-yellow-400' : val === 'real' || val === 'good' ? 'text-green-400' : 'text-slate-500';
-                                    return (
-                                        <div key={name} className="flex justify-between items-center">
-                                            <span className="text-slate-400">{name}</span>
-                                            <span className={`font-semibold ${color} uppercase text-xs`}>{val}</span>
-                                        </div>
-                                    );
-                                })}
                             </div>
                         </div>
 
                         {/* Receipt image */}
-                        <div className="p-4">
+                        <div className="p-6 flex justify-center">
                             {receipt.image_url ? (
-                                <img src={receipt.image_url} alt="Receipt" className="receipt-image rounded-lg shadow-2xl border border-slate-700"
+                                <img src={receipt.image_url} alt="Receipt"
+                                    className="receipt-image rounded-xl shadow-lg border border-gray-200 max-w-full"
                                     style={{ transform: `scale(${zoom})` }}
-                                    onError={(e) => { e.target.onerror=null; e.target.src='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="%231e293b"/><text x="50%" y="50%" text-anchor="middle" fill="%2394a3b8" font-size="16">Image Load Failed</text></svg>'; }}
+                                    onError={(e) => { e.target.onerror=null; e.target.src='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="%23f1f5f9"/><text x="50%" y="50%" text-anchor="middle" fill="%2394a3b8" font-size="16">Image not available</text></svg>'; }}
                                 />
                             ) : (
-                                <div className="rounded-lg border-2 border-dashed border-slate-700 p-16 text-center">
-                                    <i className="fas fa-image text-4xl text-slate-600 mb-3"></i>
-                                    <p className="text-slate-500">No image available</p>
+                                <div className="rounded-xl border-2 border-dashed border-gray-300 p-20 text-center w-full">
+                                    <i className="fas fa-image text-5xl text-gray-300 mb-4"></i>
+                                    <p className="text-gray-400">No image available</p>
                                 </div>
                             )}
                         </div>
                     </div>
 
-                    {/* ============== RIGHT PANEL: Review Form ============== */}
+                    {/* ============== RIGHT PANEL: 8-Step Review Workflow ============== */}
                     <div className="right-panel">
-                        {/* Tabs */}
-                        <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-6 flex gap-6">
-                            {[
-                                { id:'indicators', label:'Fraud Indicators', icon:'fa-shield-halved', count: totalEvents },
-                                { id:'extraction', label:'Extracted Data', icon:'fa-table' },
-                                { id:'review', label:'Your Review', icon:'fa-user-check' },
-                            ].map(tab => (
-                                <button key={tab.id}
-                                    className={`py-3 px-1 text-sm flex items-center gap-2 transition ${activeTab === tab.id ? 'tab-active' : 'tab-inactive'}`}
-                                    onClick={() => setActiveTab(tab.id)}>
-                                    <i className={`fas ${tab.icon}`}></i>
-                                    {tab.label}
-                                    {tab.count !== undefined && <span className="bg-gray-200 text-gray-700 text-xs px-1.5 py-0.5 rounded-full">{tab.count}</span>}
-                                </button>
-                            ))}
+                        {/* Top bar */}
+                        <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-5 py-3 flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <i className="fas fa-shield-halved text-indigo-500"></i>
+                                <span className="font-bold text-gray-800">VeriReceipt Auditor</span>
+                                <span className="text-xs text-gray-400">Document Review Console</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded font-mono">ID: {receipt.id?.substring(0, 12)}...</span>
+                                <a href="/" className="text-gray-400 hover:text-gray-700 text-sm flex items-center gap-1">
+                                    <i className="fas fa-arrow-left"></i> Exit
+                                </a>
+                            </div>
                         </div>
 
-                        <div className="p-6">
-                            {/* ========== TAB: Fraud Indicators ========== */}
-                            {activeTab === 'indicators' && (
-                                <div>
-                                    {/* Severity groups */}
-                                    {[
-                                        { key:'hard_fail', label:'Hard Fail', icon:'fa-skull-crossbones' },
-                                        { key:'critical', label:'Critical', icon:'fa-exclamation-circle' },
-                                        { key:'warning', label:'Warning', icon:'fa-exclamation-triangle' },
-                                        { key:'info', label:'Informational', icon:'fa-info-circle' },
-                                    ].map(({ key, label, icon }) => {
-                                        const items = eventGroups[key];
-                                        if (!items || items.length === 0) return null;
-                                        return (
-                                            <CollapsibleSection key={key} title={label} icon={icon} badge={items.length} defaultOpen={key !== 'info'}>
-                                                <div className="space-y-3">
-                                                    {items.map((ev, idx) => {
-                                                        const ruleCategory = (() => {
-                                                            const rid = ev.rule_id || '';
-                                                            if (rid.startsWith('R1')) return 'Metadata';
-                                                            if (rid.startsWith('R7D')) return 'Tax Math';
-                                                            if (rid.startsWith('R7')) return 'Amounts';
-                                                            if (rid.includes('IMAGE') || rid.includes('ELA') || rid.includes('FORENSIC')) return 'Forensics';
-                                                            if (rid.includes('SCREENSHOT')) return 'Screenshot';
-                                                            if (rid.includes('STRUCTURE')) return 'Structure';
-                                                            if (rid.includes('ADDRESS')) return 'Address';
-                                                            if (rid.includes('TAX')) return 'Tax';
-                                                            if (rid.includes('DATE') || rid.includes('FUTURE')) return 'Dates';
-                                                            if (rid.includes('MERCHANT') || rid.startsWith('R9')) return 'Merchant';
-                                                            if (rid.includes('AMOUNT') || rid.includes('ROUND') || rid.includes('PLAUS')) return 'Amounts';
-                                                            if (rid.includes('TAMPER') || rid.includes('WATERMARK')) return 'Tampering';
-                                                            return 'General';
-                                                        })();
-                                                        const weightPct = Math.min(100, Math.round((ev.weight || 0) * 200));
-                                                        return (
-                                                        <div key={idx} className={`severity-${key} rounded-lg p-3`}>
-                                                            <div className="flex items-start justify-between mb-1">
-                                                                <div className="flex items-center gap-2 flex-wrap">
-                                                                    <SeverityBadge severity={ev.severity} />
-                                                                    <code className="text-xs bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded font-mono">{ev.rule_id}</code>
-                                                                    <span className="text-[10px] bg-indigo-50 text-indigo-600 border border-indigo-200 px-1.5 py-0.5 rounded">{ruleCategory}</span>
-                                                                </div>
-                                                                {ev.weight > 0 && (
-                                                                    <div className="flex items-center gap-1 min-w-[80px]" title={`Weight: ${ev.weight} (${weightPct}% of bar)`}>
-                                                                        <div className="w-12 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                                                                            <div className={`h-full rounded-full ${key === 'hard_fail' || key === 'critical' ? 'bg-red-500' : key === 'warning' ? 'bg-yellow-500' : 'bg-blue-400'}`} style={{width:`${weightPct}%`}}></div>
-                                                                        </div>
-                                                                        <span className="text-[10px] text-gray-500 font-mono">{ev.weight}</span>
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                            <p className="text-sm text-gray-800 font-medium mb-1">{ev.message}</p>
-                                                            {ev.reason_text && (
-                                                                <p className="text-xs text-gray-600 bg-gray-50 rounded p-2 mb-2 leading-relaxed">{ev.reason_text}</p>
-                                                            )}
-                                                            {ev.evidence && Object.keys(ev.evidence).length > 0 && (
-                                                                <details className="mt-1">
-                                                                    <summary className="text-[10px] text-gray-400 cursor-pointer hover:text-gray-600">Evidence ({Object.keys(ev.evidence).length} fields)</summary>
-                                                                    <div className="flex flex-wrap gap-1 mt-1">
-                                                                        {Object.entries(ev.evidence).map(([k, v]) => (
-                                                                            <span key={k} className="evidence-tag" title={typeof v === 'object' ? JSON.stringify(v) : String(v)}>
-                                                                                <strong>{k}:</strong> {typeof v === 'object' ? JSON.stringify(v).substring(0, 60) : String(v).substring(0, 60)}
-                                                                            </span>
-                                                                        ))}
-                                                                    </div>
-                                                                </details>
-                                                            )}
-                                                        </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </CollapsibleSection>
-                                        );
-                                    })}
-
-                                    {/* Human-readable reasons (if events aren't available) */}
-                                    {totalEvents === 0 && reasons.length > 0 && (
-                                        <CollapsibleSection title="Fraud Reasons" icon="fa-list" badge={reasons.length}>
-                                            <div className="space-y-2">
-                                                {reasons.map((r, i) => (
-                                                    <div key={i} className="severity-warning rounded-lg p-3 text-sm text-gray-800">{r}</div>
-                                                ))}
-                                            </div>
-                                        </CollapsibleSection>
-                                    )}
-
-                                    {/* Minor notes */}
-                                    {minorNotes.length > 0 && (
-                                        <CollapsibleSection title="Minor Notes" icon="fa-sticky-note" badge={minorNotes.length} defaultOpen={false}>
-                                            <ul className="text-sm text-gray-600 space-y-1">
-                                                {minorNotes.map((n, i) => <li key={i} className="flex gap-2"><span className="text-gray-400">-</span>{n}</li>)}
-                                            </ul>
-                                        </CollapsibleSection>
-                                    )}
-
-                                    {/* Ensemble reasoning */}
-                                    {receipt.reasoning && receipt.reasoning.length > 0 && (
-                                        <CollapsibleSection title="Ensemble Reasoning" icon="fa-brain" defaultOpen={false}>
-                                            <ul className="text-sm text-gray-700 space-y-1">
-                                                {receipt.reasoning.map((r, i) => <li key={i}>{r}</li>)}
-                                            </ul>
-                                        </CollapsibleSection>
-                                    )}
-
-                                    {/* Audit report */}
-                                    {receipt.audit_report && (
-                                        <CollapsibleSection title="Audit Report" icon="fa-file-alt" defaultOpen={false}>
-                                            <pre className="text-xs text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3 max-h-96 overflow-auto">{receipt.audit_report}</pre>
-                                        </CollapsibleSection>
-                                    )}
-                                </div>
-                            )}
-
-                            {/* ========== TAB: Extracted Data ========== */}
-                            {activeTab === 'extraction' && (
-                                <div>
-                                    {/* Extraction from each engine */}
-                                    {[
-                                        { name:'DONUT Extraction', data: receipt.models?.donut, fields: ['merchant','total','date','line_items_count'] },
-                                        { name:'Donut-Receipt', data: receipt.models?.donut_receipt, fields: ['merchant','total','date','items_count'] },
-                                        { name:'LayoutLM', data: receipt.models?.layoutlm, fields: ['merchant','total','date','words_extracted','confidence'] },
-                                        { name:'Vision LLM', data: receipt.models?.vision_llm, fields: ['verdict','confidence','reasoning'] },
-                                    ].map(({ name, data, fields }) => {
-                                        if (!data || data.error) return (
-                                            <CollapsibleSection key={name} title={name} icon="fa-cube" defaultOpen={false}>
-                                                <p className="text-sm text-red-500">{data?.error || 'No data'}</p>
-                                            </CollapsibleSection>
-                                        );
-                                        return (
-                                            <CollapsibleSection key={name} title={name} icon="fa-cube" defaultOpen={false}>
-                                                <div className="grid grid-cols-2 gap-2 text-sm">
-                                                    {fields.map(f => {
-                                                        let val = data[f];
-                                                        if (val && typeof val === 'object') val = JSON.stringify(val);
-                                                        return val != null ? (
-                                                            <div key={f} className="bg-gray-50 rounded p-2">
-                                                                <div className="text-xs text-gray-500 font-semibold uppercase">{f.replace(/_/g,' ')}</div>
-                                                                <div className="text-gray-800 font-medium truncate">{String(val)}</div>
-                                                            </div>
-                                                        ) : null;
-                                                    })}
-                                                </div>
-                                                {/* Show all fields as JSON for advanced users */}
-                                                <details className="mt-3">
-                                                    <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-700">Show raw JSON</summary>
-                                                    <pre className="text-[10px] text-gray-600 bg-gray-50 rounded p-2 mt-1 max-h-48 overflow-auto">{JSON.stringify(data, null, 2)}</pre>
-                                                </details>
-                                            </CollapsibleSection>
-                                        );
-                                    })}
-
-                                    {/* Rule engine details */}
-                                    <CollapsibleSection title="Rule Engine Details" icon="fa-gavel" defaultOpen={false}>
-                                        <div className="grid grid-cols-2 gap-2 text-sm mb-3">
-                                            <div className="bg-gray-50 rounded p-2">
-                                                <div className="text-xs text-gray-500 font-semibold">SCORE</div>
-                                                <div className="text-gray-800 font-bold text-lg">{ruleBasedScore !== undefined ? (ruleBasedScore * 100).toFixed(0) + '%' : 'N/A'}</div>
-                                            </div>
-                                            <div className="bg-gray-50 rounded p-2">
-                                                <div className="text-xs text-gray-500 font-semibold">LABEL</div>
-                                                <div className="text-gray-800 font-bold text-lg uppercase">{ruleBasedData.label || 'N/A'}</div>
-                                            </div>
-                                            <div className="bg-gray-50 rounded p-2">
-                                                <div className="text-xs text-gray-500 font-semibold">EVENTS</div>
-                                                <div className="text-gray-800 font-bold">{events.length}</div>
-                                            </div>
-                                            <div className="bg-gray-50 rounded p-2">
-                                                <div className="text-xs text-gray-500 font-semibold">REASONS</div>
-                                                <div className="text-gray-800 font-bold">{reasons.length}</div>
-                                            </div>
+                        <div className="p-5 pb-32">
+                            {/* ===== AI Analysis Summary ===== */}
+                            <div className="step-card">
+                                <div className="p-5">
+                                    <div className="flex items-center gap-2 mb-4">
+                                        <i className="fas fa-robot text-indigo-500"></i>
+                                        <h3 className="font-bold text-gray-800">AI Analysis Summary</h3>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <div className="text-xs text-gray-500 mb-1">AI Verdict</div>
+                                            <div className={`text-xl font-bold uppercase ${
+                                                receipt.verdict === 'real' ? 'text-green-600' :
+                                                receipt.verdict === 'suspicious' ? 'text-yellow-600' : 'text-red-600'
+                                            }`}>{receipt.verdict || 'UNKNOWN'}</div>
                                         </div>
-                                        <details>
-                                            <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-700">Full rule engine JSON</summary>
-                                            <pre className="text-[10px] text-gray-600 bg-gray-50 rounded p-2 mt-1 max-h-64 overflow-auto">{JSON.stringify(ruleBasedData, null, 2)}</pre>
-                                        </details>
-                                    </CollapsibleSection>
-                                </div>
-                            )}
-
-                            {/* ========== TAB: Your Review ========== */}
-                            {activeTab === 'review' && (
-                                <div>
-                                    {/* Human verdict */}
-                                    <CollapsibleSection title="Your Verdict" icon="fa-gavel">
-                                        <div className="grid grid-cols-3 gap-3">
-                                            {['real','suspicious','fake'].map(label => (
-                                                <div key={label}
-                                                    onClick={() => setHumanLabel(label)}
-                                                    className={`review-option text-center p-4 rounded-xl border-2 cursor-pointer ${
-                                                        humanLabel === label
-                                                            ? label === 'real' ? 'border-green-500 bg-green-50' : label === 'suspicious' ? 'border-yellow-500 bg-yellow-50' : 'border-red-500 bg-red-50'
-                                                            : 'border-gray-200 hover:border-gray-400'
-                                                    }`}>
-                                                    <i className={`fas ${label === 'real' ? 'fa-check-circle text-green-500' : label === 'suspicious' ? 'fa-exclamation-triangle text-yellow-500' : 'fa-times-circle text-red-500'} text-2xl mb-2`}></i>
-                                                    <div className={`font-bold uppercase text-sm ${label === 'real' ? 'text-green-700' : label === 'suspicious' ? 'text-yellow-700' : 'text-red-700'}`}>{label}</div>
-                                                </div>
-                                            ))}
+                                        <div>
+                                            <div className="text-xs text-gray-500 mb-1">Confidence</div>
+                                            <div className="text-xl font-bold text-gray-800">{confidencePct}%</div>
                                         </div>
-                                    </CollapsibleSection>
-
-                                    {/* Per-indicator review */}
-                                    {events.length > 0 && (
-                                        <CollapsibleSection title="Review Each Indicator" icon="fa-clipboard-check" badge={events.filter(e => e.severity !== 'INFO').length}>
-                                            <p className="text-xs text-gray-500 mb-3">Mark each AI-detected indicator as correct, false alarm, or uncertain:</p>
-                                            <div className="space-y-3">
-                                                {events.filter(e => (e.severity || '').toUpperCase() !== 'INFO').map((ev, idx) => (
-                                                    <div key={idx} className={`severity-${(ev.severity || 'info').toLowerCase()} rounded-lg p-3`}>
-                                                        <div className="flex items-center gap-2 mb-2">
-                                                            <SeverityBadge severity={ev.severity} />
-                                                            <code className="text-xs text-gray-600 font-mono">{ev.rule_id}</code>
-                                                        </div>
-                                                        <p className="text-sm text-gray-800 mb-2">{ev.message}</p>
-                                                        <div className="flex gap-2">
-                                                            {[
-                                                                { val:'correct', icon:'fa-check', label:'Correct', cls:'bg-green-100 text-green-700 border-green-300' },
-                                                                { val:'wrong', icon:'fa-times', label:'False Alarm', cls:'bg-red-100 text-red-700 border-red-300' },
-                                                                { val:'uncertain', icon:'fa-question', label:'Unsure', cls:'bg-gray-100 text-gray-600 border-gray-300' },
-                                                            ].map(opt => (
-                                                                <button key={opt.val}
-                                                                    onClick={() => handleIndicatorReview(ev.rule_id, opt.val)}
-                                                                    className={`text-xs px-3 py-1.5 rounded-lg border font-semibold transition ${
-                                                                        indicatorReviews[ev.rule_id]?.status === opt.val ? opt.cls + ' ring-2 ring-offset-1' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
-                                                                    }`}>
-                                                                    <i className={`fas ${opt.icon} mr-1`}></i>{opt.label}
-                                                                </button>
-                                                            ))}
-                                                        </div>
-                                                        {indicatorReviews[ev.rule_id]?.status === 'wrong' && (
-                                                            <input type="text" placeholder="Why is this a false alarm?"
-                                                                className="mt-2 w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:border-indigo-500 focus:outline-none"
-                                                                onChange={(e) => handleIndicatorReview(ev.rule_id, 'wrong', e.target.value)} />
-                                                        )}
+                                    </div>
+                                    {scorableEvents.length > 0 && (
+                                        <div className="mt-4 pt-3 border-t border-gray-100">
+                                            <div className="text-xs text-gray-500 mb-2">Key Issues Found</div>
+                                            <div className="space-y-1">
+                                                {scorableEvents.slice(0, 5).map((ev, i) => (
+                                                    <div key={i} className="flex items-center gap-2 text-sm">
+                                                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                                            ev.severity === 'CRITICAL' ? 'bg-red-500' :
+                                                            ev.severity === 'WARNING' ? 'bg-yellow-500' : 'bg-blue-500'
+                                                        }`}></span>
+                                                        <span className="text-gray-700 truncate">{ev.message}</span>
                                                     </div>
                                                 ))}
                                             </div>
-                                        </CollapsibleSection>
+                                        </div>
                                     )}
+                                </div>
+                            </div>
 
-                                    {/* Fallback: per-reason review when events aren't available */}
-                                    {events.length === 0 && reasons.length > 0 && (
-                                        <CollapsibleSection title="Review Fraud Reasons" icon="fa-clipboard-check" badge={reasons.length}>
-                                            <div className="space-y-3">
-                                                {reasons.map((reason, idx) => (
-                                                    <div key={idx} className="severity-warning rounded-lg p-3">
-                                                        <p className="text-sm text-gray-800 mb-2">{reason}</p>
-                                                        <div className="flex gap-2">
-                                                            {['correct','wrong','uncertain'].map(val => (
-                                                                <button key={val}
-                                                                    onClick={() => handleIndicatorReview(`reason_${idx}`, val)}
-                                                                    className={`text-xs px-3 py-1.5 rounded-lg border font-semibold ${
-                                                                        indicatorReviews[`reason_${idx}`]?.status === val ? 'ring-2 ring-offset-1 bg-indigo-50 border-indigo-300 text-indigo-700' : 'bg-white text-gray-500 border-gray-200'
-                                                                    }`}>
-                                                                    {val === 'correct' ? '✅ Correct' : val === 'wrong' ? '❌ False' : '🤷 Unsure'}
-                                                                </button>
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                ))}
+                            {/* ===== Step 1: Your Verdict ===== */}
+                            <StepCard stepNum="1" icon="fa-gavel" iconColor="bg-purple-100 text-purple-600" title="Step 1: Your Verdict" defaultOpen={true}>
+                                <p className="text-sm text-gray-500 mb-4">Based on your expert review, what is your verdict?</p>
+                                <div className="space-y-3">
+                                    {[
+                                        { val:'real', icon:'fa-check-circle', color:'green', label:'Real', desc:'Document appears legitimate' },
+                                        { val:'suspicious', icon:'fa-exclamation-circle', color:'yellow', label:'Suspicious', desc:'Needs further investigation' },
+                                        { val:'fake', icon:'fa-times-circle', color:'blue', label:'Fake', desc:'Document is fraudulent' },
+                                    ].map(opt => (
+                                        <div key={opt.val}
+                                            onClick={() => setHumanLabel(opt.val)}
+                                            className={`verdict-option flex items-center gap-4 ${humanLabel === opt.val ? `selected-${opt.val}` : ''}`}>
+                                            <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
+                                                opt.val === 'real' ? 'bg-green-100' : opt.val === 'suspicious' ? 'bg-yellow-100' : 'bg-blue-100'
+                                            }`}>
+                                                <i className={`fas ${opt.icon} ${
+                                                    opt.val === 'real' ? 'text-green-600' : opt.val === 'suspicious' ? 'text-yellow-600' : 'text-blue-600'
+                                                }`}></i>
                                             </div>
-                                        </CollapsibleSection>
-                                    )}
-
-                                    {/* Missed indicators */}
-                                    <CollapsibleSection title="Missed Indicators" icon="fa-eye-slash" defaultOpen={false}>
-                                        <p className="text-xs text-gray-500 mb-3">Did the AI miss any fraud signals?</p>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            {[
-                                                { id:'spacing_anomalies', label:'Spacing / alignment issues', icon:'fa-arrows-alt-h' },
-                                                { id:'font_inconsistencies', label:'Font inconsistencies', icon:'fa-font' },
-                                                { id:'date_manipulation', label:'Date manipulation', icon:'fa-calendar-times' },
-                                                { id:'amount_tampering', label:'Amount tampering', icon:'fa-dollar-sign' },
-                                                { id:'suspicious_merchant', label:'Suspicious merchant', icon:'fa-store' },
-                                                { id:'invalid_address', label:'Invalid address', icon:'fa-map-marker-alt' },
-                                                { id:'poor_image_quality', label:'Poor image quality', icon:'fa-image' },
-                                                { id:'missing_elements', label:'Missing receipt elements', icon:'fa-puzzle-piece' },
-                                                { id:'watermark_issues', label:'Watermark / logo issues', icon:'fa-certificate' },
-                                                { id:'tax_math_error', label:'Tax math error', icon:'fa-calculator' },
-                                            ].map(m => (
-                                                <label key={m.id} className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer text-sm transition ${
-                                                    missedIndicators.includes(m.id) ? 'bg-orange-50 border-orange-300 text-orange-800' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
-                                                }`}>
-                                                    <input type="checkbox" checked={missedIndicators.includes(m.id)}
-                                                        onChange={() => setMissedIndicators(prev => prev.includes(m.id) ? prev.filter(i => i !== m.id) : [...prev, m.id])}
-                                                        className="w-3.5 h-3.5" />
-                                                    <i className={`fas ${m.icon} text-xs`}></i>
-                                                    {m.label}
-                                                </label>
-                                            ))}
+                                            <div className="flex-1 text-left">
+                                                <div className="font-semibold text-gray-800">{opt.label}</div>
+                                                <div className="text-xs text-gray-500">{opt.desc}</div>
+                                            </div>
+                                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                                                humanLabel === opt.val ? 'border-indigo-500 bg-indigo-500' : 'border-gray-300'
+                                            }`}>
+                                                {humanLabel === opt.val && <i className="fas fa-check text-white text-[10px]"></i>}
+                                            </div>
                                         </div>
-                                    </CollapsibleSection>
+                                    ))}
+                                </div>
+                            </StepCard>
 
-                                    {/* Corrections */}
-                                    <CollapsibleSection title="Data Corrections" icon="fa-pen" defaultOpen={false}>
-                                        <p className="text-xs text-gray-500 mb-3">Correct any values the AI got wrong:</p>
-                                        <div className="grid grid-cols-2 gap-3">
-                                            {[
-                                                { key:'merchant', label:'Merchant', type:'text', val: receipt.extracted?.merchant?.name || receipt.models?.donut?.merchant },
-                                                { key:'total', label:'Total', type:'number', val: receipt.extracted?.total || receipt.models?.donut?.total?.total_price },
-                                                { key:'tax', label:'Tax', type:'number', val: receipt.extracted?.tax?.amount },
-                                                { key:'date', label:'Date', type:'date', val: receipt.extracted?.date },
-                                            ].map(f => (
-                                                <div key={f.key}>
-                                                    <label className="block text-xs font-semibold text-gray-600 mb-1">{f.label}</label>
-                                                    <input type={f.type} step={f.type === 'number' ? '0.01' : undefined}
-                                                        defaultValue={f.val}
-                                                        placeholder={f.label}
-                                                        onChange={(e) => setCorrections(prev => ({ ...prev, [f.key]: f.type === 'number' ? parseFloat(e.target.value) : e.target.value }))}
-                                                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none" />
+                            {/* ===== Step 2: Review AI Indicators ===== */}
+                            {scorableEvents.length > 0 && (
+                                <StepCard stepNum="2" icon="fa-clipboard-check" iconColor="bg-blue-100 text-blue-600" title="Step 2: Review AI Indicators" defaultOpen={true}>
+                                    <p className="text-sm text-gray-500 mb-3">Was each AI finding correct?</p>
+                                    <div className="space-y-2">
+                                        {scorableEvents.map((ev, idx) => (
+                                            <div key={idx} className="indicator-review">
+                                                <div className="flex items-start justify-between mb-2">
+                                                    <div>
+                                                        <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full mr-2 ${
+                                                            ev.severity === 'CRITICAL' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                                                        }`}>{ev.severity}</span>
+                                                        <span className="text-xs text-gray-400 font-mono">{ev.rule_id}</span>
+                                                    </div>
+                                                    <span className="text-[10px] text-gray-400">w={ev.weight}</span>
                                                 </div>
-                                            ))}
+                                                <p className="text-sm text-gray-800 mb-2">{ev.message}</p>
+                                                {ev.reason_text && <p className="text-xs text-gray-500 mb-2 bg-gray-50 rounded p-2">{ev.reason_text}</p>}
+                                                <div className="flex gap-2">
+                                                    {[
+                                                        { val:'correct', label:'Correct', cls:'sel-correct' },
+                                                        { val:'wrong', label:'False Alarm', cls:'sel-wrong' },
+                                                        { val:'uncertain', label:'Unsure', cls:'sel-unsure' },
+                                                    ].map(opt => (
+                                                        <button key={opt.val}
+                                                            onClick={() => handleIndicatorReview(ev.rule_id, opt.val)}
+                                                            className={`review-btn ${indicatorReviews[ev.rule_id]?.status === opt.val ? opt.cls : ''}`}>
+                                                            {opt.label}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                                {indicatorReviews[ev.rule_id]?.status === 'wrong' && (
+                                                    <input type="text" placeholder="Why is this a false alarm?"
+                                                        className="mt-2 w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:border-indigo-500 focus:outline-none"
+                                                        onChange={(e) => handleIndicatorReview(ev.rule_id, 'wrong', e.target.value)} />
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </StepCard>
+                            )}
+
+                            {/* ===== Step 3: Missed Issues ===== */}
+                            <StepCard stepNum="3" icon="fa-eye-slash" iconColor="bg-orange-100 text-orange-600" title="Step 3: Missed Issues" defaultOpen={true}>
+                                <p className="text-sm text-gray-500 mb-3">Did the AI miss any fraud indicators?</p>
+                                <div className="flex flex-wrap gap-2">
+                                    {[
+                                        { id:'spacing_anomalies', label:'Spacing Issues', icon:'fa-arrows-alt-h' },
+                                        { id:'font_inconsistencies', label:'Font Problems', icon:'fa-font' },
+                                        { id:'invalid_address', label:'Fake Address', icon:'fa-map-marker-alt' },
+                                        { id:'date_manipulation', label:'Date Tampering', icon:'fa-calendar-times' },
+                                        { id:'amount_tampering', label:'Amount Changed', icon:'fa-dollar-sign' },
+                                        { id:'missing_elements', label:'Missing Fields', icon:'fa-puzzle-piece' },
+                                    ].map(m => (
+                                        <button key={m.id}
+                                            onClick={() => setMissedIndicators(prev => prev.includes(m.id) ? prev.filter(i => i !== m.id) : [...prev, m.id])}
+                                            className={`tag-btn ${missedIndicators.includes(m.id) ? 'active' : ''}`}>
+                                            <i className={`fas ${m.icon} text-xs`}></i>
+                                            {m.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </StepCard>
+
+                            {/* ===== Step 4: Data Corrections ===== */}
+                            <StepCard stepNum="4" icon="fa-pen-to-square" iconColor="bg-teal-100 text-teal-600" title="Step 4: Data Corrections" defaultOpen={true}>
+                                <p className="text-sm text-gray-500 mb-3">If the AI extracted wrong values, provide corrections:</p>
+                                <div className="space-y-3">
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 mb-1">Merchant</label>
+                                        <input type="text" placeholder="Correct merchant name"
+                                            defaultValue={receipt.extracted?.merchant?.name || receipt.models?.donut?.merchant || ''}
+                                            onChange={(e) => setCorrections(prev => ({ ...prev, merchant: e.target.value }))}
+                                            className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:border-indigo-500 focus:outline-none" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 mb-1">Total Amount</label>
+                                            <input type="number" step="0.01" placeholder="0.00"
+                                                defaultValue={receipt.extracted?.total || ''}
+                                                onChange={(e) => setCorrections(prev => ({ ...prev, total: parseFloat(e.target.value) }))}
+                                                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:border-indigo-500 focus:outline-none" />
                                         </div>
-                                    </CollapsibleSection>
-
-                                    {/* Notes */}
-                                    <CollapsibleSection title="Additional Notes" icon="fa-comment" defaultOpen={false}>
-                                        <textarea value={additionalNotes} onChange={(e) => setAdditionalNotes(e.target.value)}
-                                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none" rows="3"
-                                            placeholder="Any other observations..." />
-                                    </CollapsibleSection>
-
-                                    {/* Submit */}
-                                    <div className="flex gap-3 mt-4">
-                                        <button onClick={handleSubmit} disabled={!humanLabel || submitting}
-                                            className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-indigo-200">
-                                            {submitting ? <><i className="fas fa-spinner fa-spin mr-2"></i>Submitting...</> : <><i className="fas fa-paper-plane mr-2"></i>Submit Feedback</>}
-                                        </button>
-                                        <button onClick={() => window.location.href='/'} className="px-6 py-3 bg-gray-200 text-gray-700 font-semibold rounded-xl hover:bg-gray-300 transition">
-                                            Cancel
-                                        </button>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 mb-1">Tax Amount</label>
+                                            <input type="number" step="0.01" placeholder="0.00"
+                                                defaultValue={receipt.extracted?.tax?.amount || ''}
+                                                onChange={(e) => setCorrections(prev => ({ ...prev, tax: parseFloat(e.target.value) }))}
+                                                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:border-indigo-500 focus:outline-none" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 mb-1">Receipt Date</label>
+                                        <input type="date"
+                                            defaultValue={receipt.extracted?.date || ''}
+                                            onChange={(e) => setCorrections(prev => ({ ...prev, date: e.target.value }))}
+                                            className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:border-indigo-500 focus:outline-none" />
                                     </div>
                                 </div>
-                            )}
+                            </StepCard>
+
+                            {/* ===== Step 5: Font Analysis ===== */}
+                            <StepCard stepNum="5" icon="fa-font" iconColor="bg-amber-100 text-amber-600" title="Step 5: Font Analysis" defaultOpen={false}>
+                                <p className="text-sm text-gray-500 mb-3">Did you detect font manipulation or inconsistencies?</p>
+                                <label className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition ${
+                                    fontManipulation ? 'bg-red-50 border-red-300' : 'border-gray-200 hover:bg-gray-50'
+                                }`}>
+                                    <input type="checkbox" checked={fontManipulation}
+                                        onChange={(e) => setFontManipulation(e.target.checked)}
+                                        className="w-4 h-4 accent-red-500" />
+                                    <i className="fas fa-exclamation-triangle text-red-500"></i>
+                                    <span className="text-sm font-medium text-gray-700">Font manipulation detected</span>
+                                </label>
+                                {fontManipulation && (
+                                    <textarea value={fontNotes} onChange={(e) => setFontNotes(e.target.value)}
+                                        placeholder="Describe font issues (e.g., mixed fonts, different sizes on amounts)..."
+                                        className="mt-3 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none" rows="2" />
+                                )}
+                            </StepCard>
+
+                            {/* ===== Step 6: Address Validation ===== */}
+                            <StepCard stepNum="6" icon="fa-map-marker-alt" iconColor="bg-rose-100 text-rose-600" title="Step 6: Address Validation" defaultOpen={false}>
+                                <p className="text-sm text-gray-500 mb-3">Is the address on the document valid and consistent?</p>
+                                <div className="space-y-2">
+                                    {[
+                                        { val:'valid', label:'Address looks correct' },
+                                        { val:'fake', label:'Address appears fake or fabricated' },
+                                        { val:'mismatch', label:'Address does not match merchant location' },
+                                        { val:'missing', label:'No address present' },
+                                    ].map(opt => (
+                                        <label key={opt.val} className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer text-sm transition ${
+                                            addressIssues === opt.val ? 'bg-indigo-50 border-indigo-300' : 'border-gray-200 hover:bg-gray-50'
+                                        }`}>
+                                            <input type="radio" name="address" value={opt.val}
+                                                checked={addressIssues === opt.val}
+                                                onChange={() => setAddressIssues(opt.val)}
+                                                className="w-4 h-4 accent-indigo-500" />
+                                            <span>{opt.label}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                            </StepCard>
+
+                            {/* ===== Step 7: Visual Integrity ===== */}
+                            <StepCard stepNum="7" icon="fa-eye" iconColor="bg-cyan-100 text-cyan-600" title="Step 7: Visual Integrity" defaultOpen={false}>
+                                <p className="text-sm text-gray-500 mb-3">Are there visual signs of tampering?</p>
+                                <div className="space-y-2">
+                                    {[
+                                        { val:'clean', label:'Image appears authentic' },
+                                        { val:'edited', label:'Signs of editing/Photoshop detected' },
+                                        { val:'screenshot', label:'This is a screenshot, not original' },
+                                        { val:'quality', label:'Too low quality to assess' },
+                                    ].map(opt => (
+                                        <label key={opt.val} className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer text-sm transition ${
+                                            visualIssues === opt.val ? 'bg-indigo-50 border-indigo-300' : 'border-gray-200 hover:bg-gray-50'
+                                        }`}>
+                                            <input type="radio" name="visual" value={opt.val}
+                                                checked={visualIssues === opt.val}
+                                                onChange={() => setVisualIssues(opt.val)}
+                                                className="w-4 h-4 accent-indigo-500" />
+                                            <span>{opt.label}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                            </StepCard>
+
+                            {/* ===== Step 8: Amount Verification ===== */}
+                            <StepCard stepNum="8" icon="fa-calculator" iconColor="bg-emerald-100 text-emerald-600" title="Step 8: Amount Verification" defaultOpen={false}>
+                                <p className="text-sm text-gray-500 mb-3">Do the amounts on the receipt make sense?</p>
+                                <div className="space-y-2 mb-3">
+                                    {[
+                                        { val:'correct', label:'Amounts are correct and add up' },
+                                        { val:'math_error', label:'Math does not add up (items vs total)' },
+                                        { val:'inflated', label:'Amounts appear inflated/unrealistic' },
+                                        { val:'missing', label:'Key amounts are missing' },
+                                    ].map(opt => (
+                                        <label key={opt.val} className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer text-sm transition ${
+                                            amountNotes === opt.val ? 'bg-indigo-50 border-indigo-300' : 'border-gray-200 hover:bg-gray-50'
+                                        }`}>
+                                            <input type="radio" name="amount" value={opt.val}
+                                                checked={amountNotes === opt.val}
+                                                onChange={() => setAmountNotes(opt.val)}
+                                                className="w-4 h-4 accent-indigo-500" />
+                                            <span>{opt.label}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                            </StepCard>
+
+                            {/* ===== Additional Notes ===== */}
+                            <StepCard icon="fa-comment-dots" iconColor="bg-slate-200 text-slate-600" title="Additional Notes" defaultOpen={false}>
+                                <textarea value={additionalNotes} onChange={(e) => setAdditionalNotes(e.target.value)}
+                                    className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:border-indigo-500 focus:outline-none" rows="3"
+                                    placeholder="Any other observations or comments for the audit trail..." />
+                            </StepCard>
+
+                            {/* ===== Submit ===== */}
+                            <div className="sticky bottom-0 bg-gradient-to-t from-slate-100 via-slate-100 to-transparent pt-6 pb-4 -mx-5 px-5">
+                                <button onClick={handleSubmit} disabled={!humanLabel || submitting}
+                                    className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-indigo-200 text-base flex items-center justify-center gap-2">
+                                    {submitting
+                                        ? <><i className="fas fa-spinner fa-spin"></i> Submitting...</>
+                                        : <><i className="fas fa-paper-plane"></i> Submit Review</>
+                                    }
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
             );
         }
-        
+
         ReactDOM.render(<ReviewPage />, document.getElementById('root'));
     </script>
 </body>

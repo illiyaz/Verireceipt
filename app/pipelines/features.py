@@ -2015,6 +2015,23 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     ocr_metadata = raw.pdf_metadata.get("ocr_metadata", {}) if raw.pdf_metadata else {}
     # Use None for unknown confidence (not 1.0 or 0.0)
     ocr_confidence = ocr_metadata.get("avg_confidence", None)
+
+    # Compute low-confidence word ratio from detailed OCR results.
+    # This detects partially handwritten receipts where the average confidence
+    # is misleadingly high because printed header text scores well, but the
+    # handwritten data fields (amounts, dates) have very low per-word confidence.
+    ocr_low_conf_word_ratio = None
+    _detailed_results = ocr_metadata.get("detailed_results") or []
+    if _detailed_results:
+        _all_word_confs = []
+        for page_words in _detailed_results:
+            if isinstance(page_words, list):
+                for w in page_words:
+                    if isinstance(w, dict) and "confidence" in w:
+                        _all_word_confs.append(float(w["confidence"]))
+        if _all_word_confs:
+            _low_count = sum(1 for c in _all_word_confs if c < 0.5)
+            ocr_low_conf_word_ratio = _low_count / len(_all_word_confs)
     
     # --- Semantic Verification Layer (SVL) ---
     # Use LLM to verify amounts when extraction confidence is low or mismatch is large
@@ -2120,6 +2137,7 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
         "pin_code": pin_code,
         # OCR quality metadata
         "ocr_confidence": ocr_confidence,
+        "ocr_low_conf_word_ratio": ocr_low_conf_word_ratio,
         "ocr_engine": ocr_metadata.get("engine", "unknown"),
         # NEW: Document profile (heuristic)
         "doc_family_guess": doc_profile.get("doc_family_guess"),

@@ -1070,3 +1070,196 @@ class TestScreenshotStructureTax:
         assert fp.has_subtotal_line is True
         assert fp.has_total_line is True
         assert fp.has_separator_lines is True
+
+
+# =============================================================================
+# New Rules: Handwritten, Round Total, Qty x Rate, VLM-Only
+# =============================================================================
+
+class TestHandwrittenAndAmountRules:
+    """Tests for R_HANDWRITTEN_RECEIPT, R_ROUND_TOTAL, R_QTY_RATE_MISMATCH."""
+
+    def _make_features(self, text_features, layout_features=None, forensic_features=None):
+        """Helper to build a minimal ReceiptFeatures for _score_and_explain."""
+        from app.pipelines.rules import _score_and_explain, ReceiptFeatures
+        defaults = {
+            "full_text": "STORE\nItem 1  10.00\nTotal  10.00",
+            "has_total": True,
+            "total_amount": 10.0,
+            "total_line_present": True,
+            "has_date": True,
+            "receipt_date": "2024-01-15",
+            "has_merchant": True,
+            "merchant_candidate": "Test Store",
+            "has_line_items": True,
+            "line_items_sum": 10.0,
+            "line_items_count": 1,
+            "ocr_confidence": 0.90,
+            "ocr_low_conf_word_ratio": 0.05,
+            "ocr_engine": "tesseract",
+            "geo_country_guess": "US",
+            "geo_confidence": 0.8,
+            "doc_family_guess": "TRANSACTIONAL",
+            "doc_subtype_guess": "POS_RETAIL",
+            "doc_profile_confidence": 0.7,
+        }
+        defaults.update(text_features)
+        lf = layout_features or {"num_lines": 5, "numeric_line_ratio": 0.3, "lines": []}
+        ff = forensic_features or {}
+        features = ReceiptFeatures(
+            file_features={},
+            text_features=defaults,
+            layout_features=lf,
+            forensic_features=ff,
+        )
+        return _score_and_explain(features)
+
+    # --- R_HANDWRITTEN_RECEIPT ---
+
+    def test_handwritten_fires_on_low_avg_confidence(self):
+        """R_HANDWRITTEN_RECEIPT fires when avg OCR confidence < 0.35."""
+        result = self._make_features({"ocr_confidence": 0.20, "ocr_low_conf_word_ratio": 0.60})
+        hw_events = [e for e in result.events if e.get("rule_id") == "R_HANDWRITTEN_RECEIPT"]
+        assert len(hw_events) == 1, f"Expected R_HANDWRITTEN_RECEIPT, got {[e.get('rule_id') for e in result.events]}"
+        assert hw_events[0]["evidence"]["detection_mode"] == "avg_confidence"
+
+    def test_handwritten_fires_on_high_low_conf_ratio(self):
+        """R_HANDWRITTEN_RECEIPT fires when >20% words have low confidence."""
+        result = self._make_features({"ocr_confidence": 0.72, "ocr_low_conf_word_ratio": 0.25})
+        hw_events = [e for e in result.events if e.get("rule_id") == "R_HANDWRITTEN_RECEIPT"]
+        assert len(hw_events) == 1
+        assert hw_events[0]["evidence"]["detection_mode"] == "low_conf_word_ratio"
+
+    def test_handwritten_does_not_fire_on_printed(self):
+        """R_HANDWRITTEN_RECEIPT does NOT fire on fully printed receipt."""
+        result = self._make_features({"ocr_confidence": 0.92, "ocr_low_conf_word_ratio": 0.05})
+        hw_events = [e for e in result.events if e.get("rule_id") == "R_HANDWRITTEN_RECEIPT"]
+        assert len(hw_events) == 0
+
+    def test_handwritten_higher_weight_for_very_low_conf(self):
+        """Very low OCR confidence gets higher weight."""
+        result_low = self._make_features({"ocr_confidence": 0.15, "ocr_low_conf_word_ratio": 0.70})
+        result_med = self._make_features({"ocr_confidence": 0.30, "ocr_low_conf_word_ratio": 0.40})
+        hw_low = [e for e in result_low.events if e.get("rule_id") == "R_HANDWRITTEN_RECEIPT"][0]
+        hw_med = [e for e in result_med.events if e.get("rule_id") == "R_HANDWRITTEN_RECEIPT"][0]
+        assert hw_low["weight"] > hw_med["weight"]
+
+    # --- R_ROUND_TOTAL ---
+
+    def test_round_total_fires_on_round_fuel(self):
+        """R_ROUND_TOTAL fires on ₹3000 fuel receipt."""
+        result = self._make_features({
+            "total_amount": 3000.0,
+            "geo_country_guess": "IN",
+            "doc_subtype_guess": "FUEL",
+        })
+        rn_events = [e for e in result.events if e.get("rule_id") == "R_ROUND_TOTAL"]
+        assert len(rn_events) == 1
+        assert rn_events[0]["evidence"]["is_very_round"] is True
+
+    def test_round_total_fires_on_round_usd(self):
+        """R_ROUND_TOTAL fires on $50.00 retail receipt."""
+        result = self._make_features({
+            "total_amount": 50.0,
+            "geo_country_guess": "US",
+            "doc_subtype_guess": "POS_RETAIL",
+        })
+        rn_events = [e for e in result.events if e.get("rule_id") == "R_ROUND_TOTAL"]
+        assert len(rn_events) == 1
+
+    def test_round_total_does_not_fire_on_non_round(self):
+        """R_ROUND_TOTAL does NOT fire on $47.83."""
+        result = self._make_features({
+            "total_amount": 47.83,
+            "geo_country_guess": "US",
+        })
+        rn_events = [e for e in result.events if e.get("rule_id") == "R_ROUND_TOTAL"]
+        assert len(rn_events) == 0
+
+    def test_round_total_exempt_for_parking(self):
+        """R_ROUND_TOTAL does NOT fire on parking (round totals are normal)."""
+        result = self._make_features({
+            "total_amount": 500.0,
+            "geo_country_guess": "IN",
+            "doc_subtype_guess": "PARKING",
+        })
+        rn_events = [e for e in result.events if e.get("rule_id") == "R_ROUND_TOTAL"]
+        assert len(rn_events) == 0
+
+    def test_round_total_extra_weight_for_fuel(self):
+        """Fuel receipt gets higher weight for round total."""
+        result_fuel = self._make_features({
+            "total_amount": 1000.0,
+            "geo_country_guess": "IN",
+            "doc_subtype_guess": "FUEL",
+        })
+        result_other = self._make_features({
+            "total_amount": 1000.0,
+            "geo_country_guess": "IN",
+            "doc_subtype_guess": "RECEIPT",
+        })
+        fuel_w = [e for e in result_fuel.events if e.get("rule_id") == "R_ROUND_TOTAL"][0]["weight"]
+        other_w = [e for e in result_other.events if e.get("rule_id") == "R_ROUND_TOTAL"][0]["weight"]
+        assert fuel_w > other_w
+
+    # --- R_QTY_RATE_MISMATCH ---
+
+    def test_qty_rate_mismatch_fires(self):
+        """R_QTY_RATE_MISMATCH fires when qty*rate != line total."""
+        result = self._make_features({
+            "vlm_extraction": {
+                "items": [{"name": "Petrol MS", "qty": 30.166, "price": 97.82, "amount": 3000}],
+                "total": 3000,
+            },
+        })
+        qr_events = [e for e in result.events if e.get("rule_id") == "R_QTY_RATE_MISMATCH"]
+        assert len(qr_events) == 1
+        assert qr_events[0]["evidence"]["worst_diff_pct"] > 1.0
+
+    def test_qty_rate_no_fire_when_math_matches(self):
+        """R_QTY_RATE_MISMATCH does NOT fire when math is correct."""
+        result = self._make_features({
+            "vlm_extraction": {
+                "items": [{"name": "Coffee", "qty": 2, "price": 4.50, "amount": 9.0}],
+                "total": 9.0,
+            },
+        })
+        qr_events = [e for e in result.events if e.get("rule_id") == "R_QTY_RATE_MISMATCH"]
+        assert len(qr_events) == 0
+
+    def test_qty_rate_fuel_fallback_to_receipt_total(self):
+        """For fuel, compares qty*rate vs receipt total when no per-line amount."""
+        result = self._make_features({
+            "total_amount": 3000.0,
+            "doc_subtype_guess": "FUEL",
+            "vlm_extraction": {
+                "items": [{"name": "MS", "qty": 30.166, "price": 97.82}],
+                "total": 3000,
+            },
+        })
+        qr_events = [e for e in result.events if e.get("rule_id") == "R_QTY_RATE_MISMATCH"]
+        assert len(qr_events) == 1
+
+    # --- R_OCR_DEGRADED_VLM_ONLY ---
+
+    def test_vlm_only_fires_when_ocr_degraded(self):
+        """R_OCR_DEGRADED_VLM_ONLY fires when total source is VLM and OCR is bad."""
+        result = self._make_features({
+            "ocr_confidence": 0.18,
+            "ocr_low_conf_word_ratio": 0.65,
+            "total_source": "vlm",
+            "vlm_extraction": {"total": 3000},
+        })
+        vlm_events = [e for e in result.events if e.get("rule_id") == "R_OCR_DEGRADED_VLM_ONLY"]
+        assert len(vlm_events) == 1
+
+    def test_vlm_only_does_not_fire_when_ocr_good(self):
+        """R_OCR_DEGRADED_VLM_ONLY does NOT fire when OCR confidence is fine."""
+        result = self._make_features({
+            "ocr_confidence": 0.85,
+            "ocr_low_conf_word_ratio": 0.05,
+            "total_source": "vlm",
+            "vlm_extraction": {"total": 50},
+        })
+        vlm_events = [e for e in result.events if e.get("rule_id") == "R_OCR_DEGRADED_VLM_ONLY"]
+        assert len(vlm_events) == 0
