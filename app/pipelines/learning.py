@@ -114,34 +114,57 @@ def _learn_from_false_negative(feedback: ReceiptFeedback, store) -> Tuple[int, L
     
     # If spacing issues were present but not detected
     if feedback.has_spacing_issue:
-        # Increase spacing detection sensitivity
-        spacing_rule = LearningRule(
-            rule_id=f"lr_spacing_{uuid.uuid4().hex[:8]}",
-            rule_type="spacing_threshold",
-            pattern="consecutive_spaces",
-            action="lower_threshold",
-            confidence_adjustment=0.15,
-            learned_from_feedback_count=1,
-            auto_learned=True
+        existing_rules = store.get_learned_rules(enabled_only=False)
+        spacing_rule = next(
+            (r for r in existing_rules if r.rule_type == "spacing_threshold" and r.pattern == "consecutive_spaces"),
+            None
         )
-        store.save_learned_rule(spacing_rule)
-        rules_updated += 1
-        new_patterns.append("Spacing anomaly detection")
+        if spacing_rule:
+            spacing_rule.confidence_adjustment = min(0.5, spacing_rule.confidence_adjustment + 0.03)
+            spacing_rule.learned_from_feedback_count += 1
+            spacing_rule.last_updated = datetime.utcnow()
+            store.save_learned_rule(spacing_rule)
+            rules_updated += 1
+        else:
+            spacing_rule = LearningRule(
+                rule_id=f"lr_spacing_{uuid.uuid4().hex[:8]}",
+                rule_type="spacing_threshold",
+                pattern="consecutive_spaces",
+                action="lower_threshold",
+                confidence_adjustment=0.15,
+                learned_from_feedback_count=1,
+                auto_learned=True
+            )
+            store.save_learned_rule(spacing_rule)
+            rules_updated += 1
+            new_patterns.append("Spacing anomaly detection")
     
     # If date issues were present
     if feedback.has_date_issue:
-        date_rule = LearningRule(
-            rule_id=f"lr_date_{uuid.uuid4().hex[:8]}",
-            rule_type="date_manipulation",
-            pattern="creation_after_receipt",
-            action="increase_fraud_score",
-            confidence_adjustment=0.25,
-            learned_from_feedback_count=1,
-            auto_learned=True
+        existing_rules = store.get_learned_rules(enabled_only=False)
+        date_rule = next(
+            (r for r in existing_rules if r.rule_type == "date_manipulation" and r.pattern == "creation_after_receipt"),
+            None
         )
-        store.save_learned_rule(date_rule)
-        rules_updated += 1
-        new_patterns.append("Date manipulation detection")
+        if date_rule:
+            date_rule.confidence_adjustment = min(0.5, date_rule.confidence_adjustment + 0.03)
+            date_rule.learned_from_feedback_count += 1
+            date_rule.last_updated = datetime.utcnow()
+            store.save_learned_rule(date_rule)
+            rules_updated += 1
+        else:
+            date_rule = LearningRule(
+                rule_id=f"lr_date_{uuid.uuid4().hex[:8]}",
+                rule_type="date_manipulation",
+                pattern="creation_after_receipt",
+                action="increase_fraud_score",
+                confidence_adjustment=0.25,
+                learned_from_feedback_count=1,
+                auto_learned=True
+            )
+            store.save_learned_rule(date_rule)
+            rules_updated += 1
+            new_patterns.append("Date manipulation detection")
     
     return rules_updated, new_patterns
 
@@ -194,24 +217,39 @@ def _learn_from_missed_indicators(feedback: ReceiptFeedback, store) -> Tuple[int
     rules_updated = 0
     new_patterns = []
     
+    existing_rules = store.get_learned_rules(enabled_only=False)
+    
     for indicator in feedback.missed_indicators:
         # Extract pattern from indicator description
         pattern = _extract_pattern_from_indicator(indicator)
         
         if pattern:
-            # Create or update rule for this pattern
-            rule = LearningRule(
-                rule_id=f"lr_missed_{uuid.uuid4().hex[:8]}",
-                rule_type="user_identified_pattern",
-                pattern=pattern,
-                action="flag_suspicious",
-                confidence_adjustment=0.15,
-                learned_from_feedback_count=1,
-                auto_learned=True
+            # Check for existing rule with same type+pattern
+            existing = next(
+                (r for r in existing_rules
+                 if r.rule_type == "user_identified_pattern" and r.pattern == pattern),
+                None
             )
-            store.save_learned_rule(rule)
-            rules_updated += 1
-            new_patterns.append(pattern)
+            if existing:
+                existing.confidence_adjustment = min(0.5, existing.confidence_adjustment + 0.03)
+                existing.learned_from_feedback_count += 1
+                existing.last_updated = datetime.utcnow()
+                store.save_learned_rule(existing)
+                rules_updated += 1
+            else:
+                rule = LearningRule(
+                    rule_id=f"lr_missed_{uuid.uuid4().hex[:8]}",
+                    rule_type="user_identified_pattern",
+                    pattern=pattern,
+                    action="flag_suspicious",
+                    confidence_adjustment=0.15,
+                    learned_from_feedback_count=1,
+                    auto_learned=True
+                )
+                store.save_learned_rule(rule)
+                existing_rules.append(rule)  # Track for dedup within this loop
+                rules_updated += 1
+                new_patterns.append(pattern)
     
     return rules_updated, new_patterns
 
@@ -256,18 +294,31 @@ def _learn_from_data_corrections(feedback: ReceiptFeedback, store) -> Tuple[int,
     corrections = feedback.data_corrections
     
     if 'merchant' in corrections and corrections['merchant']:
-        rule = LearningRule(
-            rule_id=f"lr_merchant_{uuid.uuid4().hex[:8]}",
-            rule_type="merchant_pattern",
-            pattern=corrections['merchant'][:50],
-            action="validate_merchant",
-            confidence_adjustment=0.0,
-            learned_from_feedback_count=1,
-            auto_learned=True
+        merchant_val = corrections['merchant'][:50]
+        existing_rules = store.get_learned_rules(enabled_only=False)
+        existing = next(
+            (r for r in existing_rules
+             if r.rule_type == "merchant_pattern" and r.pattern == merchant_val),
+            None
         )
-        store.save_learned_rule(rule)
-        rules_updated += 1
-        new_patterns.append("Merchant pattern learned")
+        if existing:
+            existing.learned_from_feedback_count += 1
+            existing.last_updated = datetime.utcnow()
+            store.save_learned_rule(existing)
+            rules_updated += 1
+        else:
+            rule = LearningRule(
+                rule_id=f"lr_merchant_{uuid.uuid4().hex[:8]}",
+                rule_type="merchant_pattern",
+                pattern=merchant_val,
+                action="validate_merchant",
+                confidence_adjustment=0.0,
+                learned_from_feedback_count=1,
+                auto_learned=True
+            )
+            store.save_learned_rule(rule)
+            rules_updated += 1
+            new_patterns.append("Merchant pattern learned")
     
     return rules_updated, new_patterns
 
@@ -449,22 +500,30 @@ def apply_learned_rules(features: dict) -> Tuple[float, List[str]]:
     
     score_adjustment = 0.0
     triggered_rules = []
+    _matched_types = set()  # Per-rule-type dedup to prevent score inflation
     
     for rule in rules:
+        # Deduplicate: only allow one rule per (rule_type, pattern) combo
+        dedup_key = (rule.rule_type, rule.pattern)
+        if dedup_key in _matched_types:
+            continue
+        
         # Check if rule applies to these features
         match_result = _rule_matches_features(rule, features)
         if match_result:
             score_adjustment += rule.confidence_adjustment
+            _matched_types.add(dedup_key)
             
             # Create detailed message for audit trail
             if isinstance(match_result, str):
-                # Detailed message returned from matcher
                 message = match_result
             else:
-                # Build detailed message based on rule type
                 message = _build_detailed_rule_message(rule, features)
             
             triggered_rules.append(message)
+    
+    # Cap total adjustment to prevent runaway scores
+    score_adjustment = min(score_adjustment, 0.40)
     
     return score_adjustment, triggered_rules
 
@@ -498,9 +557,32 @@ def _rule_matches_features(rule: LearningRule, features: dict):
         return False
     
     elif rule.rule_type == "user_identified_pattern":
-        # Generic pattern matching - provide context about what was learned
+        # Check if this pattern actually matches the receipt features
         pattern_type = rule.pattern
-        detail_msg = _get_pattern_details(pattern_type, features)
-        return f"Learned pattern detected: {pattern_type}. {detail_msg} This pattern was identified by users {rule.learned_from_feedback_count} time(s). Confidence adjustment: +{rule.confidence_adjustment:.2f}."
+        forensic = features.get("forensic_features", {})
+        text_feat = features.get("text_features", {})
+        
+        matched = False
+        if pattern_type == "spacing_anomaly" and forensic.get("has_excessive_spacing"):
+            matched = True
+        elif pattern_type == "invalid_address" and not text_feat.get("has_address"):
+            matched = True
+        elif pattern_type == "invalid_phone" and not text_feat.get("has_phone"):
+            matched = True
+        elif pattern_type == "date_manipulation" and features.get("file_features", {}).get("has_date_issue"):
+            matched = True
+        elif pattern_type == "amount_inflation":
+            # Only match if there's evidence of amount issues (round total, mismatch, etc.)
+            total = text_feat.get("total_amount")
+            if total and isinstance(total, (int, float)) and total > 0 and total == int(total) and int(total) % 100 == 0:
+                matched = True
+        elif pattern_type not in ("spacing_anomaly", "invalid_address", "invalid_phone", "date_manipulation", "amount_inflation"):
+            # Unknown pattern types: don't auto-match, require explicit feature presence
+            matched = False
+        
+        if matched:
+            detail_msg = _get_pattern_details(pattern_type, features)
+            return f"Learned pattern detected: {pattern_type}. {detail_msg} This pattern was identified by users {rule.learned_from_feedback_count} time(s). Confidence adjustment: +{rule.confidence_adjustment:.2f}."
+        return False
     
     return False
