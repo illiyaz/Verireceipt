@@ -615,34 +615,39 @@ def _detect_india_hint(text: str) -> bool:
     has_pin = bool(re.search(r"\b\d{6}\b", t))
     if has_pin and any(k in t for k in ["india", "+91", "inr", "₹"]):
         india_signals += 1
-    # Indian states and cities
-    states = [
-        "andhra pradesh",
-        "telangana",
-        "karnataka",
-        "tamil nadu",
-        "kerala",
-        "maharashtra",
-        "gujarat",
-        "rajasthan",
-        "uttar pradesh",
-        "madhya pradesh",
-        "bihar",
-        "jharkhand",
-        "west bengal",
-        "punjab",
-        "haryana",
-        "delhi",
-        "mumbai",
-        "bangalore",
-        "hyderabad",
-        "chennai",
-        "kolkata",
+    # Indian states and cities (broad list for receipt coverage)
+    states_cities = [
+        "andhra pradesh", "telangana", "karnataka", "tamil nadu", "kerala",
+        "maharashtra", "gujarat", "rajasthan", "uttar pradesh", "madhya pradesh",
+        "bihar", "jharkhand", "west bengal", "punjab", "haryana",
+        "delhi", "mumbai", "bangalore", "bengaluru", "hyderabad",
+        "chennai", "kolkata", "pune", "ahmedabad", "jaipur", "lucknow",
+        "mysuru", "mysore", "kurnool", "anantapur", "anantarur", "nalgonda",
+        "rajahmundry", "vijayawada", "visakhapatnam", "vizag", "guntur",
+        "tirupati", "nellore", "warangal", "karimnagar", "nizamabad",
+        "secunderabad", "ranchi", "patna", "bhopal", "indore", "nagpur",
+        "nashik", "surat", "vadodara", "coimbatore", "madurai", "salem",
+        "thiruvananthapuram", "kochi", "mangalore", "hubli",
     ]
-    for state in states:
-        if state in t:
+    for loc in states_cities:
+        if loc in t:
             india_signals += 1
             break  # Only count once
+    
+    # Indian fuel station brands (strong India signal)
+    fuel_brands = ["nayara energy", "bpcl", "hpcl", "iocl", "indian oil",
+                   "bharat petroleum", "hindustan petroleum", "jio-bp", "jio bp",
+                   "essar", "reliance petroleum"]
+    if any(fb in t for fb in fuel_brands):
+        india_signals += 1
+    
+    # Indian vehicle registration pattern: 2 letters + 2 digits + 2 letters + 4 digits (e.g., AP21AU0805)
+    if re.search(r"\b[A-Z]{2}\d{2}[A-Z]{1,3}\d{4}\b", text or ""):
+        india_signals += 1
+    
+    # "Rs." or "Rs " pattern (common on Indian receipts)
+    if re.search(r"\brs\.?\s", t):
+        india_signals += 1
     
     # GST/GSTIN is a strong India signal
     if "gst" in t or "gstin" in t:
@@ -1321,6 +1326,18 @@ def _geo_currency_tax_consistency(
                 evidence={"currency_detected": currency, "tax_detected": tax},
             )
 
+    # Also skip geo validation if the DB-backed infer_geo explicitly returned UNKNOWN.
+    # Only applies when features dict is provided (full pipeline), NOT in direct/test calls.
+    # (heuristic _detect_geo_candidates alone is not reliable enough for penalties)
+    if not skip_geo_validation and features and "geo_country_guess" in features:
+        features_geo = features.get("geo_country_guess") or "UNKNOWN"
+        if features_geo == "UNKNOWN":
+            skip_geo_validation = True
+            minor_notes.append(
+                f"🌍 Heuristic geo hint ({geos[0]}) not corroborated by DB-backed geo inference (UNKNOWN). "
+                "Skipping geo penalties."
+            )
+
     # Only perform geo validation if not skipped
     if not skip_geo_validation:
         country = geos[0]
@@ -1480,7 +1497,19 @@ def _geo_currency_tax_consistency(
                     if rule.get("tax_name"):
                         expected_tax_names.add(rule["tax_name"])
 
-                if expected_tax_names and tax not in expected_tax_names:
+                # India-specific: "VAT No" / "CST No" are legacy field labels
+                # on fuel receipts printed before/during GST transition (2017).
+                # Treat VAT as acceptable for India to avoid false positives.
+                _tax_acceptable = tax in expected_tax_names
+                if not _tax_acceptable and country == "IN" and tax == "VAT":
+                    # Check if "VAT" appears only as a label ("VAT No", "VAT TIN")
+                    # rather than an actual tax line ("VAT 5%", "VAT: 120.00")
+                    _has_vat_as_label = bool(re.search(r"\bvat\s*(?:no|tin|reg)", blob, re.IGNORECASE))
+                    _has_vat_with_amount = bool(re.search(r"\bvat\s*[\d.]+%", blob, re.IGNORECASE))
+                    if _has_vat_as_label and not _has_vat_with_amount:
+                        _tax_acceptable = True  # Legacy label, not actual VAT regime
+
+                if expected_tax_names and not _tax_acceptable:
                     tax_weight = 0.10 if is_travel else 0.18
                     tax_severity = "WARNING" if is_travel else "CRITICAL"
 
@@ -1783,8 +1812,10 @@ def _merchant_currency_plausibility_flags(merchant: Optional[str], currency: Opt
     t = (text or "").lower()
 
     # Identify healthcare-like merchants (common in reimbursements)
-    healthcare_terms = ["hospital", "clinic", "health", "medical", "pharmacy", "lab", "urgent care", "dental", "imaging"]
-    is_healthcare = any(k in ml for k in healthcare_terms) or any(k in t for k in healthcare_terms)
+    # Use word-boundary matching to avoid false positives (e.g., "lab" inside "available")
+    healthcare_terms = ["hospital", "clinic", "health", "medical", "pharmacy", "\\blab\\b", "urgent care", "dental", "imaging"]
+    is_healthcare = (any(re.search(k, ml) for k in healthcare_terms)
+                     or any(re.search(k, t) for k in healthcare_terms))
 
     has_us = _detect_us_state_hint(text)
     has_canada = _detect_canada_hint(text)
@@ -1923,6 +1954,22 @@ def _parse_date_best_effort(date_str: Optional[str]):
             try:
                 parsed = datetime.strptime(iso_match.group(0), fmt).date()
                 if 1990 <= parsed.year <= datetime.now().year + 2:
+                    return parsed
+            except Exception:
+                pass
+
+    # DD-Mon-YYYY / DD Mon YYYY / DD-Mon-YY formats (e.g., "24 Aug 2022", "07-JAN-2023", "01-Jan-23")
+    month_name_match = re.search(
+        r'(\d{1,2})[/\- ]+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[/\- ,]+(\d{2,4})',
+        s, re.IGNORECASE
+    )
+    if month_name_match:
+        _mn_str = month_name_match.group(0)
+        for fmt in ["%d %b %Y", "%d-%b-%Y", "%d/%b/%Y", "%d %B %Y", "%d-%B-%Y",
+                     "%d %b %y", "%d-%b-%y", "%d/%b/%y", "%d %b, %Y", "%d %b,%Y"]:
+            try:
+                parsed = datetime.strptime(_mn_str.strip().rstrip(","), fmt).date()
+                if 1990 <= parsed.year <= datetime.now().year + 1:
                     return parsed
             except Exception:
                 pass
@@ -4009,14 +4056,23 @@ def _score_and_explain(
                         ),
                     )
     elif receipt_date_str and not receipt_date:
+        # Downgrade severity: many valid regional date formats may not parse.
+        # Only flag as WARNING, not CRITICAL.
+        _r17_raw = 0.10
+        _r17_weight = round(_r17_raw * dp_conf_factor, 4)
         score += emit_event(
             events=events,
             reasons=reasons,
             rule_id="R17_UNPARSABLE_DATE",
-            severity="CRITICAL",
-            weight=0.25,
+            severity="WARNING",
+            weight=_r17_weight,
             message="Receipt date present but unparsable",
-            evidence={"receipt_date_str": receipt_date_str},
+            evidence={
+                "receipt_date_str": receipt_date_str,
+                "confidence_factor": dp_conf_factor,
+                "raw_weight": _r17_raw,
+                "applied_weight": _r17_weight,
+            },
             reason_text=f"📅❓ Unparsable Date: '{receipt_date_str}' cannot be parsed into known format.",
         )
 
@@ -4136,6 +4192,36 @@ def _score_and_explain(
             }
             # Convert to USD-equivalent for threshold comparison
             usd_factor = _GEO_TO_USD.get(_ap_geo, 1.0)
+
+            # When geo is UNKNOWN, infer from detected currency to avoid
+            # treating INR/JPY/etc as USD (massive false positives).
+            _CURRENCY_TO_GEO_AP = {
+                "INR": "IN", "₹": "IN", "Rs": "IN", "Rs.": "IN",
+                "JPY": "JP", "¥": "JP", "KRW": "KR", "₩": "KR",
+                "GBP": "GB", "£": "GB", "EUR": "EU", "€": "EU",
+                "AED": "AE", "SAR": "SA", "AUD": "AU", "A$": "AU",
+                "CAD": "CA", "C$": "CA", "SGD": "SG", "MYR": "MY",
+                "THB": "TH", "PHP": "PH", "IDR": "ID", "VND": "VN",
+                "PKR": "PK", "BDT": "BD", "BRL": "BR", "MXN": "MX",
+                "ZAR": "ZA", "TRY": "TR", "EGP": "EG", "NGN": "NG",
+                "CNY": "CN", "HKD": "HK",
+            }
+            if _ap_geo == "UNKNOWN" or _ap_geo not in _GEO_TO_USD:
+                # Use the same robust currency detection as geo validation.
+                # _currency_hint_extended checks Rs./₹/INR before £/GBP,
+                # so it correctly handles Indian receipts with revenue stamps.
+                _text_currency = _currency_hint_extended(full_text)
+                _inferred = _CURRENCY_TO_GEO_AP.get(_text_currency or "")
+                if not _inferred:
+                    # Fallback to tf fields
+                    _detected_curr = str(tf.get("detected_currency") or "")
+                    _currency_symbols_raw = tf.get("currency_symbols") or []
+                    _sym_hint = str(_currency_symbols_raw[0]) if _currency_symbols_raw else ""
+                    _inferred = (_CURRENCY_TO_GEO_AP.get(_detected_curr)
+                                 or _CURRENCY_TO_GEO_AP.get(_sym_hint))
+                if _inferred and _inferred in _GEO_TO_USD:
+                    usd_factor = _GEO_TO_USD[_inferred]
+
             _ap_total_usd = _ap_total * usd_factor
 
             # Currency symbol from text_features (for display)
@@ -4200,8 +4286,12 @@ def _score_and_explain(
                     matched_max_usd = max_amt
                     break
 
-            # Fall back to subtype range
-            if matched_max_usd is None and _ap_subtype in _SUBTYPE_RANGES:
+            # Fall back to subtype range — but only if doc profile confidence
+            # is high enough. Low confidence means the subtype may be wrong,
+            # and applying wrong subtype ceilings causes false positives
+            # (e.g., school fee classified as POS_RESTAURANT).
+            _ap_doc_conf = float(legacy_doc_profile.get("confidence") or tf.get("doc_profile_confidence") or 0)
+            if matched_max_usd is None and _ap_subtype in _SUBTYPE_RANGES and _ap_doc_conf >= 0.7:
                 matched_max_usd, matched_label = _SUBTYPE_RANGES[_ap_subtype]
 
             if matched_max_usd is not None and _ap_total_usd > matched_max_usd * 2:

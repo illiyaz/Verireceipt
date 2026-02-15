@@ -60,16 +60,29 @@ def _match_postal_patterns(text: str, country_scores: Dict[str, float], evidence
         pattern = pattern_row["pattern"]
         weight = pattern_row["weight"]
         
-        matches = re.findall(pattern, text, re.IGNORECASE)
-        if matches:
-            # Take first match for evidence
-            match_str = matches[0] if isinstance(matches[0], str) else "".join(matches[0])
+        # Use finditer to get match positions for context checking
+        valid_match = None
+        for m in re.finditer(pattern, text, re.IGNORECASE):
+            match_str = m.group(0) if isinstance(m.group(0), str) else "".join(m.groups())
+            start, end = m.start(), m.end()
             
+            # Skip matches followed by decimal point (likely amounts/volumes, not postal codes)
+            # e.g., "00010.07" is a volume, not a postal code
+            if end < len(text) and text[end] == '.':
+                continue
+            # Skip matches preceded by decimal point
+            if start > 0 and text[start - 1] == '.':
+                continue
+            
+            valid_match = match_str
+            break
+        
+        if valid_match:
             country_scores[country] = country_scores.get(country, 0.0) + weight
             evidence.append({
                 "type": "postal_match",
                 "country": country,
-                "match": match_str,
+                "match": valid_match,
                 "weight": weight
             })
 
@@ -192,6 +205,27 @@ _STRONG_PATTERNS = [
         "pattern": r"\bVAT\s+TIN\b",
         "weight": 0.30,
         "label": "vat_tin_india",
+    },
+    # Indian fuel station brands (unambiguous India signals)
+    {
+        "country": "IN",
+        "pattern": r"\b(?:NAYARA\s+ENERGY|BPCL|HPCL|IOCL|INDIAN\s+OIL|BHARAT\s+PETROLEUM|HINDUSTAN\s+PETROLEUM|JIO[\s-]?BP|ESSAR|RELIANCE\s+PETROLEUM)\b",
+        "weight": 0.35,
+        "label": "indian_fuel_brand",
+    },
+    # Indian vehicle registration: 2 letters + 2 digits + 1-3 letters + 4 digits (e.g., AP21AU0805, TS09EA1234)
+    {
+        "country": "IN",
+        "pattern": r"\b[A-Z]{2}\d{2}[A-Z]{1,3}\d{4}\b",
+        "weight": 0.25,
+        "label": "indian_vehicle_reg",
+    },
+    # Rs. / Rs currency prefix (strong India/Pakistan signal, but heavily Indian in receipt context)
+    {
+        "country": "IN",
+        "pattern": r"\bRs\.?\s*\d",
+        "weight": 0.20,
+        "label": "rupee_prefix",
     },
 ]
 
