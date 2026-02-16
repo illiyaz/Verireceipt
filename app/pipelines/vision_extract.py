@@ -70,14 +70,73 @@ Rules:
 - Return ONLY the JSON object, no other text."""
 
 
+PDF_EXTS = {".pdf"}
+
+
+def _pdf_pages_to_images(pdf_path: str, dpi: int = 200) -> List:
+    """Convert PDF pages to PIL Images. Returns list of PIL Image objects.
+    
+    Tries pdf2image (poppler) first, falls back to PyMuPDF.
+    Uses 200 DPI (lower than OCR's 300) to keep base64 payload reasonable for VLM.
+    """
+    import io
+    from PIL import Image as PILImage
+    
+    # Try pdf2image first
+    try:
+        from pdf2image import convert_from_path
+        return convert_from_path(pdf_path, dpi=dpi)
+    except Exception:
+        pass
+    
+    # Fallback to PyMuPDF
+    try:
+        import fitz
+        doc = fitz.open(pdf_path)
+        images = []
+        zoom = dpi / 72
+        mat = fitz.Matrix(zoom, zoom)
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            pix = page.get_pixmap(matrix=mat)
+            img = PILImage.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            images.append(img)
+        doc.close()
+        return images
+    except ImportError:
+        raise RuntimeError(
+            "Cannot convert PDF to images. Install pdf2image (poppler) or PyMuPDF (pip install pymupdf)."
+        )
+
+
+def _pil_image_to_base64(img) -> str:
+    """Convert a PIL Image to base64-encoded JPEG string."""
+    import io
+    img_rgb = img.convert("RGB")
+    buf = io.BytesIO()
+    img_rgb.save(buf, format="JPEG", quality=92)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
 def _encode_image(image_path: str) -> str:
     """Encode image file to base64, converting non-standard formats (HEIF/HEVC) to JPEG.
     
     Ollama only accepts JPEG/PNG/GIF/WEBP. iPhone photos are often HEIF despite
     having a .jpg extension. We detect this and convert through PIL.
+    
+    For PDFs, converts the first page to an image.
     """
     import io
     from PIL import Image as PILImage
+    
+    ext = os.path.splitext(image_path)[1].lower()
+    
+    # Handle PDFs: convert first page to image
+    if ext in PDF_EXTS:
+        pages = _pdf_pages_to_images(image_path, dpi=200)
+        if not pages:
+            raise ValueError(f"PDF has no pages: {image_path}")
+        return _pil_image_to_base64(pages[0])
     
     try:
         # Try PIL first — handles HEIF (via pillow-heif), TIFF, BMP, etc.
@@ -100,10 +159,18 @@ def _encode_image(image_path: str) -> str:
 
 
 def _query_ollama_vision(image_path: str, prompt: str, model: str, timeout: int) -> Optional[str]:
-    """Query Ollama vision model and return raw response text."""
+    """Query Ollama vision model with a file path and return raw response text."""
     try:
         image_b64 = _encode_image(image_path)
-        
+        return _query_ollama_vision_b64(image_b64, prompt, model, timeout)
+    except Exception as e:
+        logger.warning("Vision extraction failed (encode): %s", e)
+        return None
+
+
+def _query_ollama_vision_b64(image_b64: str, prompt: str, model: str, timeout: int) -> Optional[str]:
+    """Query Ollama vision model with pre-encoded base64 image data."""
+    try:
         resp = requests.post(
             f"{OLLAMA_URL}/api/generate",
             json={
@@ -173,9 +240,56 @@ def _parse_json_response(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _merge_multi_page_results(page_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Merge VLM extraction results from multiple PDF pages.
+    
+    Strategy:
+    - Page 1 is primary (merchant, date, receipt_number usually on page 1)
+    - Total/subtotal/tax: use the LAST page that has them (summary page)
+    - Items: concatenate from all pages
+    - Address, phone, GSTIN: use first non-null occurrence
+    """
+    if not page_results:
+        return {}
+    if len(page_results) == 1:
+        return page_results[0]
+    
+    merged = dict(page_results[0])  # Start with page 1
+    all_items = list(merged.get("items") or [])
+    
+    for page_data in page_results[1:]:
+        if not page_data:
+            continue
+        
+        # Concatenate items from subsequent pages
+        page_items = page_data.get("items") or []
+        if page_items:
+            all_items.extend(page_items)
+        
+        # Total/subtotal/tax: prefer later pages (summary is usually last)
+        for amount_key in ["total", "subtotal", "tax"]:
+            val = page_data.get(amount_key)
+            if val is not None:
+                merged[amount_key] = val
+        
+        # Fill in missing fields from later pages
+        for key in ["address", "phone", "gstin", "vat_tin", "payment_method",
+                     "card_last4", "card_type", "receipt_number"]:
+            if not merged.get(key) and page_data.get(key):
+                merged[key] = page_data[key]
+    
+    if all_items:
+        merged["items"] = all_items
+    
+    return merged
+
+
 def extract_receipt_fields(image_path: str) -> Dict[str, Any]:
     """
-    Extract structured receipt fields from an image using Vision LLM.
+    Extract structured receipt fields from an image or PDF using Vision LLM.
+    
+    For PDFs, converts each page to an image and sends to VLM separately,
+    then merges results (items concatenated, totals from last page).
     
     Returns a dict with extracted fields, plus metadata:
     {
@@ -183,7 +297,7 @@ def extract_receipt_fields(image_path: str) -> Dict[str, Any]:
         "total": 88.89,
         ...
         "_vlm_meta": {
-            "model": "llama3.2-vision:latest",
+            "model": "qwen2.5vl:32b",
             "latency_s": 7.4,
             "success": True,
         }
@@ -195,8 +309,68 @@ def extract_receipt_fields(image_path: str) -> Dict[str, Any]:
         logger.info("Vision extraction disabled (VISION_EXTRACT_ENABLED=false)")
         return {"_vlm_meta": {"success": False, "reason": "disabled"}}
     
+    ext = os.path.splitext(image_path)[1].lower()
+    is_pdf = ext in PDF_EXTS
+    
     start = time.time()
     
+    if is_pdf:
+        # Multi-page PDF: convert pages to images, query VLM per page, merge
+        try:
+            pages = _pdf_pages_to_images(image_path, dpi=200)
+        except Exception as e:
+            latency = time.time() - start
+            logger.warning("Vision extraction: PDF conversion failed: %s", e)
+            return {"_vlm_meta": {"success": False, "reason": "pdf_conversion_failed", "latency_s": latency}}
+        
+        if not pages:
+            latency = time.time() - start
+            return {"_vlm_meta": {"success": False, "reason": "pdf_no_pages", "latency_s": latency}}
+        
+        # Limit to first 5 pages to avoid excessive VLM calls
+        max_pages = min(len(pages), 5)
+        page_results = []
+        
+        for i in range(max_pages):
+            page_b64 = _pil_image_to_base64(pages[i])
+            page_prompt = EXTRACTION_PROMPT
+            if max_pages > 1:
+                page_prompt = f"[Page {i+1} of {len(pages)}]\n\n" + EXTRACTION_PROMPT
+            
+            raw_response = _query_ollama_vision_b64(
+                page_b64, page_prompt, VISION_EXTRACT_MODEL, VISION_EXTRACT_TIMEOUT
+            )
+            if raw_response:
+                parsed = _parse_json_response(raw_response)
+                if parsed:
+                    page_results.append(parsed)
+                    logger.info("Vision extraction page %d/%d: merchant=%s, total=%s",
+                                i + 1, max_pages, parsed.get("merchant_name"), parsed.get("total"))
+        
+        latency = time.time() - start
+        
+        if not page_results:
+            return {"_vlm_meta": {"success": False, "reason": "all_pages_failed", "latency_s": latency,
+                                  "num_pages": len(pages), "pages_attempted": max_pages}}
+        
+        merged = _merge_multi_page_results(page_results)
+        merged["_vlm_meta"] = {
+            "model": VISION_EXTRACT_MODEL,
+            "latency_s": round(latency, 2),
+            "success": True,
+            "source": "pdf",
+            "num_pages": len(pages),
+            "pages_extracted": len(page_results),
+        }
+        
+        logger.info(
+            "Vision extraction (PDF, %d/%d pages): merchant=%s, total=%s, date=%s (%.1fs)",
+            len(page_results), len(pages),
+            merged.get("merchant_name"), merged.get("total"), merged.get("receipt_date"), latency,
+        )
+        return merged
+    
+    # Standard image path
     raw_response = _query_ollama_vision(
         image_path, EXTRACTION_PROMPT, VISION_EXTRACT_MODEL, VISION_EXTRACT_TIMEOUT
     )
@@ -217,6 +391,7 @@ def extract_receipt_fields(image_path: str) -> Dict[str, Any]:
         "model": VISION_EXTRACT_MODEL,
         "latency_s": round(latency, 2),
         "success": True,
+        "source": "image",
     }
     
     logger.info(
@@ -498,6 +673,7 @@ def _infer_doc_profile_from_vlm(vlm_data: Dict[str, Any], tf: Dict[str, Any]) ->
     
     if food_hits >= 2:
         tf["doc_subtype_guess"] = "POS_RESTAURANT"
+        tf["doc_class"] = "POS_RESTAURANT"
         tf["doc_profile_confidence"] = max(float(tf.get("doc_profile_confidence") or 0), 0.75)
         tf["doc_family_guess"] = "TRANSACTIONAL"
         tf["vlm_doc_profile_source"] = "food_items"
@@ -506,6 +682,7 @@ def _infer_doc_profile_from_vlm(vlm_data: Dict[str, Any], tf: Dict[str, Any]) ->
         # Has line items and a total — at least a generic receipt
         if float(tf.get("doc_profile_confidence") or 0) < 0.55:
             tf["doc_subtype_guess"] = "RECEIPT"
+            tf["doc_class"] = "RECEIPT"
             tf["doc_profile_confidence"] = 0.55
             tf["doc_family_guess"] = "TRANSACTIONAL"
             tf["vlm_doc_profile_source"] = "has_items_and_total"
@@ -527,13 +704,30 @@ def _infer_geo_from_vlm_address(address: str, tf: Dict[str, Any]) -> None:
             logger.info("VLM inferred US geo from address state=%s", state)
             return
     
+    # Check for India 6-digit PIN code pattern: "City - 500034" or "500034"
+    in_pin = re.search(r'\b\d{6}\b', address)
+    address_lower = address.lower()
+    
     # Check for common country patterns in address
     address_upper = address.upper()
     for country, patterns in [
-        ("UK", [", UK", "UNITED KINGDOM", "ENGLAND", "SCOTLAND", "WALES"]),
-        ("CA", [", CANADA", "ONTARIO", "QUEBEC", "BRITISH COLUMBIA"]),
-        ("AU", [", AUSTRALIA", "NSW", "QLD", "VIC "]),
-        ("IN", [", INDIA", "MAHARASHTRA", "KARNATAKA", "TAMIL NADU"]),
+        ("UK", [", UK", "UNITED KINGDOM", "ENGLAND", "SCOTLAND", "WALES",
+                "LONDON", "MANCHESTER", "BIRMINGHAM", "LIVERPOOL", "GLASGOW"]),
+        ("CA", [", CANADA", "ONTARIO", "QUEBEC", "BRITISH COLUMBIA", "ALBERTA",
+                "TORONTO", "VANCOUVER", "MONTREAL", "CALGARY", "OTTAWA"]),
+        ("AU", [", AUSTRALIA", "NSW", "QLD", "VIC ", "SYDNEY", "MELBOURNE",
+                "BRISBANE", "PERTH", "ADELAIDE"]),
+        ("IN", [", INDIA", "MAHARASHTRA", "KARNATAKA", "TAMIL NADU", "TELANGANA",
+                "ANDHRA PRADESH", "KERALA", "GUJARAT", "RAJASTHAN", "UTTAR PRADESH",
+                "MADHYA PRADESH", "WEST BENGAL", "PUNJAB", "HARYANA", "DELHI",
+                "HYDERABAD", "BANGALORE", "BENGALURU", "CHENNAI", "MUMBAI",
+                "KOLKATA", "PUNE", "AHMEDABAD", "JAIPUR", "LUCKNOW",
+                "VISAKHAPATNAM", "MYSURU", "MYSORE", "KOCHI", "COIMBATORE",
+                "INDORE", "NAGPUR", "BHOPAL", "PATNA", "CHANDIGARH"]),
+        ("SG", [", SINGAPORE", "SINGAPORE "]),
+        ("AE", [", UAE", "DUBAI", "ABU DHABI", "SHARJAH", "UNITED ARAB EMIRATES"]),
+        ("DE", [", GERMANY", "DEUTSCHLAND", "BERLIN", "MUNICH", "HAMBURG"]),
+        ("FR", [", FRANCE", "PARIS", "LYON", "MARSEILLE"]),
     ]:
         if any(p in address_upper for p in patterns):
             tf["geo_country_guess"] = country
@@ -541,3 +735,13 @@ def _infer_geo_from_vlm_address(address: str, tf: Dict[str, Any]) -> None:
             tf["vlm_geo_source"] = f"address pattern: {country}"
             logger.info("VLM inferred %s geo from address", country)
             return
+    
+    # India PIN code + any India hint in address
+    if in_pin and any(k in address_lower for k in [
+        "india", "+91", "gstin", "gst", "rs.", "inr",
+        "dist", "mandal", "taluk", "tehsil", "ward",
+    ]):
+        tf["geo_country_guess"] = "IN"
+        tf["geo_confidence"] = 0.75
+        tf["vlm_geo_source"] = "india_pin_code_context"
+        logger.info("VLM inferred IN geo from PIN code + India context")

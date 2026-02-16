@@ -2097,6 +2097,9 @@ def build_features(raw: ReceiptRaw) -> ReceiptFeatures:
     all_dates = _extract_all_dates(full_text)
     
     text_features: Dict[str, Any] = {
+        # Full OCR text (needed by rules engine for pattern matching)
+        "full_text": full_text,
+        
         # Document classification (early LLM)
         "doc_class": doc_class,
         "doc_class_confidence": doc_class_confidence,

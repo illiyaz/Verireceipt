@@ -227,6 +227,106 @@ _STRONG_PATTERNS = [
         "weight": 0.20,
         "label": "rupee_prefix",
     },
+    # --- UK ---
+    # UK VAT number: GB followed by 9 digits (e.g., GB123456789)
+    {
+        "country": "GB",
+        "pattern": r"\bGB\s?\d{3}\s?\d{4}\s?\d{2}\b",
+        "weight": 0.40,
+        "label": "uk_vat_number",
+    },
+    # UK phone: +44 or 0 followed by 10-11 digits
+    {
+        "country": "GB",
+        "pattern": r"\+44\s?\d[\d\s]{8,12}",
+        "weight": 0.25,
+        "label": "uk_phone",
+    },
+    # --- EU VAT IDs (DE, FR, IT, ES, NL, etc.) ---
+    {
+        "country": "DE",
+        "pattern": r"\bDE\s?\d{9}\b",
+        "weight": 0.40,
+        "label": "de_vat_id",
+    },
+    {
+        "country": "FR",
+        "pattern": r"\bFR\s?[A-Z0-9]{2}\s?\d{9}\b",
+        "weight": 0.40,
+        "label": "fr_vat_id",
+    },
+    {
+        "country": "IT",
+        "pattern": r"\bIT\s?\d{11}\b",
+        "weight": 0.40,
+        "label": "it_vat_id",
+    },
+    {
+        "country": "ES",
+        "pattern": r"\bES\s?[A-Z0-9]\d{7}[A-Z0-9]\b",
+        "weight": 0.40,
+        "label": "es_vat_id",
+    },
+    {
+        "country": "NL",
+        "pattern": r"\bNL\s?\d{9}B\d{2}\b",
+        "weight": 0.40,
+        "label": "nl_vat_id",
+    },
+    # --- US ---
+    # US EIN: XX-XXXXXXX (on business receipts/invoices)
+    {
+        "country": "US",
+        "pattern": r"\b(?:EIN|Tax\s*ID)\s*:?\s*\d{2}-\d{7}\b",
+        "weight": 0.35,
+        "label": "us_ein",
+    },
+    # US phone: +1 or (XXX) XXX-XXXX
+    {
+        "country": "US",
+        "pattern": r"(?:\+1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b",
+        "weight": 0.15,
+        "label": "us_phone",
+    },
+    # --- UAE ---
+    # UAE TRN (Tax Registration Number): 15 digits starting with 100
+    {
+        "country": "AE",
+        "pattern": r"\bTRN\s*:?\s*100\d{12}\b",
+        "weight": 0.45,
+        "label": "uae_trn",
+    },
+    # --- Singapore ---
+    # Singapore GST registration: starts with M or digit, 8 chars + letter
+    {
+        "country": "SG",
+        "pattern": r"\bGST\s*(?:Reg(?:istration)?\.?\s*)?(?:No\.?\s*)?:?\s*[M0-9]\d{8}[A-Z]\b",
+        "weight": 0.40,
+        "label": "sg_gst_reg",
+    },
+    # Singapore UEN: T/S + 2 digits + 2 letters + 4 digits + letter
+    {
+        "country": "SG",
+        "pattern": r"\b[TS]\d{2}[A-Z]{2}\d{4}[A-Z]\b",
+        "weight": 0.30,
+        "label": "sg_uen",
+    },
+    # --- Australia ---
+    # Australian ABN: 11-digit number, often prefixed with "ABN"
+    {
+        "country": "AU",
+        "pattern": r"\bABN\s*:?\s*\d{2}\s?\d{3}\s?\d{3}\s?\d{3}\b",
+        "weight": 0.45,
+        "label": "au_abn",
+    },
+    # --- Canada ---
+    # Canadian BN/GST number: 9 digits + RT + 4 digits
+    {
+        "country": "CA",
+        "pattern": r"\b\d{9}\s?RT\s?\d{4}\b",
+        "weight": 0.40,
+        "label": "ca_gst_bn",
+    },
 ]
 
 # Valid Indian PIN code first-digit ranges (1-8, not 0 or 9)

@@ -2568,6 +2568,52 @@ def _score_and_explain(
         minor_notes.append("Geo consistency checks skipped due to an internal error.")
 
     # ---------------------------------------------------------------------------
+    # RULE GROUP 0.5: Duplicate Receipt Detection
+    # ---------------------------------------------------------------------------
+    try:
+        dup_check = tf.get("duplicate_check") or {}
+        if dup_check.get("is_duplicate"):
+            dup_type = dup_check.get("match_type", "unknown")
+            dup_details = dup_check.get("details", "")
+            matched_file = dup_check.get("matched_file", "unknown")
+            if dup_type == "exact":
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_DUPLICATE_RECEIPT",
+                    severity="HARD_FAIL",
+                    weight=0.60,
+                    message=f"Exact duplicate receipt detected (previously seen as {os.path.basename(matched_file)})",
+                    evidence={
+                        "match_type": "exact",
+                        "matched_file": matched_file,
+                        "matched_merchant": dup_check.get("matched_merchant"),
+                        "matched_date": dup_check.get("matched_date"),
+                        "matched_total": dup_check.get("matched_total"),
+                    },
+                    reason_text=f"🚨 Duplicate Receipt: This receipt has identical merchant, date, and total as a previously submitted receipt. {dup_details}",
+                )
+            else:
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_DUPLICATE_RECEIPT",
+                    severity="CRITICAL",
+                    weight=0.40,
+                    message=f"Near-duplicate receipt detected ({dup_details})",
+                    evidence={
+                        "match_type": "fuzzy",
+                        "matched_file": matched_file,
+                        "matched_merchant": dup_check.get("matched_merchant"),
+                        "matched_date": dup_check.get("matched_date"),
+                        "matched_total": dup_check.get("matched_total"),
+                    },
+                    reason_text=f"⚠️ Near-Duplicate: This receipt closely matches a previously submitted one. {dup_details}",
+                )
+    except Exception as e:
+        logger.warning("Duplicate rule evaluation failed: %s", e)
+
+    # ---------------------------------------------------------------------------
     # RULE GROUP 1: Producer / metadata anomalies
     # ---------------------------------------------------------------------------
     producer = ff.get("producer", "")
@@ -4350,7 +4396,17 @@ def _score_and_explain(
         _hw_triggered = False
         _hw_reason = ""
 
-        if _ocr_conf is not None and _ocr_conf < 0.35:
+        # Suppress if VLM successfully read the receipt — low OCR confidence
+        # is just image degradation (e.g. WhatsApp compression), not handwriting.
+        _vlm_meta = tf.get("vlm_meta") or {}
+        _vlm_ext = tf.get("vlm_extraction") or {}
+        _vlm_read_ok = (
+            _vlm_meta.get("success")
+            and _vlm_ext.get("merchant_name")
+            and _vlm_ext.get("total") is not None
+        )
+
+        if _ocr_conf is not None and _ocr_conf < 0.35 and not _vlm_read_ok:
             _hw_triggered = True
             _hw_weight = 0.12 if _ocr_conf < 0.20 else 0.08
             _hw_reason = (
@@ -4360,7 +4416,7 @@ def _score_and_explain(
                 f"without manual verification."
             )
             _hw_msg = f"Very low OCR confidence ({_ocr_conf:.0%}) — likely handwritten or degraded document"
-        elif _low_conf_ratio is not None and _low_conf_ratio > 0.20:
+        elif _low_conf_ratio is not None and _low_conf_ratio > 0.30 and not _vlm_read_ok:
             _hw_triggered = True
             _hw_weight = 0.10 if _low_conf_ratio > 0.40 else 0.07
             _hw_reason = (
@@ -4982,9 +5038,21 @@ def _score_and_explain(
             )
 
             if not _merchant_in_top:
-                # Check if merchant appears anywhere in the doc
+                # Check if merchant appears anywhere in the doc (OCR + VLM text)
                 _full_lower = full_text.lower() if full_text else ""
-                _merchant_in_body = _brand_merchant_lower in _full_lower
+                # Also include VLM-extracted fields in the search corpus
+                _vlm_ext = tf.get("vlm_extraction") or {}
+                _vlm_text_parts = [
+                    str(_vlm_ext.get("merchant_name") or ""),
+                    str(_vlm_ext.get("address") or ""),
+                ]
+                for _vi in (_vlm_ext.get("items") or []):
+                    if isinstance(_vi, dict):
+                        _vlm_text_parts.append(str(_vi.get("name") or ""))
+                _vlm_combined = " ".join(_vlm_text_parts).lower()
+                _search_corpus = _full_lower + " " + _vlm_combined
+                
+                _merchant_in_body = _brand_merchant_lower in _search_corpus
                 if _merchant_in_body:
                     _brand_signals.append("merchant_not_in_header_but_in_body")
                 else:
@@ -5068,6 +5136,122 @@ def _score_and_explain(
                 )
     except Exception as e:
         logger.warning(f"R_BRAND_CONSISTENCY check failed: {e}")
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 5G2: VLM-vs-OCR Contradiction Detection
+    # ---------------------------------------------------------------------------
+    # If VLM and OCR extract wildly different merchants or totals, that's suspicious.
+    # Legitimate receipts should be consistently readable by both engines.
+    try:
+        _vlm_ext_m3 = tf.get("vlm_extraction") or {}
+        _vlm_meta_m3 = tf.get("vlm_meta") or {}
+        if _vlm_meta_m3.get("success"):
+            _ocr_merchant_m3 = (tf.get("merchant_candidate") or "").strip().lower()
+            _vlm_merchant_m3 = str(_vlm_ext_m3.get("merchant_name") or "").strip().lower()
+            _ocr_total_m3 = tf.get("ocr_total_amount")  # original OCR total before VLM override
+            _vlm_total_m3 = _vlm_ext_m3.get("total")
+            
+            _contradiction_signals = []
+            
+            # Merchant contradiction: both present but completely different
+            if (_ocr_merchant_m3 and len(_ocr_merchant_m3) >= 3
+                and _vlm_merchant_m3 and len(_vlm_merchant_m3) >= 3):
+                _ocr_words = set(_ocr_merchant_m3.split())
+                _vlm_words = set(_vlm_merchant_m3.split())
+                _overlap = len(_ocr_words & _vlm_words)
+                if _overlap == 0 and len(_ocr_words) >= 1 and len(_vlm_words) >= 1:
+                    _contradiction_signals.append(
+                        f"merchant_mismatch: OCR='{_ocr_merchant_m3}' vs VLM='{_vlm_merchant_m3}'"
+                    )
+            
+            # Total contradiction: both present but diverge >25%
+            if _ocr_total_m3 is not None and _vlm_total_m3 is not None:
+                try:
+                    _ocr_t = float(_ocr_total_m3)
+                    _vlm_t = float(_vlm_total_m3)
+                    if _ocr_t > 0 and _vlm_t > 0:
+                        _divergence = abs(_ocr_t - _vlm_t) / max(_ocr_t, _vlm_t)
+                        if _divergence > 0.25:
+                            _contradiction_signals.append(
+                                f"total_mismatch: OCR={_ocr_t:.2f} vs VLM={_vlm_t:.2f} ({_divergence:.0%} divergence)"
+                            )
+                except (ValueError, TypeError):
+                    pass
+            
+            if _contradiction_signals:
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_VLM_OCR_CONTRADICTION",
+                    severity="WARNING",
+                    weight=0.08,
+                    message=f"VLM and OCR produced contradictory data: {'; '.join(_contradiction_signals)}",
+                    evidence={
+                        "contradictions": _contradiction_signals,
+                        "ocr_merchant": _ocr_merchant_m3,
+                        "vlm_merchant": _vlm_merchant_m3,
+                        "ocr_total": _ocr_total_m3,
+                        "vlm_total": _vlm_total_m3,
+                    },
+                    reason_text=(
+                        f"⚠️ OCR/VLM Contradiction: Two independent extraction engines produced "
+                        f"different results: {'; '.join(_contradiction_signals)}. This may indicate "
+                        f"the document has been altered — one engine reads the original data while "
+                        f"the other reads the modified version."
+                    ),
+                )
+    except Exception as e:
+        logger.warning(f"R_VLM_OCR_CONTRADICTION check failed: {e}")
+
+    # ---------------------------------------------------------------------------
+    # RULE GROUP 5G3: Currency Symbol Consistency
+    # ---------------------------------------------------------------------------
+    # A legitimate receipt should have consistent currency. Multiple different
+    # currency symbols (e.g., $ and ₹) on the same receipt is suspicious.
+    try:
+        _curr_symbols = tf.get("currency_symbols") or []
+        if len(_curr_symbols) >= 2:
+            # Normalize: group equivalent symbols (e.g., "$" and "USD" are the same)
+            _CURR_GROUPS = {
+                "USD": {"$", "usd", "us$"},
+                "EUR": {"€", "eur"},
+                "GBP": {"£", "gbp"},
+                "INR": {"₹", "inr", "rs", "rs."},
+                "JPY": {"¥", "jpy", "yen"},
+                "CAD": {"cad", "c$"},
+                "AED": {"aed", "د.إ"},
+                "SGD": {"sgd", "s$"},
+            }
+            _detected_groups = set()
+            for sym in _curr_symbols:
+                sym_lower = str(sym).lower().strip()
+                matched_group = None
+                for grp, variants in _CURR_GROUPS.items():
+                    if sym_lower in variants:
+                        matched_group = grp
+                        break
+                _detected_groups.add(matched_group or sym_lower)
+            
+            if len(_detected_groups) >= 2:
+                score += emit_event(
+                    events=events,
+                    reasons=reasons,
+                    rule_id="R_CURRENCY_INCONSISTENCY",
+                    severity="WARNING",
+                    weight=0.10,
+                    message=f"Multiple currencies detected: {', '.join(sorted(_detected_groups))}",
+                    evidence={
+                        "currency_symbols": _curr_symbols,
+                        "normalized_groups": sorted(_detected_groups),
+                    },
+                    reason_text=(
+                        f"💱 Currency Inconsistency: This receipt contains multiple currency "
+                        f"symbols ({', '.join(sorted(_detected_groups))}). Legitimate receipts "
+                        f"typically use a single currency."
+                    ),
+                )
+    except Exception as e:
+        logger.warning(f"R_CURRENCY_INCONSISTENCY check failed: {e}")
 
     # ---------------------------------------------------------------------------
     # RULE GROUP 5H: Template Matching
@@ -6260,6 +6444,22 @@ def analyze_receipt(
     except Exception as e:
         logger.warning("Vision LLM extraction failed (non-fatal): %s", e)
         features.text_features["vlm_extraction"] = {"success": False, "error": str(e)}
+    
+    # 5.5 Duplicate detection (fingerprint-based)
+    try:
+        from app.pipelines.receipt_duplicates import check_duplicate
+        tf = features.text_features
+        dup_result = check_duplicate(
+            file_path=file_path,
+            merchant=tf.get("merchant_candidate") or tf.get("merchant_name"),
+            receipt_date=tf.get("receipt_date"),
+            total_amount=tf.get("total_amount"),
+            currency=(tf.get("currency_symbols") or [None])[0],
+            geo=tf.get("geo_country_guess"),
+        )
+        features.text_features["duplicate_check"] = dup_result
+    except Exception as e:
+        logger.warning("Duplicate detection failed (non-fatal): %s", e)
     
     # 6. Run rule-based analysis
     return _score_and_explain(features, apply_learned=apply_learned, vision_assessment=vision_assessment)

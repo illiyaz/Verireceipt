@@ -1124,8 +1124,8 @@ class TestHandwrittenAndAmountRules:
         assert hw_events[0]["evidence"]["detection_mode"] == "avg_confidence"
 
     def test_handwritten_fires_on_high_low_conf_ratio(self):
-        """R_HANDWRITTEN_RECEIPT fires when >20% words have low confidence."""
-        result = self._make_features({"ocr_confidence": 0.72, "ocr_low_conf_word_ratio": 0.25})
+        """R_HANDWRITTEN_RECEIPT fires when >30% words have low confidence."""
+        result = self._make_features({"ocr_confidence": 0.72, "ocr_low_conf_word_ratio": 0.35})
         hw_events = [e for e in result.events if e.get("rule_id") == "R_HANDWRITTEN_RECEIPT"]
         assert len(hw_events) == 1
         assert hw_events[0]["evidence"]["detection_mode"] == "low_conf_word_ratio"
