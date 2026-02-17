@@ -2583,7 +2583,7 @@ def _score_and_explain(
                     rule_id="R_DUPLICATE_RECEIPT",
                     severity="HARD_FAIL",
                     weight=0.60,
-                    message=f"Exact duplicate receipt detected (previously seen as {os.path.basename(matched_file)})",
+                    message=f"Exact duplicate receipt detected (previously seen as {matched_file.rsplit('/', 1)[-1] if '/' in matched_file else matched_file})",
                     evidence={
                         "match_type": "exact",
                         "matched_file": matched_file,
