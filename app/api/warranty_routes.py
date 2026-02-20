@@ -262,14 +262,28 @@ async def dashboard_overview():
 
 
 @router.get("/dashboard/root-causes")
-async def dashboard_root_causes(limit: int = 20):
-    """Claims grouped by issue type (root cause) with counts and avg amounts."""
-    from ..warranty.db import get_connection, release_connection, _get_cursor
+async def dashboard_root_causes(
+    limit: int = 20,
+    brand: Optional[str] = None,
+    model: Optional[str] = None,
+):
+    """Claims grouped by issue type (root cause) with counts and avg amounts.
+    Optionally filtered by brand and/or model."""
+    from ..warranty.db import get_connection, release_connection, _get_cursor, _sql
     
     conn = get_connection()
     try:
         cursor = _get_cursor(conn)
-        cursor.execute(f"""
+        conditions = ["issue_description IS NOT NULL", "issue_description != ''"]
+        params = []
+        if brand:
+            conditions.append("brand = ?")
+            params.append(brand)
+        if model:
+            conditions.append("model = ?")
+            params.append(model)
+        where = "WHERE " + " AND ".join(conditions)
+        cursor.execute(_sql(f"""
             SELECT issue_description,
                    COUNT(*) as claim_count,
                    COALESCE(AVG(total_amount), 0) as avg_amount,
@@ -277,13 +291,20 @@ async def dashboard_root_causes(limit: int = 20):
                    COALESCE(AVG(risk_score), 0) as avg_risk,
                    SUM(CASE WHEN is_suspicious = 1 THEN 1 ELSE 0 END) as suspicious_count
             FROM warranty_claims
-            WHERE issue_description IS NOT NULL AND issue_description != ''
+            {where}
             GROUP BY issue_description
             ORDER BY claim_count DESC
             LIMIT {int(limit)}
-        """)
+        """), tuple(params))
         rows = [dict(r) for r in cursor.fetchall()]
-        return {"root_causes": rows}
+        
+        # Also return available brands and models for filter dropdowns
+        cursor.execute("SELECT DISTINCT brand FROM warranty_claims WHERE brand IS NOT NULL AND brand != '' ORDER BY brand")
+        brands = [r[0] for r in cursor.fetchall()]
+        cursor.execute("SELECT DISTINCT model FROM warranty_claims WHERE model IS NOT NULL AND model != '' ORDER BY model")
+        models = [r[0] for r in cursor.fetchall()]
+        
+        return {"root_causes": rows, "brands": brands, "models": models}
     finally:
         release_connection(conn)
 
@@ -450,10 +471,11 @@ async def dashboard_claims_list(
     dealer_id: Optional[str] = None,
     triage: Optional[str] = None,
     suspicious_only: bool = False,
+    duplicates_only: bool = False,
     limit: int = 50,
     offset: int = 0,
 ):
-    """Drill-down: list claims filtered by issue, brand, dealer, or triage class."""
+    """Drill-down: list claims filtered by issue, brand, dealer, triage, or duplicates."""
     from ..warranty.db import get_connection, release_connection, _get_cursor, _sql
     
     conn = get_connection()
@@ -477,6 +499,12 @@ async def dashboard_claims_list(
             params.append(triage)
         if suspicious_only:
             conditions.append("is_suspicious = 1")
+        if duplicates_only:
+            conditions.append("""id IN (
+                SELECT claim_id_1 FROM warranty_duplicate_matches
+                UNION
+                SELECT claim_id_2 FROM warranty_duplicate_matches
+            )""")
         
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         

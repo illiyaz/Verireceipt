@@ -122,6 +122,8 @@
             const [drilldown, setDrilldown] = useState(null);
             const [drillClaims, setDrillClaims] = useState(null);
             const [drillLoading, setDrillLoading] = useState(false);
+            const [rcFilterBrand, setRcFilterBrand] = useState('');
+            const [rcFilterModel, setRcFilterModel] = useState('');
             const fileInputRef = useRef(null);
 
             const loadDuplicateAudit = async (claimId) => {
@@ -190,12 +192,25 @@
 
             const DASH_COLORS = ['#6366f1','#ec4899','#f59e0b','#10b981','#3b82f6','#ef4444','#8b5cf6','#14b8a6','#f97316','#06b6d4','#84cc16','#e11d48'];
 
+            const loadRootCauses = async (brand, model) => {
+                try {
+                    const p = new URLSearchParams();
+                    if (brand) p.set('brand', brand);
+                    if (model) p.set('model', model);
+                    const rc = await fetch(`${API_BASE_URL}/warranty/dashboard/root-causes?${p}`).then(r => r.json());
+                    setDashRootCauses(rc);
+                } catch (e) { console.error('Root causes load failed:', e); }
+            };
+
             const loadDashboard = async () => {
                 setDashLoading(true);
                 try {
+                    const rcParams = new URLSearchParams();
+                    if (rcFilterBrand) rcParams.set('brand', rcFilterBrand);
+                    if (rcFilterModel) rcParams.set('model', rcFilterModel);
                     const [ov, rc, br, dl, sg, dp, tr] = await Promise.all([
                         fetch(`${API_BASE_URL}/warranty/dashboard/overview`).then(r => r.json()),
-                        fetch(`${API_BASE_URL}/warranty/dashboard/root-causes`).then(r => r.json()),
+                        fetch(`${API_BASE_URL}/warranty/dashboard/root-causes?${rcParams}`).then(r => r.json()),
                         fetch(`${API_BASE_URL}/warranty/dashboard/by-brand`).then(r => r.json()),
                         fetch(`${API_BASE_URL}/warranty/dashboard/by-dealer`).then(r => r.json()),
                         fetch(`${API_BASE_URL}/warranty/dashboard/signals`).then(r => r.json()),
@@ -208,6 +223,11 @@
                 setDashLoading(false);
             };
 
+            // Reload root causes when brand/model filter changes
+            useEffect(() => {
+                if (dashOverview) loadRootCauses(rcFilterBrand, rcFilterModel);
+            }, [rcFilterBrand, rcFilterModel]);
+
             const openDrilldown = async (type, value, title) => {
                 setDrilldown({ type, value, title });
                 setDrillLoading(true);
@@ -219,6 +239,7 @@
                     if (type === 'dealer') params.set('dealer_id', value);
                     if (type === 'triage') params.set('triage', value);
                     if (type === 'suspicious') params.set('suspicious_only', 'true');
+                    if (type === 'duplicates') params.set('duplicates_only', 'true');
                     const resp = await fetch(`${API_BASE_URL}/warranty/dashboard/claims?${params}`);
                     setDrillClaims(await resp.json());
                 } catch (e) { console.error(e); }
@@ -886,7 +907,7 @@
                                         { icon:'fa-exclamation-circle', label:'Review', value: dashOverview.by_triage?.REVIEW||0, color:'bg-yellow-500', click: () => openDrilldown('triage','REVIEW','Under Review') },
                                         { icon:'fa-exclamation-triangle', label:'Investigate', value: dashOverview.by_triage?.INVESTIGATE||0, color:'bg-red-500', click: () => openDrilldown('triage','INVESTIGATE','Investigate') },
                                         { icon:'fa-flag', label:'Suspicious', value: dashOverview.suspicious_count, color:'bg-red-600', click: () => openDrilldown('suspicious','','Suspicious Claims') },
-                                        { icon:'fa-copy', label:'Duplicates', value: dashOverview.claims_with_duplicates, color:'bg-purple-500' },
+                                        { icon:'fa-copy', label:'Duplicates', value: dashOverview.claims_with_duplicates, color:'bg-purple-500', click: () => openDrilldown('duplicates','','Duplicate Claims') },
                                     ].map((kpi, ki) => (
                                         <div key={ki} onClick={kpi.click}
                                             className={`${kpi.color} rounded-xl p-4 text-white card-shadow ${kpi.click ? 'cursor-pointer hover:scale-105 transition-transform' : ''}`}>
@@ -902,6 +923,26 @@
                                 {/* Row 1: Root Causes + Brand */}
                                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                                     <div className="lg:col-span-2 bg-white rounded-2xl card-shadow p-5 fade-in">
+                                        {/* Brand/Model filter bar */}
+                                        <div className="flex items-center gap-3 mb-3 flex-wrap">
+                                            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide"><i className="fas fa-filter mr-1"></i>Filter:</span>
+                                            <select value={rcFilterBrand} onChange={e => { setRcFilterBrand(e.target.value); setRcFilterModel(''); }}
+                                                className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-indigo-300 focus:outline-none">
+                                                <option value="">All Brands</option>
+                                                {dashRootCauses?.brands?.map(b => <option key={b} value={b}>{b}</option>)}
+                                            </select>
+                                            <select value={rcFilterModel} onChange={e => setRcFilterModel(e.target.value)}
+                                                className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-indigo-300 focus:outline-none">
+                                                <option value="">All Models</option>
+                                                {dashRootCauses?.models?.map(m => <option key={m} value={m}>{m}</option>)}
+                                            </select>
+                                            {(rcFilterBrand || rcFilterModel) && (
+                                                <button type="button" onClick={() => { setRcFilterBrand(''); setRcFilterModel(''); }}
+                                                    className="text-xs text-red-500 hover:text-red-700 font-medium">
+                                                    <i className="fas fa-times mr-0.5"></i>Clear
+                                                </button>
+                                            )}
+                                        </div>
                                         {dashRootCauses?.root_causes?.length > 0
                                             ? <ChartCanvas id="rcChart" config={{
                                                 type:'bar',
@@ -914,7 +955,7 @@
                                                 },
                                                 options:{responsive:true, indexAxis:'y',
                                                     onClick:(e,els)=>{ if(els.length) openDrilldown('issue', dashRootCauses.root_causes[els[0].index].issue_description, 'Issue: '+dashRootCauses.root_causes[els[0].index].issue_description); },
-                                                    plugins:{legend:{position:'top'}, title:{display:true, text:'Claims by Root Cause (click to drill down)'}},
+                                                    plugins:{legend:{position:'top'}, title:{display:true, text:'Claims by Root Cause' + (rcFilterBrand ? ` — ${rcFilterBrand}` : '') + (rcFilterModel ? ` / ${rcFilterModel}` : '') + ' (click to drill down)'}},
                                                     scales:{x:{beginAtZero:true}}}
                                             }} height={Math.max(200, (dashRootCauses.root_causes.length||5)*28)} />
                                             : <div className="flex items-center justify-center h-48 text-gray-300"><div className="text-center"><i className="fas fa-chart-bar text-4xl mb-2"></i><p className="text-sm">No root cause data</p></div></div>
