@@ -304,11 +304,11 @@ async def dashboard_root_causes(
         
         # Also return available filter options for dropdowns
         cursor.execute("SELECT DISTINCT brand FROM warranty_claims WHERE brand IS NOT NULL AND brand != '' ORDER BY brand")
-        brands = [r[0] for r in cursor.fetchall()]
+        brands = [dict(r)["brand"] for r in cursor.fetchall()]
         cursor.execute("SELECT DISTINCT model FROM warranty_claims WHERE model IS NOT NULL AND model != '' ORDER BY model")
-        models = [r[0] for r in cursor.fetchall()]
+        models = [dict(r)["model"] for r in cursor.fetchall()]
         cursor.execute("SELECT DISTINCT issue_description FROM warranty_claims WHERE issue_description IS NOT NULL AND issue_description != '' ORDER BY issue_description")
-        issues = [r[0] for r in cursor.fetchall()]
+        issues = [dict(r)["issue_description"] for r in cursor.fetchall()]
         
         return {"root_causes": rows, "brands": brands, "models": models, "issues": issues}
     finally:
