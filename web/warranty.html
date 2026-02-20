@@ -167,14 +167,25 @@
                 setClaimModalLoading(false);
             };
 
-            const ClaimLink = ({ claimId, short }) => (
-                <button
-                    onClick={(e) => { e.stopPropagation(); openClaimDetail(claimId); }}
-                    className="text-indigo-600 hover:text-indigo-800 hover:underline font-mono text-xs cursor-pointer"
-                    title={`View claim ${claimId}`}
-                >
-                    {short ? claimId?.substring(0, 12) + '...' : claimId}
-                </button>
+            const ClaimLink = ({ claimId, short, showPdf }) => (
+                <span className="inline-flex items-center space-x-1">
+                    <span
+                        role="button" tabIndex={0}
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); openClaimDetail(claimId); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); openClaimDetail(claimId); } }}
+                        className="text-indigo-600 hover:text-indigo-800 hover:underline font-mono text-xs cursor-pointer"
+                        title={`View claim ${claimId}`}
+                    >
+                        {short && claimId?.length > 10 ? claimId.substring(0, 10) + '\u2026' : claimId}
+                    </span>
+                    {showPdf && (
+                        <a href={`${API_BASE_URL}/warranty/claim/${claimId}/pdf`} target="_blank" rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-red-500 hover:text-red-700" title="View original PDF">
+                            <i className="fas fa-file-pdf text-xs"></i>
+                        </a>
+                    )}
+                </span>
             );
 
             const DASH_COLORS = ['#6366f1','#ec4899','#f59e0b','#10b981','#3b82f6','#ef4444','#8b5cf6','#14b8a6','#f97316','#06b6d4','#84cc16','#e11d48'];
@@ -577,40 +588,44 @@
                                                 {dupAudit?.grouped?.map((group, gIdx) => {
                                                     const expanded = dupExpanded[gIdx];
                                                     const cd = group.claim_details;
+                                                    const hasPdf = group.pdf_available;
                                                     return (
                                                         <div key={gIdx} className="bg-white rounded-lg mb-3 border border-red-100 overflow-hidden">
-                                                            {/* Header — always visible */}
-                                                            <div
-                                                                className="p-3 cursor-pointer hover:bg-red-50 transition flex items-center justify-between"
-                                                                onClick={() => toggleDupExpand(gIdx)}
-                                                            >
+                                                            {/* Header row — linked claim info */}
+                                                            <div className="p-3 flex items-center justify-between">
                                                                 <div className="flex items-center space-x-3 flex-1 min-w-0">
                                                                     <div className="flex -space-x-1">
                                                                         {group.reason_types?.map((rt, ri) => {
                                                                             const mi = getMatchIcon(rt);
                                                                             return (
-                                                                                <span key={ri} className={`inline-flex items-center justify-center w-7 h-7 rounded-full ${mi.bg} ${mi.color} text-xs`}>
+                                                                                <span key={ri} className={`inline-flex items-center justify-center w-7 h-7 rounded-full ${mi.bg} ${mi.color} text-xs`} title={rt}>
                                                                                     <i className={`fas ${mi.icon}`}></i>
                                                                                 </span>
                                                                             );
                                                                         })}
                                                                     </div>
                                                                     <div className="min-w-0 flex-1">
-                                                                        <div className="flex items-center space-x-2">
+                                                                        <div className="flex items-center space-x-2 flex-wrap">
                                                                             <span className="bg-red-100 text-red-700 text-xs font-bold px-1.5 py-0.5 rounded">LINKED</span>
-                                                                            <ClaimLink claimId={group.matched_claim_id} short={true} />
+                                                                            <ClaimLink claimId={group.matched_claim_id} short={false} showPdf={hasPdf} />
+                                                                            <span className="text-xs font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded-full">
+                                                                                {(group.max_similarity * 100).toFixed(0)}% match
+                                                                            </span>
                                                                         </div>
-                                                                        <p className="text-xs text-gray-500 truncate mt-0.5">
+                                                                        <p className="text-xs text-gray-500 mt-0.5">
                                                                             {group.reason_summary?.join(' + ')}
                                                                         </p>
                                                                     </div>
                                                                 </div>
-                                                                <div className="flex items-center space-x-3 ml-2">
-                                                                    <span className="text-xs font-bold text-red-600 bg-red-100 px-2 py-1 rounded-full">
-                                                                        {(group.max_similarity * 100).toFixed(0)}%
-                                                                    </span>
-                                                                    <i className={`fas fa-chevron-${expanded ? 'up' : 'down'} text-gray-400 text-xs`}></i>
-                                                                </div>
+                                                                {/* Expand/collapse button — clearly separate */}
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => toggleDupExpand(gIdx)}
+                                                                    className="ml-2 px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-red-100 text-gray-600 hover:text-red-700 transition text-xs font-medium flex items-center space-x-1 flex-shrink-0"
+                                                                >
+                                                                    <span>{expanded ? 'Hide' : 'Details'}</span>
+                                                                    <i className={`fas fa-chevron-${expanded ? 'up' : 'down'}`}></i>
+                                                                </button>
                                                             </div>
 
                                                             {/* Expanded detail */}
@@ -645,11 +660,19 @@
                                                                     {/* Full linked claim details */}
                                                                     {cd && (
                                                                         <div>
-                                                                            <p className="font-semibold text-gray-700 mb-1 text-xs">
-                                                                                <i className="fas fa-id-card mr-1 text-blue-500"></i>Full Linked Claim Details
-                                                                            </p>
+                                                                            <div className="flex items-center justify-between mb-1">
+                                                                                <p className="font-semibold text-gray-700 text-xs">
+                                                                                    <i className="fas fa-id-card mr-1 text-blue-500"></i>Full Linked Claim Details
+                                                                                </p>
+                                                                                {hasPdf && (
+                                                                                    <a href={`${API_BASE_URL}/warranty/claim/${cd.id}/pdf`} target="_blank" rel="noopener noreferrer"
+                                                                                        className="inline-flex items-center px-2 py-1 bg-red-50 hover:bg-red-100 text-red-600 rounded text-xs font-medium transition">
+                                                                                        <i className="fas fa-file-pdf mr-1"></i>View PDF
+                                                                                    </a>
+                                                                                )}
+                                                                            </div>
                                                                             <div className="grid grid-cols-2 gap-2 text-xs bg-white rounded p-2 border">
-                                                                                <div><span className="text-gray-400">Claim ID:</span> <ClaimLink claimId={cd.id} short={false} /></div>
+                                                                                <div><span className="text-gray-400">Claim ID:</span> <ClaimLink claimId={cd.id} short={false} showPdf={false} /></div>
                                                                                 <div><span className="text-gray-400">Customer:</span> {cd.customer_name || 'N/A'}</div>
                                                                                 <div><span className="text-gray-400">VIN:</span> <span className="font-mono">{cd.vin || 'N/A'}</span></div>
                                                                                 <div><span className="text-gray-400">Vehicle:</span> {cd.brand} {cd.model} ({cd.year})</div>
@@ -695,13 +718,27 @@
                                                 })}
 
                                                 {/* Fallback if audit not yet loaded */}
-                                                {!dupAudit && result.duplicates_found.map((dup, idx) => (
-                                                    <div key={idx} className="bg-white rounded-lg p-3 mb-2 border border-red-100">
-                                                        <p className="font-medium text-red-600">{dup.match_type}</p>
-                                                        <p className="text-sm text-gray-600">Matches claim: <ClaimLink claimId={dup.matched_claim_id} short={true} /></p>
-                                                        <p className="text-sm text-gray-500">Similarity: {(dup.similarity_score * 100).toFixed(0)}%</p>
-                                                    </div>
-                                                ))}
+                                                {!dupAudit && result.duplicates_found.map((dup, idx) => {
+                                                    const mi = getMatchIcon(dup.match_type);
+                                                    return (
+                                                        <div key={idx} className="bg-white rounded-lg p-3 mb-2 border border-red-100 flex items-center space-x-3">
+                                                            <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full ${mi.bg} ${mi.color}`}>
+                                                                <i className={`fas ${mi.icon}`}></i>
+                                                            </span>
+                                                            <div className="flex-1">
+                                                                <div className="flex items-center space-x-2 flex-wrap">
+                                                                    <span className="bg-red-100 text-red-700 text-xs font-bold px-1.5 py-0.5 rounded">LINKED</span>
+                                                                    <ClaimLink claimId={dup.matched_claim_id} short={false} />
+                                                                    <span className="text-xs font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded-full">
+                                                                        {(dup.similarity_score * 100).toFixed(0)}% match
+                                                                    </span>
+                                                                </div>
+                                                                <p className="text-xs text-gray-500 mt-0.5">{dup.match_type.replace(/_/g, ' ')}</p>
+                                                            </div>
+                                                            <div className="spinner" style={{width:'16px',height:'16px'}} title="Loading details..."></div>
+                                                        </div>
+                                                    );
+                                                })}
                                             </div>
                                         )}
 

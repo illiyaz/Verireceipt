@@ -203,7 +203,17 @@ async def get_claim_duplicates(claim_id: str):
             detail=f"Claim {claim_id} not found"
         )
     
-    return get_duplicate_audit(claim_id)
+    audit = get_duplicate_audit(claim_id)
+    
+    # Enrich each grouped entry with pdf_available
+    for g in audit.get("grouped", []):
+        cid = g.get("matched_claim_id")
+        if cid:
+            g["pdf_available"] = (WARRANTY_PDF_DIR / f"{cid}.pdf").exists()
+        if g.get("claim_details"):
+            g["claim_details"]["pdf_available"] = g.get("pdf_available", False)
+    
+    return audit
 
 
 @router.get("/dashboard/overview")
