@@ -234,7 +234,13 @@ async def dashboard_overview():
         cursor.execute("SELECT COUNT(*) as cnt FROM warranty_claims WHERE is_suspicious = 1")
         suspicious = _val(cursor.fetchone(), "cnt")
         
-        cursor.execute("SELECT COUNT(DISTINCT claim_id_1) as cnt FROM warranty_duplicate_matches")
+        cursor.execute("""
+            SELECT COUNT(*) as cnt FROM (
+                SELECT claim_id_1 AS cid FROM warranty_duplicate_matches
+                UNION
+                SELECT claim_id_2 AS cid FROM warranty_duplicate_matches
+            )
+        """)
         dup_claims = _val(cursor.fetchone(), "cnt")
         
         cursor.execute("SELECT COUNT(*) as cnt FROM warranty_duplicate_matches")
