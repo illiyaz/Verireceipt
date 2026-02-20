@@ -350,17 +350,17 @@ async def dashboard_duplicate_overview():
         
         # Claims with most duplicates
         cursor.execute("""
-            SELECT claim_id, cnt FROM (
-                SELECT claim_id_1 as claim_id, COUNT(*) as cnt
+            SELECT claim_id, SUM(cnt) AS total_matches FROM (
+                SELECT claim_id_1 AS claim_id, COUNT(*) AS cnt
                 FROM warranty_duplicate_matches
                 GROUP BY claim_id_1
                 UNION ALL
-                SELECT claim_id_2, COUNT(*)
+                SELECT claim_id_2 AS claim_id, COUNT(*) AS cnt
                 FROM warranty_duplicate_matches
                 GROUP BY claim_id_2
-            ) sub
+            ) AS sub
             GROUP BY claim_id
-            ORDER BY SUM(cnt) DESC
+            ORDER BY total_matches DESC
             LIMIT 10
         """)
         top_claims = [dict(r) for r in cursor.fetchall()]

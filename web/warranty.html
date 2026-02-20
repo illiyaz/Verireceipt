@@ -8,6 +8,7 @@
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
@@ -81,6 +82,9 @@
         .signal-high { background-color: #fef2f2; border-left: 4px solid #ef4444; }
         .signal-medium { background-color: #fffbeb; border-left: 4px solid #f59e0b; }
         .signal-low { background-color: #f0fdf4; border-left: 4px solid #22c55e; }
+        .tab-active { border-bottom: 3px solid #667eea; color: #667eea; font-weight: 600; }
+        .tab-inactive { border-bottom: 3px solid transparent; color: #6b7280; }
+        .tab-inactive:hover { color: #374151; border-color: #d1d5db; }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -103,6 +107,21 @@
             const [feedbackError, setFeedbackError] = useState(null);
             const [dupAudit, setDupAudit] = useState(null);
             const [dupExpanded, setDupExpanded] = useState({});
+            const [activeTab, setActiveTab] = useState('analyze');
+            const [claimModal, setClaimModal] = useState(null);
+            const [claimModalLoading, setClaimModalLoading] = useState(false);
+            // Dashboard state
+            const [dashOverview, setDashOverview] = useState(null);
+            const [dashRootCauses, setDashRootCauses] = useState(null);
+            const [dashBrands, setDashBrands] = useState(null);
+            const [dashDealers, setDashDealers] = useState(null);
+            const [dashSignals, setDashSignals] = useState(null);
+            const [dashDupStats, setDashDupStats] = useState(null);
+            const [dashTrends, setDashTrends] = useState(null);
+            const [dashLoading, setDashLoading] = useState(false);
+            const [drilldown, setDrilldown] = useState(null);
+            const [drillClaims, setDrillClaims] = useState(null);
+            const [drillLoading, setDrillLoading] = useState(false);
             const fileInputRef = useRef(null);
 
             const loadDuplicateAudit = async (claimId) => {
@@ -129,6 +148,75 @@
                     case 'VIN_ISSUE_DUPLICATE': return { icon: 'fa-car', color: 'text-purple-600', bg: 'bg-purple-100' };
                     default: return { icon: 'fa-copy', color: 'text-gray-600', bg: 'bg-gray-100' };
                 }
+            };
+
+            const openClaimDetail = async (claimId) => {
+                setClaimModalLoading(true);
+                setClaimModal(null);
+                try {
+                    const resp = await fetch(`${API_BASE_URL}/warranty/claim/${claimId}`);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        setClaimModal(data);
+                    } else {
+                        setClaimModal({ _error: `Claim ${claimId} not found` });
+                    }
+                } catch (e) {
+                    setClaimModal({ _error: e.message });
+                }
+                setClaimModalLoading(false);
+            };
+
+            const ClaimLink = ({ claimId, short }) => (
+                <button
+                    onClick={(e) => { e.stopPropagation(); openClaimDetail(claimId); }}
+                    className="text-indigo-600 hover:text-indigo-800 hover:underline font-mono text-xs cursor-pointer"
+                    title={`View claim ${claimId}`}
+                >
+                    {short ? claimId?.substring(0, 12) + '...' : claimId}
+                </button>
+            );
+
+            const DASH_COLORS = ['#6366f1','#ec4899','#f59e0b','#10b981','#3b82f6','#ef4444','#8b5cf6','#14b8a6','#f97316','#06b6d4','#84cc16','#e11d48'];
+
+            const loadDashboard = async () => {
+                setDashLoading(true);
+                try {
+                    const [ov, rc, br, dl, sg, dp, tr] = await Promise.all([
+                        fetch(`${API_BASE_URL}/warranty/dashboard/overview`).then(r => r.json()),
+                        fetch(`${API_BASE_URL}/warranty/dashboard/root-causes`).then(r => r.json()),
+                        fetch(`${API_BASE_URL}/warranty/dashboard/by-brand`).then(r => r.json()),
+                        fetch(`${API_BASE_URL}/warranty/dashboard/by-dealer`).then(r => r.json()),
+                        fetch(`${API_BASE_URL}/warranty/dashboard/signals`).then(r => r.json()),
+                        fetch(`${API_BASE_URL}/warranty/dashboard/duplicates`).then(r => r.json()),
+                        fetch(`${API_BASE_URL}/warranty/dashboard/trends`).then(r => r.json()),
+                    ]);
+                    setDashOverview(ov); setDashRootCauses(rc); setDashBrands(br);
+                    setDashDealers(dl); setDashSignals(sg); setDashDupStats(dp); setDashTrends(tr);
+                } catch (e) { console.error('Dashboard load failed:', e); }
+                setDashLoading(false);
+            };
+
+            const openDrilldown = async (type, value, title) => {
+                setDrilldown({ type, value, title });
+                setDrillLoading(true);
+                setDrillClaims(null);
+                try {
+                    const params = new URLSearchParams();
+                    if (type === 'issue') params.set('issue', value);
+                    if (type === 'brand') params.set('brand', value);
+                    if (type === 'dealer') params.set('dealer_id', value);
+                    if (type === 'triage') params.set('triage', value);
+                    if (type === 'suspicious') params.set('suspicious_only', 'true');
+                    const resp = await fetch(`${API_BASE_URL}/warranty/dashboard/claims?${params}`);
+                    setDrillClaims(await resp.json());
+                } catch (e) { console.error(e); }
+                setDrillLoading(false);
+            };
+
+            const switchTab = (tab) => {
+                setActiveTab(tab);
+                if (tab === 'dashboard' && !dashOverview) loadDashboard();
             };
 
             const handleFile = (selectedFile) => {
@@ -256,38 +344,41 @@
             return (
                 <div className="min-h-screen">
                     {/* Header */}
-                    <header className="gradient-bg text-white py-8 shadow-lg">
-                        <div className="container mx-auto px-4">
-                            <div className="flex items-center justify-between">
+                    <header className="gradient-bg text-white py-6 shadow-lg">
+                        <div className="max-w-7xl mx-auto px-4">
+                            <div className="flex items-center justify-between mb-4">
                                 <div className="flex items-center space-x-4">
-                                    <i className="fas fa-shield-alt text-4xl"></i>
+                                    <i className="fas fa-shield-alt text-3xl"></i>
                                     <div>
-                                        <h1 className="text-4xl font-bold">VeriReceipt</h1>
-                                        <p className="text-purple-200">Real-Time AI Fraud Detection</p>
+                                        <h1 className="text-3xl font-bold">VeriReceipt</h1>
+                                        <p className="text-purple-200 text-sm">Warranty Claims - AI Fraud Detection</p>
                                     </div>
                                 </div>
-                                <div className="text-right flex items-center space-x-4">
-                                    <a href="/web/warranty_dashboard.html" className="px-4 py-2 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg transition text-white">
-                                        <i className="fas fa-tachometer-alt mr-2"></i>
-                                        Dashboard
+                                <div className="flex items-center space-x-3">
+                                    <a href="/web/index.html" className="px-3 py-1.5 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg transition text-white text-sm">
+                                        <i className="fas fa-receipt mr-1"></i>Receipts
                                     </a>
-                                    <a href="/web/index.html" className="px-4 py-2 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg transition text-white">
-                                        <i className="fas fa-receipt mr-2"></i>
-                                        Receipt Analysis
+                                    <a href="/web/stats.html" className="px-3 py-1.5 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg transition text-white text-sm">
+                                        <i className="fas fa-chart-bar mr-1"></i>Analytics
                                     </a>
-                                    <a href="/web/stats.html" className="px-4 py-2 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg transition text-white">
-                                        <i className="fas fa-chart-bar mr-2"></i>
-                                        Analytics
-                                    </a>
-                                    <div>
-                                        <div className="text-sm text-purple-200">Warranty Claims</div>
-                                        <div className="font-semibold">AI Fraud Detection</div>
-                                    </div>
                                 </div>
+                            </div>
+                            {/* Tabs */}
+                            <div className="flex space-x-1 border-b border-white border-opacity-30">
+                                <button onClick={() => switchTab('analyze')}
+                                    className={`px-5 py-2.5 text-sm transition rounded-t-lg ${activeTab === 'analyze' ? 'bg-white text-indigo-700 font-semibold' : 'text-white hover:bg-white hover:bg-opacity-10'}`}>
+                                    <i className="fas fa-upload mr-2"></i>Analyze Claim
+                                </button>
+                                <button onClick={() => switchTab('dashboard')}
+                                    className={`px-5 py-2.5 text-sm transition rounded-t-lg ${activeTab === 'dashboard' ? 'bg-white text-indigo-700 font-semibold' : 'text-white hover:bg-white hover:bg-opacity-10'}`}>
+                                    <i className="fas fa-tachometer-alt mr-2"></i>Dashboard
+                                </button>
                             </div>
                         </div>
                     </header>
 
+                    {/* ===================== ANALYZE TAB ===================== */}
+                    {activeTab === 'analyze' && (
                     <main className="max-w-7xl mx-auto py-8 px-4">
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                             {/* Upload Section */}
@@ -454,6 +545,24 @@
                                                         : `${result.duplicates_found.length} match(es) detected`}
                                                 </p>
 
+                                                {/* THIS CLAIM context banner */}
+                                                <div className="bg-white border border-indigo-200 rounded-lg p-3 mb-3">
+                                                    <div className="flex items-center space-x-2 mb-1">
+                                                        <span className="bg-indigo-100 text-indigo-700 text-xs font-bold px-2 py-0.5 rounded">THIS CLAIM</span>
+                                                        <ClaimLink claimId={result.claim_id} short={false} />
+                                                    </div>
+                                                    <div className="grid grid-cols-2 gap-1 text-xs text-gray-600">
+                                                        <div><span className="text-gray-400">VIN:</span> <span className="font-mono">{result.vin || 'N/A'}</span></div>
+                                                        <div><span className="text-gray-400">Vehicle:</span> {result.brand} {result.model} ({result.year})</div>
+                                                        <div><span className="text-gray-400">Issue:</span> {result.issue_description || 'N/A'}</div>
+                                                        <div><span className="text-gray-400">Total:</span> <span className="text-green-600 font-medium">${result.total_amount?.toFixed(2) || '0.00'}</span></div>
+                                                    </div>
+                                                </div>
+
+                                                <p className="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">
+                                                    <i className="fas fa-arrow-down mr-1"></i>is a duplicate of:
+                                                </p>
+
                                                 {/* Grouped audit (enriched) */}
                                                 {dupAudit?.grouped?.map((group, gIdx) => {
                                                     const expanded = dupExpanded[gIdx];
@@ -477,10 +586,11 @@
                                                                         })}
                                                                     </div>
                                                                     <div className="min-w-0 flex-1">
-                                                                        <p className="font-medium text-sm text-gray-800 truncate">
-                                                                            Claim {group.matched_claim_id?.substring(0, 12)}...
-                                                                        </p>
-                                                                        <p className="text-xs text-gray-500 truncate">
+                                                                        <div className="flex items-center space-x-2">
+                                                                            <span className="bg-red-100 text-red-700 text-xs font-bold px-1.5 py-0.5 rounded">LINKED</span>
+                                                                            <ClaimLink claimId={group.matched_claim_id} short={true} />
+                                                                        </div>
+                                                                        <p className="text-xs text-gray-500 truncate mt-0.5">
                                                                             {group.reason_summary?.join(' + ')}
                                                                         </p>
                                                                     </div>
@@ -496,24 +606,49 @@
                                                             {/* Expanded detail */}
                                                             {expanded && (
                                                                 <div className="border-t border-red-100 p-3 bg-gray-50 text-sm space-y-3">
-                                                                    {/* Linked claim details */}
+                                                                    {/* Side-by-side comparison */}
+                                                                    {cd && (
+                                                                        <div className="grid grid-cols-2 gap-3">
+                                                                            {/* This Claim mini */}
+                                                                            <div className="bg-indigo-50 rounded p-2 border border-indigo-100">
+                                                                                <p className="text-xs font-bold text-indigo-600 mb-1"><i className="fas fa-file-invoice mr-1"></i>This Claim</p>
+                                                                                <div className="text-xs space-y-0.5 text-gray-600">
+                                                                                    <div><span className="text-gray-400">VIN:</span> <span className="font-mono">{result.vin || 'N/A'}</span></div>
+                                                                                    <div><span className="text-gray-400">Issue:</span> {result.issue_description || 'N/A'}</div>
+                                                                                    <div><span className="text-gray-400">Date:</span> {result.claim_date || 'N/A'}</div>
+                                                                                    <div><span className="text-gray-400">Total:</span> ${result.total_amount?.toFixed(2) || '0.00'}</div>
+                                                                                </div>
+                                                                            </div>
+                                                                            {/* Linked Claim */}
+                                                                            <div className="bg-red-50 rounded p-2 border border-red-100">
+                                                                                <p className="text-xs font-bold text-red-600 mb-1"><i className="fas fa-link mr-1"></i>Linked Claim</p>
+                                                                                <div className="text-xs space-y-0.5 text-gray-600">
+                                                                                    <div><span className="text-gray-400">VIN:</span> <span className="font-mono">{cd.vin || 'N/A'}</span></div>
+                                                                                    <div><span className="text-gray-400">Issue:</span> {cd.issue_description || 'N/A'}</div>
+                                                                                    <div><span className="text-gray-400">Date:</span> {cd.claim_date || 'N/A'}</div>
+                                                                                    <div><span className="text-gray-400">Total:</span> ${cd.total_amount?.toFixed(2) || '0.00'}</div>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+
+                                                                    {/* Full linked claim details */}
                                                                     {cd && (
                                                                         <div>
-                                                                            <p className="font-semibold text-gray-700 mb-1">
-                                                                                <i className="fas fa-link mr-1 text-blue-500"></i>Linked Claim Details
+                                                                            <p className="font-semibold text-gray-700 mb-1 text-xs">
+                                                                                <i className="fas fa-id-card mr-1 text-blue-500"></i>Full Linked Claim Details
                                                                             </p>
                                                                             <div className="grid grid-cols-2 gap-2 text-xs bg-white rounded p-2 border">
-                                                                                <div><span className="text-gray-400">Claim ID:</span> <span className="font-mono">{cd.id?.substring(0, 16)}</span></div>
+                                                                                <div><span className="text-gray-400">Claim ID:</span> <ClaimLink claimId={cd.id} short={false} /></div>
                                                                                 <div><span className="text-gray-400">Customer:</span> {cd.customer_name || 'N/A'}</div>
                                                                                 <div><span className="text-gray-400">VIN:</span> <span className="font-mono">{cd.vin || 'N/A'}</span></div>
                                                                                 <div><span className="text-gray-400">Vehicle:</span> {cd.brand} {cd.model} ({cd.year})</div>
-                                                                                <div><span className="text-gray-400">Issue:</span> {cd.issue_description || 'N/A'}</div>
-                                                                                <div><span className="text-gray-400">Date:</span> {cd.claim_date || 'N/A'}</div>
-                                                                                <div><span className="text-gray-400">Total:</span> <span className="text-green-600 font-medium">${cd.total_amount?.toFixed(2) || '0.00'}</span></div>
+                                                                                <div><span className="text-gray-400">Dealer:</span> {cd.dealer_name || cd.dealer_id || 'N/A'}</div>
                                                                                 <div><span className="text-gray-400">Risk:</span>
                                                                                     <span className={`font-medium ${cd.risk_score > 0.6 ? 'text-red-600' : cd.risk_score > 0.3 ? 'text-yellow-600' : 'text-green-600'}`}>
                                                                                         {(cd.risk_score * 100).toFixed(0)}%
                                                                                     </span>
+                                                                                    {cd.triage_class && <span className={`ml-1 text-xs px-1.5 py-0.5 rounded-full text-white ${cd.triage_class === 'AUTO_APPROVE' ? 'bg-green-500' : cd.triage_class === 'REVIEW' ? 'bg-yellow-500' : 'bg-red-500'}`}>{cd.triage_class.replace('_',' ')}</span>}
                                                                                 </div>
                                                                             </div>
                                                                         </div>
@@ -521,7 +656,7 @@
 
                                                                     {/* Individual match reasons */}
                                                                     <div>
-                                                                        <p className="font-semibold text-gray-700 mb-1">
+                                                                        <p className="font-semibold text-gray-700 mb-1 text-xs">
                                                                             <i className="fas fa-search-plus mr-1 text-orange-500"></i>Match Reasons ({group.reasons?.length})
                                                                         </p>
                                                                         {group.reasons?.map((r, ri) => {
@@ -553,7 +688,7 @@
                                                 {!dupAudit && result.duplicates_found.map((dup, idx) => (
                                                     <div key={idx} className="bg-white rounded-lg p-3 mb-2 border border-red-100">
                                                         <p className="font-medium text-red-600">{dup.match_type}</p>
-                                                        <p className="text-sm text-gray-600">Matches claim: {dup.matched_claim_id}</p>
+                                                        <p className="text-sm text-gray-600">Matches claim: <ClaimLink claimId={dup.matched_claim_id} short={true} /></p>
                                                         <p className="text-sm text-gray-500">Similarity: {(dup.similarity_score * 100).toFixed(0)}%</p>
                                                     </div>
                                                 ))}
@@ -682,6 +817,327 @@
                             </div>
                         </div>
                     </main>
+                    )}
+
+                    {/* ===================== DASHBOARD TAB ===================== */}
+                    {activeTab === 'dashboard' && (
+                    <main className="max-w-7xl mx-auto py-6 px-4 space-y-6">
+                        {dashLoading && (
+                            <div className="text-center py-16">
+                                <div className="spinner mx-auto mb-4" style={{width:'48px',height:'48px'}}></div>
+                                <p className="text-gray-500">Loading dashboard...</p>
+                            </div>
+                        )}
+
+                        {!dashLoading && dashOverview && (
+                            <React.Fragment>
+                                {/* KPI Cards */}
+                                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 fade-in">
+                                    {[
+                                        { icon:'fa-file-invoice', label:'Total Claims', value: dashOverview.total_claims, color:'bg-indigo-500', click: () => openDrilldown('all','','All Claims') },
+                                        { icon:'fa-check-circle', label:'Auto Approved', value: dashOverview.by_triage?.AUTO_APPROVE||0, color:'bg-green-500', click: () => openDrilldown('triage','AUTO_APPROVE','Auto Approved') },
+                                        { icon:'fa-exclamation-circle', label:'Review', value: dashOverview.by_triage?.REVIEW||0, color:'bg-yellow-500', click: () => openDrilldown('triage','REVIEW','Under Review') },
+                                        { icon:'fa-exclamation-triangle', label:'Investigate', value: dashOverview.by_triage?.INVESTIGATE||0, color:'bg-red-500', click: () => openDrilldown('triage','INVESTIGATE','Investigate') },
+                                        { icon:'fa-flag', label:'Suspicious', value: dashOverview.suspicious_count, color:'bg-red-600', click: () => openDrilldown('suspicious','','Suspicious Claims') },
+                                        { icon:'fa-copy', label:'Duplicates', value: dashOverview.claims_with_duplicates, color:'bg-purple-500' },
+                                    ].map((kpi, ki) => (
+                                        <div key={ki} onClick={kpi.click}
+                                            className={`${kpi.color} rounded-xl p-4 text-white card-shadow ${kpi.click ? 'cursor-pointer hover:scale-105 transition-transform' : ''}`}>
+                                            <div className="flex items-center justify-between mb-2">
+                                                <i className={`fas ${kpi.icon} text-lg opacity-80`}></i>
+                                                <span className="text-2xl font-bold">{kpi.value}</span>
+                                            </div>
+                                            <p className="text-xs opacity-80">{kpi.label}</p>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {/* Row 1: Root Causes + Brand */}
+                                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                                    <div className="lg:col-span-2 bg-white rounded-2xl card-shadow p-5 fade-in">
+                                        {dashRootCauses?.root_causes?.length > 0
+                                            ? <ChartCanvas id="rcChart" config={{
+                                                type:'bar',
+                                                data:{
+                                                    labels: dashRootCauses.root_causes.map(r => (r.issue_description||'Unknown').substring(0,30)),
+                                                    datasets:[
+                                                        {label:'Claims', data: dashRootCauses.root_causes.map(r=>r.claim_count), backgroundColor: DASH_COLORS[0]+'99', borderColor: DASH_COLORS[0], borderWidth:1},
+                                                        {label:'Suspicious', data: dashRootCauses.root_causes.map(r=>r.suspicious_count), backgroundColor: DASH_COLORS[5]+'99', borderColor: DASH_COLORS[5], borderWidth:1},
+                                                    ]
+                                                },
+                                                options:{responsive:true, indexAxis:'y',
+                                                    onClick:(e,els)=>{ if(els.length) openDrilldown('issue', dashRootCauses.root_causes[els[0].index].issue_description, 'Issue: '+dashRootCauses.root_causes[els[0].index].issue_description); },
+                                                    plugins:{legend:{position:'top'}, title:{display:true, text:'Claims by Root Cause (click to drill down)'}},
+                                                    scales:{x:{beginAtZero:true}}}
+                                            }} height={Math.max(200, (dashRootCauses.root_causes.length||5)*28)} />
+                                            : <div className="flex items-center justify-center h-48 text-gray-300"><div className="text-center"><i className="fas fa-chart-bar text-4xl mb-2"></i><p className="text-sm">No root cause data</p></div></div>
+                                        }
+                                    </div>
+                                    <div className="bg-white rounded-2xl card-shadow p-5 fade-in">
+                                        {dashBrands?.brands?.length > 0
+                                            ? <ChartCanvas id="brandChart" config={{
+                                                type:'doughnut',
+                                                data:{
+                                                    labels: dashBrands.brands.map(b=>b.brand),
+                                                    datasets:[{data: dashBrands.brands.map(b=>b.claim_count), backgroundColor: DASH_COLORS.slice(0,dashBrands.brands.length), borderWidth:2, borderColor:'#fff'}]
+                                                },
+                                                options:{responsive:true,
+                                                    onClick:(e,els)=>{ if(els.length) openDrilldown('brand', dashBrands.brands[els[0].index].brand, 'Brand: '+dashBrands.brands[els[0].index].brand); },
+                                                    plugins:{legend:{position:'right'}, title:{display:true, text:'Claims by Vehicle Brand'}}}
+                                            }} height={280} />
+                                            : <div className="flex items-center justify-center h-48 text-gray-300"><div className="text-center"><i className="fas fa-chart-pie text-4xl mb-2"></i><p className="text-sm">No brand data</p></div></div>
+                                        }
+                                    </div>
+                                </div>
+
+                                {/* Row 2: Trends + Dealers */}
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                    <div className="bg-white rounded-2xl card-shadow p-5 fade-in">
+                                        {dashTrends?.trends?.length > 0
+                                            ? <ChartCanvas id="trendChart" config={{
+                                                type:'line',
+                                                data:{
+                                                    labels: dashTrends.trends.map(t=>t.month),
+                                                    datasets:[
+                                                        {label:'Claims', data:dashTrends.trends.map(t=>t.claim_count), borderColor:DASH_COLORS[0], backgroundColor:DASH_COLORS[0]+'22', fill:true, tension:0.3},
+                                                        {label:'Suspicious', data:dashTrends.trends.map(t=>t.suspicious_count), borderColor:DASH_COLORS[5], backgroundColor:DASH_COLORS[5]+'22', fill:true, tension:0.3},
+                                                    ]
+                                                },
+                                                options:{responsive:true, plugins:{title:{display:true,text:'Claims Over Time'}}, scales:{y:{beginAtZero:true}}}
+                                            }} height={250} />
+                                            : <div className="flex items-center justify-center h-48 text-gray-300"><div className="text-center"><i className="fas fa-chart-line text-4xl mb-2"></i><p className="text-sm">No trend data</p></div></div>
+                                        }
+                                    </div>
+                                    <div className="bg-white rounded-2xl card-shadow p-5 fade-in">
+                                        {dashDealers?.dealers?.length > 0
+                                            ? <ChartCanvas id="dealerChart" config={{
+                                                type:'bar',
+                                                data:{
+                                                    labels: dashDealers.dealers.slice(0,10).map(d=>(d.dealer_name||d.dealer_id||'Unknown').substring(0,20)),
+                                                    datasets:[
+                                                        {label:'Claims', data:dashDealers.dealers.slice(0,10).map(d=>d.claim_count), backgroundColor:DASH_COLORS[4]+'99', borderColor:DASH_COLORS[4], borderWidth:1},
+                                                        {label:'Suspicious', data:dashDealers.dealers.slice(0,10).map(d=>d.suspicious_count), backgroundColor:DASH_COLORS[5]+'99', borderColor:DASH_COLORS[5], borderWidth:1},
+                                                    ]
+                                                },
+                                                options:{responsive:true,
+                                                    onClick:(e,els)=>{ if(els.length) openDrilldown('dealer', dashDealers.dealers[els[0].index].dealer_id, 'Dealer: '+(dashDealers.dealers[els[0].index].dealer_name||dashDealers.dealers[els[0].index].dealer_id)); },
+                                                    plugins:{legend:{position:'top'}, title:{display:true, text:'Top Dealers (click to drill down)'}},
+                                                    scales:{y:{beginAtZero:true}}}
+                                            }} height={250} />
+                                            : <div className="flex items-center justify-center h-48 text-gray-300"><div className="text-center"><i className="fas fa-store text-4xl mb-2"></i><p className="text-sm">No dealer data</p></div></div>
+                                        }
+                                    </div>
+                                </div>
+
+                                {/* Row 3: Signals + Severity + Dup types */}
+                                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                                    <div className="lg:col-span-2 bg-white rounded-2xl card-shadow p-5 fade-in">
+                                        {dashSignals?.signals?.length > 0
+                                            ? <ChartCanvas id="sigChart" config={{
+                                                type:'bar',
+                                                data:{
+                                                    labels: dashSignals.signals.slice(0,12).map(s=>s.signal_type.replace('DUPLICATE_IMAGE_','DUP_IMG_').replace('POTENTIAL_DUPLICATE_','DUP_')),
+                                                    datasets:[{label:'Occurrences', data:dashSignals.signals.slice(0,12).map(s=>s.count), backgroundColor:DASH_COLORS.slice(0,12).map(c=>c+'99'), borderColor:DASH_COLORS.slice(0,12), borderWidth:1}]
+                                                },
+                                                options:{responsive:true, indexAxis:'y', plugins:{legend:{display:false}, title:{display:true,text:'Top Fraud Signals'}}, scales:{x:{beginAtZero:true}}}
+                                            }} height={Math.max(200,(dashSignals.signals.length||5)*26)} />
+                                            : <div className="flex items-center justify-center h-48 text-gray-300"><div className="text-center"><i className="fas fa-flag text-4xl mb-2"></i><p className="text-sm">No signals</p></div></div>
+                                        }
+                                    </div>
+                                    <div className="bg-white rounded-2xl card-shadow p-5 fade-in space-y-4">
+                                        {dashSignals?.by_severity && (
+                                            <ChartCanvas id="sevChart" config={{
+                                                type:'doughnut',
+                                                data:{
+                                                    labels:['High','Medium','Low'],
+                                                    datasets:[{data:[dashSignals.by_severity.HIGH, dashSignals.by_severity.MEDIUM, dashSignals.by_severity.LOW], backgroundColor:['#ef444499','#f59e0b99','#22c55e99'], borderColor:['#ef4444','#f59e0b','#22c55e'], borderWidth:2}]
+                                                },
+                                                options:{responsive:true, plugins:{title:{display:true,text:'Signal Severity'}}}
+                                            }} height={200} />
+                                        )}
+                                        {dashDupStats?.by_type?.length > 0 && (
+                                            <div>
+                                                <h4 className="font-semibold text-gray-700 text-sm mb-2"><i className="fas fa-copy mr-1 text-purple-500"></i>Duplicate Types</h4>
+                                                {dashDupStats.by_type.map((dt,i) => (
+                                                    <div key={i} className="flex items-center justify-between text-xs py-1 border-b border-gray-100">
+                                                        <span className="text-gray-600">{dt.match_type}</span>
+                                                        <span className="font-bold text-gray-800">{dt.cnt}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Root cause detail table */}
+                                {dashRootCauses?.root_causes?.length > 0 && (
+                                    <div className="bg-white rounded-2xl card-shadow p-5 fade-in">
+                                        <h3 className="font-bold text-gray-800 mb-3"><i className="fas fa-table mr-2 text-indigo-500"></i>Root Cause Detail</h3>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead className="bg-gray-50">
+                                                    <tr>
+                                                        <th className="text-left p-2 font-medium text-gray-600">Issue</th>
+                                                        <th className="text-right p-2 font-medium text-gray-600">Claims</th>
+                                                        <th className="text-right p-2 font-medium text-gray-600">Avg Amount</th>
+                                                        <th className="text-right p-2 font-medium text-gray-600">Total</th>
+                                                        <th className="text-right p-2 font-medium text-gray-600">Avg Risk</th>
+                                                        <th className="text-right p-2 font-medium text-gray-600">Suspicious</th>
+                                                        <th className="text-center p-2 font-medium text-gray-600">Action</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {dashRootCauses.root_causes.map((rc,i) => (
+                                                        <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+                                                            <td className="p-2 font-medium max-w-[250px] truncate">{rc.issue_description}</td>
+                                                            <td className="p-2 text-right">{rc.claim_count}</td>
+                                                            <td className="p-2 text-right text-green-600">${rc.avg_amount?.toFixed(0)}</td>
+                                                            <td className="p-2 text-right">${rc.total_amount?.toFixed(0)}</td>
+                                                            <td className="p-2 text-right"><span className={rc.avg_risk>0.5?'text-red-600 font-bold':'text-gray-600'}>{(rc.avg_risk*100).toFixed(0)}%</span></td>
+                                                            <td className="p-2 text-right">{rc.suspicious_count>0 ? <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded-full text-xs font-bold">{rc.suspicious_count}</span> : <span className="text-gray-400">0</span>}</td>
+                                                            <td className="p-2 text-center">
+                                                                <button onClick={()=>openDrilldown('issue',rc.issue_description,rc.issue_description)} className="text-indigo-600 hover:text-indigo-800 text-xs font-medium"><i className="fas fa-arrow-right mr-1"></i>View</button>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Refresh button */}
+                                <div className="text-center">
+                                    <button onClick={loadDashboard} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm transition">
+                                        <i className="fas fa-sync-alt mr-2"></i>Refresh Dashboard
+                                    </button>
+                                </div>
+                            </React.Fragment>
+                        )}
+
+                        {!dashLoading && !dashOverview && (
+                            <div className="text-center py-16 text-gray-400">
+                                <i className="fas fa-tachometer-alt text-6xl mb-4"></i>
+                                <p>Dashboard data not loaded</p>
+                                <button onClick={loadDashboard} className="mt-4 px-6 py-2 bg-indigo-600 text-white rounded-lg text-sm"><i className="fas fa-sync-alt mr-2"></i>Load Dashboard</button>
+                            </div>
+                        )}
+                    </main>
+                    )}
+
+                    {/* ===================== CLAIM DETAIL MODAL ===================== */}
+                    {(claimModal || claimModalLoading) && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-start justify-center pt-12 px-4" onClick={() => { setClaimModal(null); setClaimModalLoading(false); }}>
+                            <div className="bg-white rounded-2xl card-shadow w-full max-w-2xl max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+                                <div className="gradient-bg text-white px-6 py-4 flex items-center justify-between">
+                                    <div>
+                                        <h3 className="font-bold text-lg"><i className="fas fa-file-invoice mr-2"></i>Claim Details</h3>
+                                        <p className="text-purple-200 text-sm font-mono">{claimModal?.id || '...'}</p>
+                                    </div>
+                                    <button onClick={() => { setClaimModal(null); setClaimModalLoading(false); }} className="text-white hover:text-purple-200 text-xl"><i className="fas fa-times"></i></button>
+                                </div>
+                                <div className="overflow-auto max-h-[70vh] p-5">
+                                    {claimModalLoading && <div className="text-center py-8"><div className="spinner mx-auto" style={{width:'40px',height:'40px'}}></div></div>}
+                                    {claimModal?._error && <div className="bg-red-50 p-4 rounded-lg text-red-700"><i className="fas fa-exclamation-circle mr-2"></i>{claimModal._error}</div>}
+                                    {claimModal && !claimModal._error && (
+                                        <div className="space-y-4">
+                                            {/* Triage badge */}
+                                            <div className="text-center">
+                                                <span className={`inline-flex items-center px-4 py-2 rounded-full text-white font-bold ${claimModal.triage_class === 'AUTO_APPROVE' ? 'bg-green-500' : claimModal.triage_class === 'REVIEW' ? 'bg-yellow-500' : 'bg-red-500'}`}>
+                                                    {claimModal.triage_class?.replace('_',' ')}
+                                                </span>
+                                                <p className="text-gray-500 text-sm mt-1">Risk: <span className="font-bold">{((claimModal.risk_score||0)*100).toFixed(0)}%</span></p>
+                                            </div>
+                                            {/* Details grid */}
+                                            <div className="grid grid-cols-2 gap-3 text-sm bg-gray-50 rounded-xl p-4">
+                                                <div><span className="text-gray-400">Customer:</span> <span className="font-medium">{claimModal.customer_name||'N/A'}</span></div>
+                                                <div><span className="text-gray-400">Dealer:</span> <span className="font-medium">{claimModal.dealer_name||claimModal.dealer_id||'N/A'}</span></div>
+                                                <div><span className="text-gray-400">VIN:</span> <span className="font-mono text-xs">{claimModal.vin||'N/A'}</span></div>
+                                                <div><span className="text-gray-400">Vehicle:</span> <span className="font-medium">{claimModal.brand} {claimModal.model} ({claimModal.year})</span></div>
+                                                <div><span className="text-gray-400">Issue:</span> <span className="font-medium">{claimModal.issue_description||'N/A'}</span></div>
+                                                <div><span className="text-gray-400">Claim Date:</span> <span className="font-medium">{claimModal.claim_date||'N/A'}</span></div>
+                                                <div><span className="text-gray-400">Parts:</span> <span className="text-green-600">${claimModal.parts_cost?.toFixed(2)||'0.00'}</span></div>
+                                                <div><span className="text-gray-400">Labor:</span> <span className="text-green-600">${claimModal.labor_cost?.toFixed(2)||'0.00'}</span></div>
+                                                <div><span className="text-gray-400">Tax:</span> <span className="text-green-600">${claimModal.tax?.toFixed(2)||'0.00'}</span></div>
+                                                <div><span className="text-gray-400">Total:</span> <span className="font-bold text-green-600">${claimModal.total_amount?.toFixed(2)||'0.00'}</span></div>
+                                                <div><span className="text-gray-400">Status:</span> <span className="font-medium">{claimModal.status||'N/A'}</span></div>
+                                                <div><span className="text-gray-400">Suspicious:</span> {claimModal.is_suspicious ? <span className="text-red-600 font-bold">Yes</span> : <span className="text-green-600">No</span>}</div>
+                                            </div>
+                                            {/* Fraud signals */}
+                                            {claimModal.fraud_signals && (() => {
+                                                try {
+                                                    const sigs = typeof claimModal.fraud_signals === 'string' ? JSON.parse(claimModal.fraud_signals) : claimModal.fraud_signals;
+                                                    if (Array.isArray(sigs) && sigs.length > 0) return (
+                                                        <div>
+                                                            <h4 className="font-semibold text-sm text-gray-700 mb-2"><i className="fas fa-flag mr-1 text-red-500"></i>Fraud Signals ({sigs.length})</h4>
+                                                            {sigs.map((s,si) => (
+                                                                <div key={si} className={`rounded p-2 mb-1 text-xs ${s.severity==='HIGH'?'signal-high':s.severity==='MEDIUM'?'signal-medium':'signal-low'}`}>
+                                                                    <span className="font-medium">{s.signal_type}</span>
+                                                                    {s.description && <span className="text-gray-500 ml-2">{s.description}</span>}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    );
+                                                } catch(e) {}
+                                                return null;
+                                            })()}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ===================== DRILLDOWN MODAL ===================== */}
+                    {drilldown && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-start justify-center pt-12 px-4" onClick={() => { setDrilldown(null); setDrillClaims(null); }}>
+                            <div className="bg-white rounded-2xl card-shadow w-full max-w-4xl max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+                                <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
+                                    <div>
+                                        <h3 className="font-bold text-lg">{drilldown.title}</h3>
+                                        <p className="text-indigo-200 text-sm">{drillClaims ? `${drillClaims.total} claim(s)` : 'Loading...'}</p>
+                                    </div>
+                                    <button onClick={() => { setDrilldown(null); setDrillClaims(null); }} className="text-white hover:text-indigo-200 text-xl"><i className="fas fa-times"></i></button>
+                                </div>
+                                <div className="overflow-auto max-h-[65vh] p-4">
+                                    {drillLoading && <div className="text-center py-8"><div className="spinner mx-auto" style={{width:'32px',height:'32px'}}></div></div>}
+                                    {drillClaims?.claims?.length > 0 && (
+                                        <table className="w-full text-sm">
+                                            <thead className="bg-gray-50 sticky top-0">
+                                                <tr>
+                                                    <th className="text-left p-2 font-medium text-gray-600">Claim ID</th>
+                                                    <th className="text-left p-2 font-medium text-gray-600">Customer</th>
+                                                    <th className="text-left p-2 font-medium text-gray-600">VIN</th>
+                                                    <th className="text-left p-2 font-medium text-gray-600">Vehicle</th>
+                                                    <th className="text-left p-2 font-medium text-gray-600">Issue</th>
+                                                    <th className="text-right p-2 font-medium text-gray-600">Amount</th>
+                                                    <th className="text-right p-2 font-medium text-gray-600">Risk</th>
+                                                    <th className="text-center p-2 font-medium text-gray-600">Triage</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {drillClaims.claims.map((c,i) => (
+                                                    <tr key={i} className="border-b border-gray-100 hover:bg-indigo-50">
+                                                        <td className="p-2"><ClaimLink claimId={c.id} short={true} /></td>
+                                                        <td className="p-2">{c.customer_name||'N/A'}</td>
+                                                        <td className="p-2 font-mono text-xs">{c.vin?.substring(0,11)||'N/A'}</td>
+                                                        <td className="p-2">{c.brand} {c.model}</td>
+                                                        <td className="p-2 max-w-[200px] truncate">{c.issue_description}</td>
+                                                        <td className="p-2 text-right text-green-600 font-medium">${c.total_amount?.toFixed(0)||'0'}</td>
+                                                        <td className="p-2 text-right"><span className={`font-bold ${c.risk_score>0.6?'text-red-600':c.risk_score>0.3?'text-yellow-600':'text-green-600'}`}>{(c.risk_score*100).toFixed(0)}%</span></td>
+                                                        <td className="p-2 text-center"><span className={`text-xs px-2 py-1 rounded-full font-bold text-white ${c.triage_class==='AUTO_APPROVE'?'bg-green-500':c.triage_class==='REVIEW'?'bg-yellow-500':'bg-red-500'}`}>{c.triage_class?.replace('_',' ')}</span></td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    )}
+                                    {drillClaims?.claims?.length === 0 && !drillLoading && (
+                                        <div className="text-center py-8 text-gray-400"><i className="fas fa-inbox text-4xl mb-2"></i><p>No claims found</p></div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Footer */}
                     <footer className="bg-gray-800 text-white py-6 mt-8">
@@ -694,6 +1150,19 @@
                     </footer>
                 </div>
             );
+        }
+
+        /* ChartCanvas — reusable Chart.js wrapper */
+        function ChartCanvas({ id, config, height = 300 }) {
+            const ref = React.useRef(null);
+            const chartRef = React.useRef(null);
+            React.useEffect(() => {
+                if (!ref.current || !config) return;
+                if (chartRef.current) chartRef.current.destroy();
+                chartRef.current = new Chart(ref.current, config);
+                return () => { if (chartRef.current) chartRef.current.destroy(); };
+            }, [config]);
+            return <canvas ref={ref} id={id} height={height}></canvas>;
         }
 
         ReactDOM.render(<App />, document.getElementById('root'));
