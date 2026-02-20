@@ -455,6 +455,100 @@ def get_duplicates_for_claim(claim_id: str) -> List[Dict]:
         release_connection(conn)
 
 
+def get_duplicate_audit(claim_id: str) -> Dict[str, Any]:
+    """
+    Get enriched duplicate audit for a claim.
+    
+    Returns grouped duplicate info:
+    - Each matched claim with its details (VIN, customer, issue, date, amounts)
+    - All match reasons between this claim and the matched claim
+    - Similarity scores and detection timestamps
+    """
+    conn = get_connection()
+    try:
+        cursor = _get_cursor(conn)
+        
+        # Get all duplicate matches involving this claim
+        cursor.execute(_sql("""
+            SELECT dm.*,
+                   CASE WHEN dm.claim_id_1 = ? THEN dm.claim_id_2 ELSE dm.claim_id_1 END as other_claim_id
+            FROM warranty_duplicate_matches dm
+            WHERE dm.claim_id_1 = ? OR dm.claim_id_2 = ?
+            ORDER BY dm.similarity_score DESC
+        """), (claim_id, claim_id, claim_id))
+        
+        raw_matches = [dict(row) for row in cursor.fetchall()]
+        
+        if not raw_matches:
+            return {"claim_id": claim_id, "total_duplicates": 0, "grouped": []}
+        
+        # Group by other_claim_id
+        grouped = {}
+        for m in raw_matches:
+            other_id = m["other_claim_id"]
+            if other_id not in grouped:
+                grouped[other_id] = {
+                    "matched_claim_id": other_id,
+                    "reasons": [],
+                    "max_similarity": 0.0,
+                    "claim_details": None,
+                }
+            entry = grouped[other_id]
+            entry["reasons"].append({
+                "match_type": m["match_type"],
+                "similarity_score": m["similarity_score"],
+                "image_index_1": m.get("image_index_1"),
+                "image_index_2": m.get("image_index_2"),
+                "details": m.get("details"),
+                "detected_at": m.get("detected_at"),
+            })
+            if m["similarity_score"] and m["similarity_score"] > entry["max_similarity"]:
+                entry["max_similarity"] = m["similarity_score"]
+        
+        # Fetch claim details for each matched claim
+        other_ids = list(grouped.keys())
+        for oid in other_ids:
+            cursor.execute(_sql("""
+                SELECT id, customer_name, dealer_id, dealer_name, vin, brand, model, year,
+                       issue_description, claim_date, total_amount, risk_score, triage_class,
+                       is_suspicious, status
+                FROM warranty_claims WHERE id = ?
+            """), (oid,))
+            row = cursor.fetchone()
+            if row:
+                grouped[oid]["claim_details"] = dict(row)
+        
+        # Sort groups by max similarity descending
+        sorted_groups = sorted(grouped.values(), key=lambda g: g["max_similarity"], reverse=True)
+        
+        # Build reason summary per group
+        for g in sorted_groups:
+            reason_types = set(r["match_type"] for r in g["reasons"])
+            summaries = []
+            for rt in reason_types:
+                if rt == "IMAGE_EXACT":
+                    summaries.append("Identical image reused")
+                elif rt == "IMAGE_LIKELY_SAME":
+                    summaries.append("Very similar image detected")
+                elif rt == "IMAGE_SIMILAR":
+                    summaries.append("Similar image detected")
+                elif rt == "VIN_ISSUE_DUPLICATE":
+                    summaries.append("Same VIN with similar issue description")
+                else:
+                    summaries.append(rt)
+            g["reason_summary"] = summaries
+            g["reason_types"] = list(reason_types)
+        
+        return {
+            "claim_id": claim_id,
+            "total_duplicates": len(sorted_groups),
+            "total_matches": len(raw_matches),
+            "grouped": sorted_groups,
+        }
+    finally:
+        release_connection(conn)
+
+
 def get_benchmark(brand: Optional[str], issue_type: str) -> Optional[Dict]:
     """Get benchmark data for a brand and issue type."""
     conn = get_connection()

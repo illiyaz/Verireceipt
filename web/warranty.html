@@ -87,7 +87,7 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useRef } = React;
+        const { useState, useRef, useEffect } = React;
         const API_BASE_URL = window.location.origin;
 
         function App() {
@@ -101,7 +101,35 @@
             const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
             const [feedbackVerdict, setFeedbackVerdict] = useState(null);
             const [feedbackError, setFeedbackError] = useState(null);
+            const [dupAudit, setDupAudit] = useState(null);
+            const [dupExpanded, setDupExpanded] = useState({});
             const fileInputRef = useRef(null);
+
+            const loadDuplicateAudit = async (claimId) => {
+                try {
+                    const resp = await fetch(`${API_BASE_URL}/warranty/duplicates/${claimId}`);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        setDupAudit(data);
+                    }
+                } catch (e) {
+                    console.error('Failed to load duplicate audit:', e);
+                }
+            };
+
+            const toggleDupExpand = (idx) => {
+                setDupExpanded(prev => ({ ...prev, [idx]: !prev[idx] }));
+            };
+
+            const getMatchIcon = (type) => {
+                switch(type) {
+                    case 'IMAGE_EXACT': return { icon: 'fa-clone', color: 'text-red-600', bg: 'bg-red-100' };
+                    case 'IMAGE_LIKELY_SAME': return { icon: 'fa-images', color: 'text-orange-600', bg: 'bg-orange-100' };
+                    case 'IMAGE_SIMILAR': return { icon: 'fa-photo-video', color: 'text-yellow-600', bg: 'bg-yellow-100' };
+                    case 'VIN_ISSUE_DUPLICATE': return { icon: 'fa-car', color: 'text-purple-600', bg: 'bg-purple-100' };
+                    default: return { icon: 'fa-copy', color: 'text-gray-600', bg: 'bg-gray-100' };
+                }
+            };
 
             const handleFile = (selectedFile) => {
                 if (selectedFile && selectedFile.type === 'application/pdf') {
@@ -147,6 +175,12 @@
 
                     const data = await response.json();
                     setResult(data);
+                    setDupAudit(null);
+                    setDupExpanded({});
+                    // Load enriched duplicate audit
+                    if (data.claim_id && data.duplicates_found?.length > 0) {
+                        loadDuplicateAudit(data.claim_id);
+                    }
                     // Clear upload form after successful analysis
                     setFile(null);
                     setPreview(null);
@@ -233,6 +267,10 @@
                                     </div>
                                 </div>
                                 <div className="text-right flex items-center space-x-4">
+                                    <a href="/web/warranty_dashboard.html" className="px-4 py-2 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg transition text-white">
+                                        <i className="fas fa-tachometer-alt mr-2"></i>
+                                        Dashboard
+                                    </a>
                                     <a href="/web/index.html" className="px-4 py-2 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg transition text-white">
                                         <i className="fas fa-receipt mr-2"></i>
                                         Receipt Analysis
@@ -403,13 +441,116 @@
                                             </div>
                                         </div>
 
-                                        {/* Duplicates Found */}
+                                        {/* Duplicates Found — Enriched Audit */}
                                         {result.duplicates_found?.length > 0 && (
                                             <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-                                                <h3 className="font-semibold text-red-700 mb-3">
-                                                    <i className="fas fa-copy mr-2"></i>Duplicates Detected ({result.duplicates_found.length})
+                                                <h3 className="font-semibold text-red-700 mb-1">
+                                                    <i className="fas fa-copy mr-2"></i>
+                                                    Duplicate Audit
                                                 </h3>
-                                                {result.duplicates_found.map((dup, idx) => (
+                                                <p className="text-xs text-red-500 mb-3">
+                                                    {dupAudit
+                                                        ? `${dupAudit.total_duplicates} linked claim(s), ${dupAudit.total_matches} match(es)`
+                                                        : `${result.duplicates_found.length} match(es) detected`}
+                                                </p>
+
+                                                {/* Grouped audit (enriched) */}
+                                                {dupAudit?.grouped?.map((group, gIdx) => {
+                                                    const expanded = dupExpanded[gIdx];
+                                                    const cd = group.claim_details;
+                                                    return (
+                                                        <div key={gIdx} className="bg-white rounded-lg mb-3 border border-red-100 overflow-hidden">
+                                                            {/* Header — always visible */}
+                                                            <div
+                                                                className="p-3 cursor-pointer hover:bg-red-50 transition flex items-center justify-between"
+                                                                onClick={() => toggleDupExpand(gIdx)}
+                                                            >
+                                                                <div className="flex items-center space-x-3 flex-1 min-w-0">
+                                                                    <div className="flex -space-x-1">
+                                                                        {group.reason_types?.map((rt, ri) => {
+                                                                            const mi = getMatchIcon(rt);
+                                                                            return (
+                                                                                <span key={ri} className={`inline-flex items-center justify-center w-7 h-7 rounded-full ${mi.bg} ${mi.color} text-xs`}>
+                                                                                    <i className={`fas ${mi.icon}`}></i>
+                                                                                </span>
+                                                                            );
+                                                                        })}
+                                                                    </div>
+                                                                    <div className="min-w-0 flex-1">
+                                                                        <p className="font-medium text-sm text-gray-800 truncate">
+                                                                            Claim {group.matched_claim_id?.substring(0, 12)}...
+                                                                        </p>
+                                                                        <p className="text-xs text-gray-500 truncate">
+                                                                            {group.reason_summary?.join(' + ')}
+                                                                        </p>
+                                                                    </div>
+                                                                </div>
+                                                                <div className="flex items-center space-x-3 ml-2">
+                                                                    <span className="text-xs font-bold text-red-600 bg-red-100 px-2 py-1 rounded-full">
+                                                                        {(group.max_similarity * 100).toFixed(0)}%
+                                                                    </span>
+                                                                    <i className={`fas fa-chevron-${expanded ? 'up' : 'down'} text-gray-400 text-xs`}></i>
+                                                                </div>
+                                                            </div>
+
+                                                            {/* Expanded detail */}
+                                                            {expanded && (
+                                                                <div className="border-t border-red-100 p-3 bg-gray-50 text-sm space-y-3">
+                                                                    {/* Linked claim details */}
+                                                                    {cd && (
+                                                                        <div>
+                                                                            <p className="font-semibold text-gray-700 mb-1">
+                                                                                <i className="fas fa-link mr-1 text-blue-500"></i>Linked Claim Details
+                                                                            </p>
+                                                                            <div className="grid grid-cols-2 gap-2 text-xs bg-white rounded p-2 border">
+                                                                                <div><span className="text-gray-400">Claim ID:</span> <span className="font-mono">{cd.id?.substring(0, 16)}</span></div>
+                                                                                <div><span className="text-gray-400">Customer:</span> {cd.customer_name || 'N/A'}</div>
+                                                                                <div><span className="text-gray-400">VIN:</span> <span className="font-mono">{cd.vin || 'N/A'}</span></div>
+                                                                                <div><span className="text-gray-400">Vehicle:</span> {cd.brand} {cd.model} ({cd.year})</div>
+                                                                                <div><span className="text-gray-400">Issue:</span> {cd.issue_description || 'N/A'}</div>
+                                                                                <div><span className="text-gray-400">Date:</span> {cd.claim_date || 'N/A'}</div>
+                                                                                <div><span className="text-gray-400">Total:</span> <span className="text-green-600 font-medium">${cd.total_amount?.toFixed(2) || '0.00'}</span></div>
+                                                                                <div><span className="text-gray-400">Risk:</span>
+                                                                                    <span className={`font-medium ${cd.risk_score > 0.6 ? 'text-red-600' : cd.risk_score > 0.3 ? 'text-yellow-600' : 'text-green-600'}`}>
+                                                                                        {(cd.risk_score * 100).toFixed(0)}%
+                                                                                    </span>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+
+                                                                    {/* Individual match reasons */}
+                                                                    <div>
+                                                                        <p className="font-semibold text-gray-700 mb-1">
+                                                                            <i className="fas fa-search-plus mr-1 text-orange-500"></i>Match Reasons ({group.reasons?.length})
+                                                                        </p>
+                                                                        {group.reasons?.map((r, ri) => {
+                                                                            const mi = getMatchIcon(r.match_type);
+                                                                            return (
+                                                                                <div key={ri} className={`flex items-start space-x-2 p-2 rounded mb-1 ${mi.bg}`}>
+                                                                                    <i className={`fas ${mi.icon} ${mi.color} mt-0.5`}></i>
+                                                                                    <div className="flex-1">
+                                                                                        <span className={`font-medium text-xs ${mi.color}`}>{r.match_type}</span>
+                                                                                        <span className="text-xs text-gray-500 ml-2">({(r.similarity_score * 100).toFixed(0)}% match)</span>
+                                                                                        {r.details && <p className="text-xs text-gray-600 mt-0.5">{r.details}</p>}
+                                                                                        {(r.image_index_1 !== null || r.image_index_2 !== null) && (
+                                                                                            <p className="text-xs text-gray-400">
+                                                                                                Image #{r.image_index_1 ?? '?'} (this claim) vs Image #{r.image_index_2 ?? '?'} (linked)
+                                                                                            </p>
+                                                                                        )}
+                                                                                    </div>
+                                                                                </div>
+                                                                            );
+                                                                        })}
+                                                                    </div>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+
+                                                {/* Fallback if audit not yet loaded */}
+                                                {!dupAudit && result.duplicates_found.map((dup, idx) => (
                                                     <div key={idx} className="bg-white rounded-lg p-3 mb-2 border border-red-100">
                                                         <p className="font-medium text-red-600">{dup.match_type}</p>
                                                         <p className="text-sm text-gray-600">Matches claim: {dup.matched_claim_id}</p>

@@ -17,7 +17,7 @@ from fastapi import APIRouter, File, UploadFile, Form, HTTPException
 from pydantic import BaseModel
 
 from ..warranty.pipeline import analyze_warranty_claim
-from ..warranty.db import get_claim, save_feedback, get_duplicates_for_claim
+from ..warranty.db import get_claim, save_feedback, get_duplicates_for_claim, get_duplicate_audit
 from ..warranty.models import FeedbackVerdict
 
 
@@ -155,7 +155,13 @@ async def get_claim_details(claim_id: str):
 @router.get("/duplicates/{claim_id}")
 async def get_claim_duplicates(claim_id: str):
     """
-    Get all duplicate matches for a claim.
+    Get enriched duplicate audit for a claim.
+    
+    Returns grouped duplicates with:
+    - Matched claim details (VIN, customer, issue, date, amounts)
+    - All match reasons (IMAGE_EXACT, IMAGE_SIMILAR, VIN_ISSUE_DUPLICATE)
+    - Reason summaries in plain English
+    - Similarity scores and detection timestamps
     """
     claim = get_claim(claim_id)
     
@@ -165,12 +171,299 @@ async def get_claim_duplicates(claim_id: str):
             detail=f"Claim {claim_id} not found"
         )
     
-    duplicates = get_duplicates_for_claim(claim_id)
+    return get_duplicate_audit(claim_id)
+
+
+@router.get("/dashboard/overview")
+async def dashboard_overview():
+    """Dashboard overview: total claims, triage breakdown, suspicious count, duplicate stats."""
+    from ..warranty.db import get_connection, release_connection, _get_cursor, _sql
     
-    return {
-        "claim_id": claim_id,
-        "duplicates": duplicates
-    }
+    conn = get_connection()
+    try:
+        cursor = _get_cursor(conn)
+        
+        cursor.execute("SELECT COUNT(*) as cnt FROM warranty_claims")
+        total = _val(cursor.fetchone(), "cnt")
+        
+        cursor.execute("SELECT triage_class, COUNT(*) as cnt FROM warranty_claims GROUP BY triage_class")
+        by_triage = {_val(r, "triage_class"): _val(r, "cnt") for r in cursor.fetchall()}
+        
+        cursor.execute("SELECT COUNT(*) as cnt FROM warranty_claims WHERE is_suspicious = 1")
+        suspicious = _val(cursor.fetchone(), "cnt")
+        
+        cursor.execute("SELECT COUNT(DISTINCT claim_id_1) as cnt FROM warranty_duplicate_matches")
+        dup_claims = _val(cursor.fetchone(), "cnt")
+        
+        cursor.execute("SELECT COUNT(*) as cnt FROM warranty_duplicate_matches")
+        dup_matches = _val(cursor.fetchone(), "cnt")
+        
+        cursor.execute("SELECT COALESCE(AVG(risk_score), 0) as avg_risk FROM warranty_claims")
+        avg_risk = round(_val(cursor.fetchone(), "avg_risk") or 0, 3)
+        
+        return {
+            "total_claims": total,
+            "by_triage": by_triage,
+            "suspicious_count": suspicious,
+            "claims_with_duplicates": dup_claims,
+            "total_duplicate_matches": dup_matches,
+            "avg_risk_score": avg_risk,
+        }
+    finally:
+        release_connection(conn)
+
+
+@router.get("/dashboard/root-causes")
+async def dashboard_root_causes(limit: int = 20):
+    """Claims grouped by issue type (root cause) with counts and avg amounts."""
+    from ..warranty.db import get_connection, release_connection, _get_cursor
+    
+    conn = get_connection()
+    try:
+        cursor = _get_cursor(conn)
+        cursor.execute(f"""
+            SELECT issue_description,
+                   COUNT(*) as claim_count,
+                   COALESCE(AVG(total_amount), 0) as avg_amount,
+                   COALESCE(SUM(total_amount), 0) as total_amount,
+                   COALESCE(AVG(risk_score), 0) as avg_risk,
+                   SUM(CASE WHEN is_suspicious = 1 THEN 1 ELSE 0 END) as suspicious_count
+            FROM warranty_claims
+            WHERE issue_description IS NOT NULL AND issue_description != ''
+            GROUP BY issue_description
+            ORDER BY claim_count DESC
+            LIMIT {int(limit)}
+        """)
+        rows = [dict(r) for r in cursor.fetchall()]
+        return {"root_causes": rows}
+    finally:
+        release_connection(conn)
+
+
+@router.get("/dashboard/by-brand")
+async def dashboard_by_brand():
+    """Claims grouped by vehicle brand."""
+    from ..warranty.db import get_connection, release_connection, _get_cursor
+    
+    conn = get_connection()
+    try:
+        cursor = _get_cursor(conn)
+        cursor.execute("""
+            SELECT COALESCE(brand, 'Unknown') as brand,
+                   COUNT(*) as claim_count,
+                   COALESCE(AVG(total_amount), 0) as avg_amount,
+                   COALESCE(SUM(total_amount), 0) as total_amount,
+                   COALESCE(AVG(risk_score), 0) as avg_risk,
+                   SUM(CASE WHEN is_suspicious = 1 THEN 1 ELSE 0 END) as suspicious_count
+            FROM warranty_claims
+            GROUP BY brand
+            ORDER BY claim_count DESC
+        """)
+        rows = [dict(r) for r in cursor.fetchall()]
+        return {"brands": rows}
+    finally:
+        release_connection(conn)
+
+
+@router.get("/dashboard/by-dealer")
+async def dashboard_by_dealer(limit: int = 20):
+    """Top dealers by claim count with risk metrics."""
+    from ..warranty.db import get_connection, release_connection, _get_cursor
+    
+    conn = get_connection()
+    try:
+        cursor = _get_cursor(conn)
+        cursor.execute(f"""
+            SELECT COALESCE(dealer_id, 'Unknown') as dealer_id,
+                   COALESCE(dealer_name, dealer_id, 'Unknown') as dealer_name,
+                   COUNT(*) as claim_count,
+                   COALESCE(AVG(total_amount), 0) as avg_amount,
+                   COALESCE(SUM(total_amount), 0) as total_amount,
+                   COALESCE(AVG(risk_score), 0) as avg_risk,
+                   SUM(CASE WHEN is_suspicious = 1 THEN 1 ELSE 0 END) as suspicious_count
+            FROM warranty_claims
+            GROUP BY dealer_id, dealer_name
+            ORDER BY claim_count DESC
+            LIMIT {int(limit)}
+        """)
+        rows = [dict(r) for r in cursor.fetchall()]
+        return {"dealers": rows}
+    finally:
+        release_connection(conn)
+
+
+@router.get("/dashboard/signals")
+async def dashboard_signal_frequency():
+    """Fraud signal frequency across all claims."""
+    from ..warranty.db import get_connection, release_connection, _get_cursor
+    import json as _json
+    
+    conn = get_connection()
+    try:
+        cursor = _get_cursor(conn)
+        cursor.execute("SELECT fraud_signals FROM warranty_claims WHERE fraud_signals IS NOT NULL")
+        
+        signal_counts = {}
+        severity_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        
+        for row in cursor.fetchall():
+            raw = row["fraud_signals"] if isinstance(row, dict) else row[0]
+            if not raw:
+                continue
+            try:
+                signals = _json.loads(raw) if isinstance(raw, str) else raw
+                for sig in signals:
+                    stype = sig.get("signal_type", "UNKNOWN")
+                    signal_counts[stype] = signal_counts.get(stype, 0) + 1
+                    sev = sig.get("severity", "LOW")
+                    if sev in severity_counts:
+                        severity_counts[sev] += 1
+            except (_json.JSONDecodeError, TypeError):
+                pass
+        
+        sorted_signals = sorted(signal_counts.items(), key=lambda x: -x[1])
+        return {
+            "signals": [{"signal_type": k, "count": v} for k, v in sorted_signals],
+            "by_severity": severity_counts,
+        }
+    finally:
+        release_connection(conn)
+
+
+@router.get("/dashboard/duplicates")
+async def dashboard_duplicate_overview():
+    """Duplicate detection stats: by match type, top repeated claims."""
+    from ..warranty.db import get_connection, release_connection, _get_cursor
+    
+    conn = get_connection()
+    try:
+        cursor = _get_cursor(conn)
+        
+        # By match type
+        cursor.execute("""
+            SELECT match_type, COUNT(*) as cnt, AVG(similarity_score) as avg_sim
+            FROM warranty_duplicate_matches
+            GROUP BY match_type
+            ORDER BY cnt DESC
+        """)
+        by_type = [dict(r) for r in cursor.fetchall()]
+        
+        # Claims with most duplicates
+        cursor.execute("""
+            SELECT claim_id, cnt FROM (
+                SELECT claim_id_1 as claim_id, COUNT(*) as cnt
+                FROM warranty_duplicate_matches
+                GROUP BY claim_id_1
+                UNION ALL
+                SELECT claim_id_2, COUNT(*)
+                FROM warranty_duplicate_matches
+                GROUP BY claim_id_2
+            ) sub
+            GROUP BY claim_id
+            ORDER BY SUM(cnt) DESC
+            LIMIT 10
+        """)
+        top_claims = [dict(r) for r in cursor.fetchall()]
+        
+        return {"by_type": by_type, "top_claims_with_duplicates": top_claims}
+    finally:
+        release_connection(conn)
+
+
+@router.get("/dashboard/trends")
+async def dashboard_trends():
+    """Claims over time (by month)."""
+    from ..warranty.db import get_connection, release_connection, _get_cursor
+    
+    conn = get_connection()
+    try:
+        cursor = _get_cursor(conn)
+        cursor.execute("""
+            SELECT SUBSTR(claim_date, 1, 7) as month,
+                   COUNT(*) as claim_count,
+                   COALESCE(AVG(total_amount), 0) as avg_amount,
+                   COALESCE(AVG(risk_score), 0) as avg_risk,
+                   SUM(CASE WHEN is_suspicious = 1 THEN 1 ELSE 0 END) as suspicious_count
+            FROM warranty_claims
+            WHERE claim_date IS NOT NULL AND LENGTH(claim_date) >= 7
+            GROUP BY SUBSTR(claim_date, 1, 7)
+            ORDER BY month
+        """)
+        rows = [dict(r) for r in cursor.fetchall()]
+        return {"trends": rows}
+    finally:
+        release_connection(conn)
+
+
+@router.get("/dashboard/claims")
+async def dashboard_claims_list(
+    issue: Optional[str] = None,
+    brand: Optional[str] = None,
+    dealer_id: Optional[str] = None,
+    triage: Optional[str] = None,
+    suspicious_only: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """Drill-down: list claims filtered by issue, brand, dealer, or triage class."""
+    from ..warranty.db import get_connection, release_connection, _get_cursor, _sql
+    
+    conn = get_connection()
+    try:
+        cursor = _get_cursor(conn)
+        
+        conditions = []
+        params = []
+        
+        if issue:
+            conditions.append("issue_description = ?")
+            params.append(issue)
+        if brand:
+            conditions.append("brand = ?")
+            params.append(brand)
+        if dealer_id:
+            conditions.append("dealer_id = ?")
+            params.append(dealer_id)
+        if triage:
+            conditions.append("triage_class = ?")
+            params.append(triage)
+        if suspicious_only:
+            conditions.append("is_suspicious = 1")
+        
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        
+        cursor.execute(_sql(f"""
+            SELECT id, customer_name, dealer_id, dealer_name, vin, brand, model, year,
+                   issue_description, claim_date, total_amount, risk_score, triage_class,
+                   is_suspicious, status, created_at
+            FROM warranty_claims
+            {where}
+            ORDER BY created_at DESC
+            LIMIT {int(limit)} OFFSET {int(offset)}
+        """), tuple(params))
+        
+        claims = [dict(r) for r in cursor.fetchall()]
+        
+        # Get total count
+        cursor.execute(_sql(f"SELECT COUNT(*) as cnt FROM warranty_claims {where}"), tuple(params))
+        total = _val(cursor.fetchone(), "cnt")
+        
+        return {"claims": claims, "total": total, "limit": limit, "offset": offset}
+    finally:
+        release_connection(conn)
+
+
+def _val(row, key):
+    """Extract value from a DB row (handles dict, sqlite3.Row, and tuple rows)."""
+    if row is None:
+        return 0
+    try:
+        return row[key]
+    except (KeyError, TypeError, IndexError):
+        try:
+            return row[0]
+        except (IndexError, TypeError):
+            return 0
 
 
 @router.post("/feedback")

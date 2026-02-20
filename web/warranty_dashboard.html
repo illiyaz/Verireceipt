@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Warranty Dashboard - VeriReceipt</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .card-shadow { box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
+        .fade-in { animation: fadeIn 0.5s ease-in; }
+        @keyframes fadeIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+        const API = window.location.origin;
+
+        /* ------------------------------------------------------------------ */
+        /* Palette                                                            */
+        /* ------------------------------------------------------------------ */
+        const COLORS = [
+            '#6366f1','#ec4899','#f59e0b','#10b981','#3b82f6','#ef4444',
+            '#8b5cf6','#14b8a6','#f97316','#06b6d4','#84cc16','#e11d48',
+        ];
+        const BG_COLORS = COLORS.map(c => c + '33');
+
+        /* ------------------------------------------------------------------ */
+        /* Chart wrapper (destroys old chart on re-render)                    */
+        /* ------------------------------------------------------------------ */
+        function ChartCanvas({ id, config, height = 300 }) {
+            const ref = useRef(null);
+            const chartRef = useRef(null);
+
+            useEffect(() => {
+                if (!ref.current || !config) return;
+                if (chartRef.current) chartRef.current.destroy();
+                chartRef.current = new Chart(ref.current, config);
+                return () => { if (chartRef.current) chartRef.current.destroy(); };
+            }, [config]);
+
+            return <canvas ref={ref} id={id} height={height}></canvas>;
+        }
+
+        /* ------------------------------------------------------------------ */
+        /* Main Dashboard                                                     */
+        /* ------------------------------------------------------------------ */
+        function Dashboard() {
+            const [overview, setOverview] = useState(null);
+            const [rootCauses, setRootCauses] = useState(null);
+            const [brands, setBrands] = useState(null);
+            const [dealers, setDealers] = useState(null);
+            const [signals, setSignals] = useState(null);
+            const [dupStats, setDupStats] = useState(null);
+            const [trends, setTrends] = useState(null);
+            const [loading, setLoading] = useState(true);
+
+            /* Drill-down state */
+            const [drilldown, setDrilldown] = useState(null); // { type, value, title }
+            const [drillClaims, setDrillClaims] = useState(null);
+            const [drillLoading, setDrillLoading] = useState(false);
+
+            const fetchAll = async () => {
+                setLoading(true);
+                try {
+                    const [ov, rc, br, dl, sg, dp, tr] = await Promise.all([
+                        fetch(`${API}/warranty/dashboard/overview`).then(r => r.json()),
+                        fetch(`${API}/warranty/dashboard/root-causes`).then(r => r.json()),
+                        fetch(`${API}/warranty/dashboard/by-brand`).then(r => r.json()),
+                        fetch(`${API}/warranty/dashboard/by-dealer`).then(r => r.json()),
+                        fetch(`${API}/warranty/dashboard/signals`).then(r => r.json()),
+                        fetch(`${API}/warranty/dashboard/duplicates`).then(r => r.json()),
+                        fetch(`${API}/warranty/dashboard/trends`).then(r => r.json()),
+                    ]);
+                    setOverview(ov); setRootCauses(rc); setBrands(br);
+                    setDealers(dl); setSignals(sg); setDupStats(dp); setTrends(tr);
+                } catch (e) {
+                    console.error('Dashboard load failed:', e);
+                }
+                setLoading(false);
+            };
+
+            useEffect(() => { fetchAll(); }, []);
+
+            /* Drill-down loader */
+            const openDrilldown = async (type, value, title) => {
+                setDrilldown({ type, value, title });
+                setDrillLoading(true);
+                setDrillClaims(null);
+                try {
+                    const params = new URLSearchParams();
+                    if (type === 'issue') params.set('issue', value);
+                    if (type === 'brand') params.set('brand', value);
+                    if (type === 'dealer') params.set('dealer_id', value);
+                    if (type === 'triage') params.set('triage', value);
+                    if (type === 'suspicious') params.set('suspicious_only', 'true');
+                    const resp = await fetch(`${API}/warranty/dashboard/claims?${params}`);
+                    const data = await resp.json();
+                    setDrillClaims(data);
+                } catch (e) { console.error(e); }
+                setDrillLoading(false);
+            };
+
+            const closeDrilldown = () => { setDrilldown(null); setDrillClaims(null); };
+
+            /* -------------------------------------------------------------- */
+            /* Chart configs                                                  */
+            /* -------------------------------------------------------------- */
+            const rootCauseConfig = rootCauses ? {
+                type: 'bar',
+                data: {
+                    labels: rootCauses.root_causes.map(r => r.issue_description?.substring(0, 30) || 'Unknown'),
+                    datasets: [
+                        { label: 'Total Claims', data: rootCauses.root_causes.map(r => r.claim_count), backgroundColor: COLORS[0] + '99', borderColor: COLORS[0], borderWidth: 1 },
+                        { label: 'Suspicious', data: rootCauses.root_causes.map(r => r.suspicious_count), backgroundColor: COLORS[5] + '99', borderColor: COLORS[5], borderWidth: 1 },
+                    ]
+                },
+                options: {
+                    responsive: true, indexAxis: 'y',
+                    onClick: (e, els) => { if (els.length) openDrilldown('issue', rootCauses.root_causes[els[0].index].issue_description, 'Issue: ' + rootCauses.root_causes[els[0].index].issue_description); },
+                    plugins: { legend: { position: 'top' }, title: { display: true, text: 'Claims by Root Cause (click to drill down)' } },
+                    scales: { x: { beginAtZero: true } }
+                }
+            } : null;
+
+            const brandConfig = brands ? {
+                type: 'doughnut',
+                data: {
+                    labels: brands.brands.map(b => b.brand),
+                    datasets: [{ data: brands.brands.map(b => b.claim_count), backgroundColor: COLORS.slice(0, brands.brands.length), borderWidth: 2, borderColor: '#fff' }]
+                },
+                options: {
+                    responsive: true,
+                    onClick: (e, els) => { if (els.length) openDrilldown('brand', brands.brands[els[0].index].brand, 'Brand: ' + brands.brands[els[0].index].brand); },
+                    plugins: { legend: { position: 'right' }, title: { display: true, text: 'Claims by Vehicle Brand' } }
+                }
+            } : null;
+
+            const signalConfig = signals?.signals?.length ? {
+                type: 'bar',
+                data: {
+                    labels: signals.signals.slice(0, 12).map(s => s.signal_type.replace('DUPLICATE_IMAGE_', 'DUP_IMG_').replace('POTENTIAL_DUPLICATE_', 'DUP_')),
+                    datasets: [{ label: 'Occurrences', data: signals.signals.slice(0, 12).map(s => s.count), backgroundColor: COLORS.slice(0, 12).map(c => c + '99'), borderColor: COLORS.slice(0, 12), borderWidth: 1 }]
+                },
+                options: {
+                    responsive: true, indexAxis: 'y',
+                    plugins: { legend: { display: false }, title: { display: true, text: 'Top Fraud Signals' } },
+                    scales: { x: { beginAtZero: true } }
+                }
+            } : null;
+
+            const trendConfig = trends?.trends?.length ? {
+                type: 'line',
+                data: {
+                    labels: trends.trends.map(t => t.month),
+                    datasets: [
+                        { label: 'Claims', data: trends.trends.map(t => t.claim_count), borderColor: COLORS[0], backgroundColor: COLORS[0] + '22', fill: true, tension: 0.3 },
+                        { label: 'Suspicious', data: trends.trends.map(t => t.suspicious_count), borderColor: COLORS[5], backgroundColor: COLORS[5] + '22', fill: true, tension: 0.3 },
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { title: { display: true, text: 'Claims Over Time' } },
+                    scales: { y: { beginAtZero: true } }
+                }
+            } : null;
+
+            const dealerConfig = dealers?.dealers?.length ? {
+                type: 'bar',
+                data: {
+                    labels: dealers.dealers.slice(0, 10).map(d => (d.dealer_name || d.dealer_id || 'Unknown').substring(0, 20)),
+                    datasets: [
+                        { label: 'Claims', data: dealers.dealers.slice(0, 10).map(d => d.claim_count), backgroundColor: COLORS[4] + '99', borderColor: COLORS[4], borderWidth: 1 },
+                        { label: 'Suspicious', data: dealers.dealers.slice(0, 10).map(d => d.suspicious_count), backgroundColor: COLORS[5] + '99', borderColor: COLORS[5], borderWidth: 1 },
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    onClick: (e, els) => { if (els.length) openDrilldown('dealer', dealers.dealers[els[0].index].dealer_id, 'Dealer: ' + (dealers.dealers[els[0].index].dealer_name || dealers.dealers[els[0].index].dealer_id)); },
+                    plugins: { legend: { position: 'top' }, title: { display: true, text: 'Top Dealers by Claim Volume (click to drill down)' } },
+                    scales: { y: { beginAtZero: true } }
+                }
+            } : null;
+
+            const severityConfig = signals?.by_severity ? {
+                type: 'doughnut',
+                data: {
+                    labels: ['High', 'Medium', 'Low'],
+                    datasets: [{ data: [signals.by_severity.HIGH, signals.by_severity.MEDIUM, signals.by_severity.LOW], backgroundColor: ['#ef444499', '#f59e0b99', '#22c55e99'], borderColor: ['#ef4444', '#f59e0b', '#22c55e'], borderWidth: 2 }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { title: { display: true, text: 'Signal Severity Distribution' } }
+                }
+            } : null;
+
+            /* -------------------------------------------------------------- */
+            /* Render                                                         */
+            /* -------------------------------------------------------------- */
+            if (loading) return (
+                <div className="min-h-screen flex items-center justify-center">
+                    <div className="text-center">
+                        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500 mx-auto mb-4"></div>
+                        <p className="text-gray-500">Loading dashboard...</p>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="min-h-screen">
+                    {/* Header */}
+                    <header className="gradient-bg text-white py-6 shadow-lg">
+                        <div className="max-w-7xl mx-auto px-4 flex items-center justify-between">
+                            <div className="flex items-center space-x-4">
+                                <i className="fas fa-tachometer-alt text-3xl"></i>
+                                <div>
+                                    <h1 className="text-3xl font-bold">Warranty Dashboard</h1>
+                                    <p className="text-purple-200 text-sm">Root Cause Analysis & Fraud Insights</p>
+                                </div>
+                            </div>
+                            <div className="flex items-center space-x-3">
+                                <a href="/web/warranty.html" className="px-4 py-2 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg transition text-white text-sm">
+                                    <i className="fas fa-upload mr-1"></i> Analyze Claim
+                                </a>
+                                <button onClick={fetchAll} className="px-4 py-2 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg transition text-white text-sm">
+                                    <i className="fas fa-sync-alt mr-1"></i> Refresh
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="max-w-7xl mx-auto py-6 px-4 space-y-6">
+                        {/* KPI Cards */}
+                        {overview && (
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 fade-in">
+                                <KPICard icon="fa-file-invoice" label="Total Claims" value={overview.total_claims} color="indigo" onClick={() => openDrilldown('all', '', 'All Claims')} />
+                                <KPICard icon="fa-check-circle" label="Auto Approved" value={overview.by_triage?.AUTO_APPROVE || 0} color="green" onClick={() => openDrilldown('triage', 'AUTO_APPROVE', 'Auto Approved')} />
+                                <KPICard icon="fa-exclamation-circle" label="Review" value={overview.by_triage?.REVIEW || 0} color="yellow" onClick={() => openDrilldown('triage', 'REVIEW', 'Under Review')} />
+                                <KPICard icon="fa-exclamation-triangle" label="Investigate" value={overview.by_triage?.INVESTIGATE || 0} color="red" onClick={() => openDrilldown('triage', 'INVESTIGATE', 'Investigate')} />
+                                <KPICard icon="fa-flag" label="Suspicious" value={overview.suspicious_count} color="red" onClick={() => openDrilldown('suspicious', '', 'Suspicious Claims')} />
+                                <KPICard icon="fa-copy" label="Duplicates" value={overview.claims_with_duplicates} color="purple" />
+                            </div>
+                        )}
+
+                        {/* Row 1: Root Causes + Brand */}
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <div className="lg:col-span-2 bg-white rounded-2xl card-shadow p-5 fade-in">
+                                {rootCauseConfig && <ChartCanvas id="rootCauseChart" config={rootCauseConfig} height={Math.max(200, (rootCauses?.root_causes?.length || 5) * 28)} />}
+                                {!rootCauseConfig && <EmptyChart label="No root cause data" />}
+                            </div>
+                            <div className="bg-white rounded-2xl card-shadow p-5 fade-in">
+                                {brandConfig && <ChartCanvas id="brandChart" config={brandConfig} height={280} />}
+                                {!brandConfig && <EmptyChart label="No brand data" />}
+                            </div>
+                        </div>
+
+                        {/* Row 2: Trends + Dealers */}
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div className="bg-white rounded-2xl card-shadow p-5 fade-in">
+                                {trendConfig && <ChartCanvas id="trendChart" config={trendConfig} height={250} />}
+                                {!trendConfig && <EmptyChart label="No trend data yet" />}
+                            </div>
+                            <div className="bg-white rounded-2xl card-shadow p-5 fade-in">
+                                {dealerConfig && <ChartCanvas id="dealerChart" config={dealerConfig} height={250} />}
+                                {!dealerConfig && <EmptyChart label="No dealer data" />}
+                            </div>
+                        </div>
+
+                        {/* Row 3: Signals + Severity + Duplicate Types */}
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <div className="lg:col-span-2 bg-white rounded-2xl card-shadow p-5 fade-in">
+                                {signalConfig && <ChartCanvas id="signalChart" config={signalConfig} height={Math.max(200, (signals?.signals?.length || 5) * 26)} />}
+                                {!signalConfig && <EmptyChart label="No signal data" />}
+                            </div>
+                            <div className="bg-white rounded-2xl card-shadow p-5 fade-in space-y-4">
+                                {severityConfig && <ChartCanvas id="sevChart" config={severityConfig} height={200} />}
+
+                                {/* Duplicate type breakdown */}
+                                {dupStats?.by_type?.length > 0 && (
+                                    <div>
+                                        <h4 className="font-semibold text-gray-700 text-sm mb-2">
+                                            <i className="fas fa-copy mr-1 text-purple-500"></i>Duplicate Match Types
+                                        </h4>
+                                        {dupStats.by_type.map((dt, i) => (
+                                            <div key={i} className="flex items-center justify-between text-xs py-1 border-b border-gray-100">
+                                                <span className="text-gray-600">{dt.match_type}</span>
+                                                <span className="font-bold text-gray-800">{dt.cnt}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Root cause detail table */}
+                        {rootCauses?.root_causes?.length > 0 && (
+                            <div className="bg-white rounded-2xl card-shadow p-5 fade-in">
+                                <h3 className="font-bold text-gray-800 mb-3">
+                                    <i className="fas fa-table mr-2 text-indigo-500"></i>Root Cause Detail
+                                </h3>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-gray-50">
+                                            <tr>
+                                                <th className="text-left p-2 font-medium text-gray-600">Issue</th>
+                                                <th className="text-right p-2 font-medium text-gray-600">Claims</th>
+                                                <th className="text-right p-2 font-medium text-gray-600">Avg Amount</th>
+                                                <th className="text-right p-2 font-medium text-gray-600">Total Amount</th>
+                                                <th className="text-right p-2 font-medium text-gray-600">Avg Risk</th>
+                                                <th className="text-right p-2 font-medium text-gray-600">Suspicious</th>
+                                                <th className="text-center p-2 font-medium text-gray-600">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {rootCauses.root_causes.map((rc, i) => (
+                                                <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+                                                    <td className="p-2 font-medium">{rc.issue_description}</td>
+                                                    <td className="p-2 text-right">{rc.claim_count}</td>
+                                                    <td className="p-2 text-right text-green-600">${rc.avg_amount?.toFixed(0)}</td>
+                                                    <td className="p-2 text-right">${rc.total_amount?.toFixed(0)}</td>
+                                                    <td className="p-2 text-right">
+                                                        <span className={rc.avg_risk > 0.5 ? 'text-red-600 font-bold' : 'text-gray-600'}>
+                                                            {(rc.avg_risk * 100).toFixed(0)}%
+                                                        </span>
+                                                    </td>
+                                                    <td className="p-2 text-right">
+                                                        {rc.suspicious_count > 0 && <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded-full text-xs font-bold">{rc.suspicious_count}</span>}
+                                                        {rc.suspicious_count === 0 && <span className="text-gray-400">0</span>}
+                                                    </td>
+                                                    <td className="p-2 text-center">
+                                                        <button onClick={() => openDrilldown('issue', rc.issue_description, rc.issue_description)}
+                                                            className="text-indigo-600 hover:text-indigo-800 text-xs font-medium">
+                                                            <i className="fas fa-arrow-right mr-1"></i>View
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Drill-down Modal */}
+                    {drilldown && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-start justify-center pt-16 px-4" onClick={closeDrilldown}>
+                            <div className="bg-white rounded-2xl card-shadow w-full max-w-4xl max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+                                <div className="bg-indigo-600 text-white px-6 py-4 flex items-center justify-between">
+                                    <div>
+                                        <h3 className="font-bold text-lg">{drilldown.title}</h3>
+                                        <p className="text-indigo-200 text-sm">{drillClaims ? `${drillClaims.total} claim(s)` : 'Loading...'}</p>
+                                    </div>
+                                    <button onClick={closeDrilldown} className="text-white hover:text-indigo-200 text-xl"><i className="fas fa-times"></i></button>
+                                </div>
+                                <div className="overflow-auto max-h-[65vh] p-4">
+                                    {drillLoading && <div className="text-center py-8"><div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-indigo-500 mx-auto"></div></div>}
+                                    {drillClaims?.claims?.length > 0 && (
+                                        <table className="w-full text-sm">
+                                            <thead className="bg-gray-50 sticky top-0">
+                                                <tr>
+                                                    <th className="text-left p-2 font-medium text-gray-600">Claim ID</th>
+                                                    <th className="text-left p-2 font-medium text-gray-600">Customer</th>
+                                                    <th className="text-left p-2 font-medium text-gray-600">VIN</th>
+                                                    <th className="text-left p-2 font-medium text-gray-600">Vehicle</th>
+                                                    <th className="text-left p-2 font-medium text-gray-600">Issue</th>
+                                                    <th className="text-right p-2 font-medium text-gray-600">Amount</th>
+                                                    <th className="text-right p-2 font-medium text-gray-600">Risk</th>
+                                                    <th className="text-center p-2 font-medium text-gray-600">Triage</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {drillClaims.claims.map((c, i) => (
+                                                    <tr key={i} className="border-b border-gray-100 hover:bg-indigo-50">
+                                                        <td className="p-2 font-mono text-xs text-indigo-600">{c.id?.substring(0, 12)}</td>
+                                                        <td className="p-2">{c.customer_name || 'N/A'}</td>
+                                                        <td className="p-2 font-mono text-xs">{c.vin?.substring(0, 11) || 'N/A'}</td>
+                                                        <td className="p-2">{c.brand} {c.model}</td>
+                                                        <td className="p-2 max-w-[200px] truncate">{c.issue_description}</td>
+                                                        <td className="p-2 text-right text-green-600 font-medium">${c.total_amount?.toFixed(0) || '0'}</td>
+                                                        <td className="p-2 text-right">
+                                                            <span className={`font-bold ${c.risk_score > 0.6 ? 'text-red-600' : c.risk_score > 0.3 ? 'text-yellow-600' : 'text-green-600'}`}>
+                                                                {(c.risk_score * 100).toFixed(0)}%
+                                                            </span>
+                                                        </td>
+                                                        <td className="p-2 text-center">
+                                                            <span className={`text-xs px-2 py-1 rounded-full font-bold text-white ${
+                                                                c.triage_class === 'AUTO_APPROVE' ? 'bg-green-500' :
+                                                                c.triage_class === 'REVIEW' ? 'bg-yellow-500' : 'bg-red-500'
+                                                            }`}>{c.triage_class?.replace('_', ' ')}</span>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    )}
+                                    {drillClaims?.claims?.length === 0 && !drillLoading && (
+                                        <div className="text-center py-8 text-gray-400">
+                                            <i className="fas fa-inbox text-4xl mb-2"></i>
+                                            <p>No claims found for this filter</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Footer */}
+                    <footer className="bg-gray-800 text-white py-4 mt-8">
+                        <div className="max-w-7xl mx-auto px-4 text-center text-gray-400 text-sm">
+                            <i className="fas fa-shield-alt mr-1"></i>
+                            VeriReceipt Warranty Dashboard - ML-Powered Fraud Detection
+                        </div>
+                    </footer>
+                </div>
+            );
+        }
+
+        /* ------------------------------------------------------------------ */
+        /* KPI Card                                                           */
+        /* ------------------------------------------------------------------ */
+        function KPICard({ icon, label, value, color, onClick }) {
+            const colorMap = {
+                indigo: 'from-indigo-500 to-indigo-600',
+                green: 'from-green-500 to-green-600',
+                yellow: 'from-yellow-500 to-yellow-600',
+                red: 'from-red-500 to-red-600',
+                purple: 'from-purple-500 to-purple-600',
+            };
+            return (
+                <div onClick={onClick}
+                    className={`bg-gradient-to-br ${colorMap[color] || colorMap.indigo} rounded-xl p-4 text-white card-shadow ${onClick ? 'cursor-pointer hover:scale-105 transition-transform' : ''}`}>
+                    <div className="flex items-center justify-between mb-2">
+                        <i className={`fas ${icon} text-lg opacity-80`}></i>
+                        <span className="text-2xl font-bold">{value}</span>
+                    </div>
+                    <p className="text-xs opacity-80">{label}</p>
+                </div>
+            );
+        }
+
+        function EmptyChart({ label }) {
+            return (
+                <div className="flex items-center justify-center h-48 text-gray-300">
+                    <div className="text-center">
+                        <i className="fas fa-chart-bar text-4xl mb-2"></i>
+                        <p className="text-sm">{label}</p>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<Dashboard />, document.getElementById('root'));
+    </script>
+</body>
+</html>
