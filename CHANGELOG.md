@@ -2,6 +2,59 @@
 
 All notable changes to VeriReceipt will be documented in this file.
 
+## [2.0.0] - 2026-02-20
+
+### Added — Warranty Claims Fraud Detection Module
+- **Warranty Claim Analysis Pipeline** (`app/warranty/`)
+  - PDF upload and AI-powered extraction (VIN, customer, vehicle, issue, amounts)
+  - Risk scoring (0–100%) with triage classification (AUTO_APPROVE / REVIEW / INVESTIGATE)
+  - Fraud signal detection (suspicious amounts, date anomalies, duplicate submissions)
+  - PostgreSQL + SQLite dual-mode database with auto-bootstrapping schema
+
+- **Duplicate Detection Engine** (`app/warranty/duplicates.py`)
+  - Exact image matching via MD5 file hash
+  - Perceptual hash (pHash) similarity with configurable Hamming distance thresholds
+  - Claim-level matching: same VIN + similar issue (Jaccard) + date proximity
+  - Dynamic template filtering: aspect ratio, frequency, and dimension checks
+  - Grouped duplicate audit: all linked claims shown with per-reason breakdown
+
+- **Warranty Dashboard** (`web/warranty.html`)
+  - 6 clickable KPI cards: Total Claims, Auto Approved, Review, Investigate, Suspicious, Duplicates
+  - Claims by Root Cause (bar chart) with brand/model/issue filter dropdowns
+  - Claims by Vehicle Brand (doughnut chart)
+  - Claims Over Time (trend line chart)
+  - Claims by Dealer (bar chart)
+  - Fraud Signals Distribution (radar chart)
+  - Duplicate Statistics panel
+  - Click-through drill-down on all KPI cards and chart elements
+
+- **Warranty API Endpoints** (`app/api/warranty_routes.py`)
+  - `POST /warranty/analyze` — Upload and analyze warranty claim PDF
+  - `GET /warranty/claim/{id}` — Claim details with pdf_available flag
+  - `GET /warranty/claim/{id}/pdf` — Serve stored claim PDF
+  - `GET /warranty/duplicates/{id}` — Enriched duplicate audit (grouped by linked claim)
+  - `GET /warranty/dashboard/overview` — KPI counts (total, triage, suspicious, duplicates)
+  - `GET /warranty/dashboard/root-causes` — Issue breakdown with brand/model/issue filters
+  - `GET /warranty/dashboard/by-brand` — Claims grouped by vehicle brand
+  - `GET /warranty/dashboard/by-dealer` — Claims grouped by dealer
+  - `GET /warranty/dashboard/signals` — Fraud signal distribution
+  - `GET /warranty/dashboard/duplicates` — Duplicate statistics
+  - `GET /warranty/dashboard/trends` — Monthly claim trends
+  - `GET /warranty/dashboard/claims` — Filtered claims list (drill-down)
+  - `POST /warranty/feedback` — Adjuster feedback on claim analysis
+
+- **PDF Storage & Viewing**
+  - Uploaded PDFs persisted to `data/warranty_pdfs/` with claim ID naming
+  - Inline PDF viewer in claim detail modal
+  - PDF icon links for linked duplicate claims in audit panel
+
+### Fixed
+- **Duplicate KPI Count** — Now counts both sides of duplicate match pairs (UNION query)
+- **Dashboard Refresh** — Dashboard reloads on every tab switch (was only loading on first visit)
+- **DB Bootstrap** — Always runs CREATE TABLE IF NOT EXISTS on connect (handles empty DB file)
+- **Template Filter** — Removed overly aggressive `height >= 200` SQL filter; aspect ratio alone sufficient
+- **ClaimLink Clickability** — Changed from `<button>` to `<span role="button">` to avoid nested interactive element conflicts
+
 ## [Unreleased] - 2026-01-15
 
 ### Fixed

@@ -325,6 +325,253 @@ Manually trigger the learning engine to update rules based on feedback.
 
 ---
 
+## Warranty Claims Endpoints
+
+### 9. Analyze Warranty Claim
+
+#### `POST /warranty/analyze`
+
+Upload and analyze a warranty claim PDF for fraud detection.
+
+**Request:**
+- **Content-Type**: `multipart/form-data`
+- **Body**:
+  - `file`: Warranty claim PDF
+  - `dealer_id` (optional): Dealer identifier
+
+**Response:**
+```json
+{
+  "claim_id": "LGLZWO",
+  "risk_score": 0.80,
+  "triage_class": "INVESTIGATE",
+  "duplicates_found": [
+    {
+      "matched_claim_id": "SQG05A",
+      "match_type": "IMAGE_EXACT",
+      "similarity_score": 1.0
+    }
+  ],
+  "fraud_signals": [
+    {
+      "signal_type": "DUPLICATE_IMAGE_EXACT",
+      "severity": "HIGH",
+      "description": "Exact duplicate image found in claim SQG05A"
+    }
+  ],
+  "warnings": [],
+  "customer_name": "Linda Johnson",
+  "vin": "1HGBH41JXMN109186",
+  "brand": "Chevrolet",
+  "model": "Chevrolet Malibu",
+  "year": 2020,
+  "issue_description": "Engine overheating",
+  "total_amount": 3409.30
+}
+```
+
+**Triage Classes:**
+- `AUTO_APPROVE` — Risk score < 0.3, no fraud signals
+- `REVIEW` — Risk score 0.3–0.6, minor signals
+- `INVESTIGATE` — Risk score > 0.6, significant fraud indicators
+
+---
+
+### 10. Get Claim Details
+
+#### `GET /warranty/claim/{claim_id}`
+
+Retrieve full details for a specific claim, including `pdf_available` flag.
+
+**Response:**
+```json
+{
+  "id": "LGLZWO",
+  "customer_name": "Linda Johnson",
+  "vin": "1HGBH41JXMN109186",
+  "brand": "Chevrolet",
+  "model": "Chevrolet Malibu",
+  "year": 2020,
+  "issue_description": "Engine overheating",
+  "claim_date": "2025-01-19",
+  "total_amount": 3409.30,
+  "risk_score": 1.0,
+  "triage_class": "INVESTIGATE",
+  "is_suspicious": 1,
+  "status": "Rejected",
+  "pdf_available": true
+}
+```
+
+---
+
+### 11. View Claim PDF
+
+#### `GET /warranty/claim/{claim_id}/pdf`
+
+Serve the stored PDF file for a claim. Returns `application/pdf` content.
+
+**Status Codes:**
+- `200 OK`: PDF file returned
+- `404 Not Found`: No PDF stored for this claim
+
+---
+
+### 12. Duplicate Audit
+
+#### `GET /warranty/duplicates/{claim_id}`
+
+Get enriched duplicate audit for a claim, grouped by linked claim with all match reasons.
+
+**Response:**
+```json
+{
+  "claim_id": "LGLZWO",
+  "total_duplicates": 1,
+  "total_matches": 2,
+  "grouped": [
+    {
+      "matched_claim_id": "SQG05A",
+      "reasons": [
+        {"match_type": "IMAGE_EXACT", "similarity_score": 1.0, "details": "Exact image match"},
+        {"match_type": "IMAGE_LIKELY_SAME", "similarity_score": 1.0, "details": "Very similar image"}
+      ],
+      "max_similarity": 1.0,
+      "reason_summary": ["Identical image reused", "Very similar image detected"],
+      "reason_types": ["IMAGE_EXACT", "IMAGE_LIKELY_SAME"],
+      "pdf_available": true,
+      "claim_details": {
+        "id": "SQG05A",
+        "customer_name": "Linda Martinez",
+        "brand": "Chevrolet",
+        "model": "Chevrolet Malibu",
+        "risk_score": 0.8,
+        "triage_class": "INVESTIGATE",
+        "pdf_available": true
+      }
+    }
+  ]
+}
+```
+
+**Match Types:**
+- `IMAGE_EXACT` — Identical file hash (MD5)
+- `IMAGE_LIKELY_SAME` — Perceptual hash Hamming distance ≤ 5
+- `IMAGE_SIMILAR` — Perceptual hash Hamming distance ≤ 10
+- `VIN_ISSUE_DUPLICATE` — Same VIN + similar issue description + date proximity
+
+---
+
+### 13. Dashboard Overview
+
+#### `GET /warranty/dashboard/overview`
+
+KPI counts for the dashboard.
+
+**Response:**
+```json
+{
+  "total_claims": 3,
+  "by_triage": {"INVESTIGATE": 2, "REVIEW": 1},
+  "suspicious_count": 3,
+  "claims_with_duplicates": 2,
+  "total_duplicate_matches": 2,
+  "avg_risk_score": 0.733
+}
+```
+
+---
+
+### 14. Root Causes (with Filters)
+
+#### `GET /warranty/dashboard/root-causes`
+
+Claims grouped by issue type. Supports filtering by brand, model, and issue.
+
+**Query Parameters:**
+- `brand` (optional): Filter by vehicle brand
+- `model` (optional): Filter by vehicle model
+- `issue` (optional): Filter by issue description
+- `limit` (optional): Max results (default: 20)
+
+**Response:**
+```json
+{
+  "root_causes": [
+    {
+      "issue_description": "Engine overheating",
+      "claim_count": 1,
+      "avg_amount": 3409.30,
+      "total_amount": 3409.30,
+      "avg_risk": 1.0,
+      "suspicious_count": 1
+    }
+  ],
+  "brands": ["Chevrolet", "Honda"],
+  "models": ["Chevrolet Malibu", "Honda Accord"],
+  "issues": ["Alternator malfunction", "Engine overheating", "Fuel pump issue"]
+}
+```
+
+---
+
+### 15. Claims List (Drill-Down)
+
+#### `GET /warranty/dashboard/claims`
+
+Filtered claims list for drill-down views.
+
+**Query Parameters:**
+- `issue` (optional): Filter by issue description
+- `brand` (optional): Filter by brand
+- `dealer_id` (optional): Filter by dealer
+- `triage` (optional): Filter by triage class (AUTO_APPROVE, REVIEW, INVESTIGATE)
+- `suspicious_only` (optional): Boolean, show only suspicious claims
+- `duplicates_only` (optional): Boolean, show only claims with duplicates
+- `limit` (optional): Max results (default: 50)
+- `offset` (optional): Pagination offset
+
+**Response:**
+```json
+{
+  "claims": [{"id": "LGLZWO", "customer_name": "...", "risk_score": 1.0, ...}],
+  "total": 2,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+---
+
+### 16. Additional Dashboard Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /warranty/dashboard/by-brand` | Claims grouped by vehicle brand |
+| `GET /warranty/dashboard/by-dealer` | Claims grouped by dealer |
+| `GET /warranty/dashboard/signals` | Fraud signal type distribution |
+| `GET /warranty/dashboard/duplicates` | Duplicate match statistics |
+| `GET /warranty/dashboard/trends` | Monthly claim count trends |
+
+---
+
+### 17. Warranty Feedback
+
+#### `POST /warranty/feedback`
+
+Submit adjuster feedback on a warranty claim analysis.
+
+**Request:**
+```json
+{
+  "claim_id": "LGLZWO",
+  "verdict": "legitimate",
+  "notes": "Claim verified with dealer records"
+}
+```
+
+---
+
 ## Data Models
 
 ### ReceiptDecision
@@ -468,6 +715,6 @@ See [CHANGELOG.md](CHANGELOG.md) for version history and updates.
 
 ---
 
-**Last Updated:** December 25, 2024  
-**API Version:** 1.0.0  
-**Engine Version:** 0.3.0+geo
+**Last Updated:** February 20, 2026  
+**API Version:** 2.0.0  
+**Engine Version:** 2.0.0+warranty

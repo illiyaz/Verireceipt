@@ -95,7 +95,32 @@ It can pull the emergency brake, but never press the accelerator.
 - Human review workflow
 - Feedback collection system
 
-### 🔄 **Learning & Feedback System**
+### � **Warranty Claims Fraud Detection** ✅ **New Module**
+- **PDF Warranty Claim Analysis** — Upload warranty claim PDFs for automated fraud detection
+  - AI-powered extraction of VIN, customer, vehicle, issue, and amount data
+  - Risk scoring (0–100%) with triage classification (AUTO_APPROVE / REVIEW / INVESTIGATE)
+  - Fraud signal detection (suspicious amounts, date anomalies, duplicate submissions)
+- **Duplicate Detection Engine** — Multi-layer duplicate identification:
+  - **Image-level:** Exact file hash matching + perceptual hash (pHash) similarity
+  - **Claim-level:** Same VIN + similar issue description + date proximity
+  - Dynamic template filtering (banners/logos excluded via aspect ratio + frequency analysis)
+  - Grouped duplicate audit view showing all linked claims with match reasons
+- **Interactive Dashboard** with 6 KPI cards (all clickable with drill-down):
+  - Total Claims, Auto Approved, Review, Investigate, Suspicious, Duplicates
+  - Claims by Root Cause (horizontal bar chart, filterable by brand/model/issue)
+  - Claims by Vehicle Brand (doughnut chart)
+  - Claims Over Time (trend line)
+  - Claims by Dealer (bar chart)
+  - Fraud Signals Distribution (radar chart)
+  - Duplicate Statistics (dedicated panel)
+- **PDF Viewing** — View original warranty claim PDFs for both analyzed and linked duplicate claims
+- **Advanced Filtering** — Filter root cause chart by:
+  - Vehicle brand (e.g., Chevrolet, Honda)
+  - Vehicle model (e.g., Chevrolet Malibu)
+  - Issue type / root cause (e.g., Engine overheating, Alternator malfunction)
+- **Claim Detail Modal** — Click any claim ID to view full details with inline PDF viewer
+
+### � **Learning & Feedback System**
 - Indicator-level feedback (✅ Correct / ❌ False Alarm)
 - Missed indicator tracking
 - Data correction learning
@@ -207,19 +232,31 @@ VeriReceipt/
 │   │   └── feedback_store.py      # SQLite feedback storage
 │   ├── api/
 │   │   ├── main.py                # FastAPI endpoints
-│   │   └── feedback.py            # Feedback API routes
+│   │   ├── feedback.py            # Feedback API routes
+│   │   └── warranty_routes.py     # 🔧 Warranty claims API (analyze, dashboard, duplicates)
+│   ├── warranty/                   # 🔧 Warranty claims module
+│   │   ├── __init__.py
+│   │   ├── models.py              # Warranty data models (WarrantyClaim, ClaimAnalysisResult)
+│   │   ├── extractor.py           # PDF extraction (text, images, hashes)
+│   │   ├── pipeline.py            # Analysis pipeline (extract → hash → duplicates → signals)
+│   │   ├── duplicates.py          # Duplicate detection (image hash, VIN, issue similarity)
+│   │   ├── signals.py             # Fraud signal detection (amounts, dates, patterns)
+│   │   ├── db.py                  # Database operations (SQLite/PostgreSQL dual-mode)
+│   │   └── bootstrap.py           # Schema creation and seed data
 │   ├── schemas/
 │   │   └── receipt.py             # Pydantic schemas
 │   └── utils/
 │       └── audit_formatter.py     # 📊 Audit report formatter
 ├── web/
-│   ├── index.html                 # 🎨 Main analysis UI (tabbed interface)
+│   ├── index.html                 # 🎨 Main receipt analysis UI (tabbed interface)
+│   ├── warranty.html              # 🔧 Warranty claims UI (analyze + dashboard)
 │   ├── review.html                # Human feedback form
 │   ├── stats.html                 # Feedback stats dashboard
 │   └── audit_report.html          # Standalone audit viewer
 ├── data/
 │   ├── raw/                       # Test receipts
 │   ├── processed/
+│   ├── warranty_pdfs/             # 🔧 Stored warranty claim PDFs
 │   └── feedback.db                # Local feedback database
 ├── docs/
 │   ├── GEO_AWARE_CLASSIFICATION.md   # Geo-aware system docs
@@ -348,6 +385,54 @@ curl -X POST "http://localhost:8000/feedback" \
     ]
   }'
 ```
+
+#### 4. Warranty Claim Analysis
+```bash
+# Analyze a warranty claim PDF
+curl -X POST "http://localhost:8000/warranty/analyze" \
+  -F "file=@warranty_claim.pdf" \
+  -F "dealer_id=DLR001"
+```
+
+**Response:**
+```json
+{
+  "claim_id": "LGLZWO",
+  "risk_score": 0.80,
+  "triage_class": "INVESTIGATE",
+  "duplicates_found": [
+    {"matched_claim_id": "SQG05A", "match_type": "IMAGE_EXACT", "similarity_score": 1.0}
+  ],
+  "fraud_signals": [
+    {"signal_type": "DUPLICATE_IMAGE_EXACT", "severity": "HIGH", "description": "Exact duplicate image found"}
+  ]
+}
+```
+
+#### 5. Warranty Dashboard & Drill-Down
+```bash
+# Dashboard overview (KPI counts)
+curl "http://localhost:8000/warranty/dashboard/overview"
+
+# Root causes filtered by brand and issue
+curl "http://localhost:8000/warranty/dashboard/root-causes?brand=Chevrolet&issue=Engine+overheating"
+
+# Drill-down: claims with duplicates
+curl "http://localhost:8000/warranty/dashboard/claims?duplicates_only=true"
+
+# Duplicate audit for a specific claim
+curl "http://localhost:8000/warranty/duplicates/LGLZWO"
+
+# View stored PDF for a claim
+curl "http://localhost:8000/warranty/claim/LGLZWO/pdf"
+```
+
+#### 6. Warranty Web UI
+```
+http://localhost:8000/web/warranty.html
+```
+- **Analyze tab** — Upload warranty claim PDFs, view risk score, fraud signals, and duplicate audit
+- **Dashboard tab** — Interactive charts with KPI cards, root cause analysis, brand/model/issue filters
 
 ---
 
@@ -645,6 +730,14 @@ curl -X POST "http://localhost:8000/analyze" \
   - Confidence-based gating (prevents over-penalization)
   - Conditional severity (date gaps, doc-type ambiguity)
   - Learned rule impact capping
+- **Warranty Claims Fraud Detection** (Feb 2026)
+  - PDF claim analysis with AI-powered data extraction
+  - Multi-layer duplicate detection (image hash + perceptual hash + VIN matching)
+  - Interactive dashboard with 6 KPI cards and 7 chart panels
+  - Root cause filtering by brand, model, and issue type
+  - PDF storage and viewing for analyzed and linked duplicate claims
+  - Claim detail modal with inline PDF viewer
+  - PostgreSQL + SQLite dual-mode database support
 
 ### 🔄 In Progress
 - Enhanced pattern learning
