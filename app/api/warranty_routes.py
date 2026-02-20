@@ -266,9 +266,10 @@ async def dashboard_root_causes(
     limit: int = 20,
     brand: Optional[str] = None,
     model: Optional[str] = None,
+    issue: Optional[str] = None,
 ):
     """Claims grouped by issue type (root cause) with counts and avg amounts.
-    Optionally filtered by brand and/or model."""
+    Optionally filtered by brand, model, and/or issue."""
     from ..warranty.db import get_connection, release_connection, _get_cursor, _sql
     
     conn = get_connection()
@@ -282,6 +283,9 @@ async def dashboard_root_causes(
         if model:
             conditions.append("model = ?")
             params.append(model)
+        if issue:
+            conditions.append("issue_description = ?")
+            params.append(issue)
         where = "WHERE " + " AND ".join(conditions)
         cursor.execute(_sql(f"""
             SELECT issue_description,
@@ -298,13 +302,15 @@ async def dashboard_root_causes(
         """), tuple(params))
         rows = [dict(r) for r in cursor.fetchall()]
         
-        # Also return available brands and models for filter dropdowns
+        # Also return available filter options for dropdowns
         cursor.execute("SELECT DISTINCT brand FROM warranty_claims WHERE brand IS NOT NULL AND brand != '' ORDER BY brand")
         brands = [r[0] for r in cursor.fetchall()]
         cursor.execute("SELECT DISTINCT model FROM warranty_claims WHERE model IS NOT NULL AND model != '' ORDER BY model")
         models = [r[0] for r in cursor.fetchall()]
+        cursor.execute("SELECT DISTINCT issue_description FROM warranty_claims WHERE issue_description IS NOT NULL AND issue_description != '' ORDER BY issue_description")
+        issues = [r[0] for r in cursor.fetchall()]
         
-        return {"root_causes": rows, "brands": brands, "models": models}
+        return {"root_causes": rows, "brands": brands, "models": models, "issues": issues}
     finally:
         release_connection(conn)
 

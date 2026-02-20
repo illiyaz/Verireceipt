@@ -124,6 +124,7 @@
             const [drillLoading, setDrillLoading] = useState(false);
             const [rcFilterBrand, setRcFilterBrand] = useState('');
             const [rcFilterModel, setRcFilterModel] = useState('');
+            const [rcFilterIssue, setRcFilterIssue] = useState('');
             const fileInputRef = useRef(null);
 
             const loadDuplicateAudit = async (claimId) => {
@@ -192,11 +193,12 @@
 
             const DASH_COLORS = ['#6366f1','#ec4899','#f59e0b','#10b981','#3b82f6','#ef4444','#8b5cf6','#14b8a6','#f97316','#06b6d4','#84cc16','#e11d48'];
 
-            const loadRootCauses = async (brand, model) => {
+            const loadRootCauses = async (brand, model, issue) => {
                 try {
                     const p = new URLSearchParams();
                     if (brand) p.set('brand', brand);
                     if (model) p.set('model', model);
+                    if (issue) p.set('issue', issue);
                     const rc = await fetch(`${API_BASE_URL}/warranty/dashboard/root-causes?${p}`).then(r => r.json());
                     setDashRootCauses(rc);
                 } catch (e) { console.error('Root causes load failed:', e); }
@@ -208,6 +210,7 @@
                     const rcParams = new URLSearchParams();
                     if (rcFilterBrand) rcParams.set('brand', rcFilterBrand);
                     if (rcFilterModel) rcParams.set('model', rcFilterModel);
+                    if (rcFilterIssue) rcParams.set('issue', rcFilterIssue);
                     const [ov, rc, br, dl, sg, dp, tr] = await Promise.all([
                         fetch(`${API_BASE_URL}/warranty/dashboard/overview`).then(r => r.json()),
                         fetch(`${API_BASE_URL}/warranty/dashboard/root-causes?${rcParams}`).then(r => r.json()),
@@ -223,10 +226,10 @@
                 setDashLoading(false);
             };
 
-            // Reload root causes when brand/model filter changes
+            // Reload root causes when any filter changes
             useEffect(() => {
-                if (dashOverview) loadRootCauses(rcFilterBrand, rcFilterModel);
-            }, [rcFilterBrand, rcFilterModel]);
+                if (dashOverview) loadRootCauses(rcFilterBrand, rcFilterModel, rcFilterIssue);
+            }, [rcFilterBrand, rcFilterModel, rcFilterIssue]);
 
             const openDrilldown = async (type, value, title) => {
                 setDrilldown({ type, value, title });
@@ -936,8 +939,13 @@
                                                 <option value="">All Models</option>
                                                 {dashRootCauses?.models?.map(m => <option key={m} value={m}>{m}</option>)}
                                             </select>
-                                            {(rcFilterBrand || rcFilterModel) && (
-                                                <button type="button" onClick={() => { setRcFilterBrand(''); setRcFilterModel(''); }}
+                                            <select value={rcFilterIssue} onChange={e => setRcFilterIssue(e.target.value)}
+                                                className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-indigo-300 focus:outline-none">
+                                                <option value="">All Issues</option>
+                                                {dashRootCauses?.issues?.map(i => <option key={i} value={i}>{i}</option>)}
+                                            </select>
+                                            {(rcFilterBrand || rcFilterModel || rcFilterIssue) && (
+                                                <button type="button" onClick={() => { setRcFilterBrand(''); setRcFilterModel(''); setRcFilterIssue(''); }}
                                                     className="text-xs text-red-500 hover:text-red-700 font-medium">
                                                     <i className="fas fa-times mr-0.5"></i>Clear
                                                 </button>
@@ -955,7 +963,7 @@
                                                 },
                                                 options:{responsive:true, indexAxis:'y',
                                                     onClick:(e,els)=>{ if(els.length) openDrilldown('issue', dashRootCauses.root_causes[els[0].index].issue_description, 'Issue: '+dashRootCauses.root_causes[els[0].index].issue_description); },
-                                                    plugins:{legend:{position:'top'}, title:{display:true, text:'Claims by Root Cause' + (rcFilterBrand ? ` — ${rcFilterBrand}` : '') + (rcFilterModel ? ` / ${rcFilterModel}` : '') + ' (click to drill down)'}},
+                                                    plugins:{legend:{position:'top'}, title:{display:true, text:'Claims by Root Cause' + (rcFilterBrand ? ` — ${rcFilterBrand}` : '') + (rcFilterModel ? ` / ${rcFilterModel}` : '') + (rcFilterIssue ? ` / ${rcFilterIssue}` : '') + ' (click to drill down)'}},
                                                     scales:{x:{beginAtZero:true}}}
                                             }} height={Math.max(200, (dashRootCauses.root_causes.length||5)*28)} />
                                             : <div className="flex items-center justify-center h-48 text-gray-300"><div className="text-center"><i className="fas fa-chart-bar text-4xl mb-2"></i><p className="text-sm">No root cause data</p></div></div>
