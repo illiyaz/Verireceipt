@@ -12,9 +12,15 @@ import os
 import tempfile
 import shutil
 import traceback
+from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+# Persistent storage for uploaded warranty PDFs
+WARRANTY_PDF_DIR = Path(os.getenv("WARRANTY_PDF_DIR", "data/warranty_pdfs"))
+WARRANTY_PDF_DIR.mkdir(parents=True, exist_ok=True)
 
 from ..warranty.pipeline import analyze_warranty_claim
 from ..warranty.db import get_claim, save_feedback, get_duplicates_for_claim, get_duplicate_audit
@@ -97,6 +103,13 @@ async def analyze_warranty(
         # Run analysis pipeline
         result = analyze_warranty_claim(temp_path, dealer_id=effective_dealer_id)
         
+        # Persist the PDF so auditors can view it later
+        try:
+            persist_path = WARRANTY_PDF_DIR / f"{result.claim_id}.pdf"
+            shutil.copy2(temp_path, str(persist_path))
+        except Exception as copy_err:
+            print(f"\u26a0\ufe0f Could not persist PDF: {copy_err}")
+        
         # Build response
         return AnalyzeResponse(
             claim_id=result.claim_id,
@@ -149,7 +162,26 @@ async def get_claim_details(claim_id: str):
             detail=f"Claim {claim_id} not found"
         )
     
+    # Indicate whether the original PDF is available
+    pdf_file = WARRANTY_PDF_DIR / f"{claim_id}.pdf"
+    claim["pdf_available"] = pdf_file.exists()
+    
     return claim
+
+
+@router.get("/claim/{claim_id}/pdf")
+async def get_claim_pdf(claim_id: str):
+    """
+    Serve the original uploaded PDF for a claim.
+    """
+    pdf_file = WARRANTY_PDF_DIR / f"{claim_id}.pdf"
+    if not pdf_file.exists():
+        raise HTTPException(status_code=404, detail="PDF not available for this claim")
+    return FileResponse(
+        path=str(pdf_file),
+        media_type="application/pdf",
+        filename=f"{claim_id}.pdf",
+    )
 
 
 @router.get("/duplicates/{claim_id}")
