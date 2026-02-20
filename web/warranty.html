@@ -227,7 +227,7 @@
 
             const switchTab = (tab) => {
                 setActiveTab(tab);
-                if (tab === 'dashboard' && !dashOverview) loadDashboard();
+                if (tab === 'dashboard') loadDashboard();
             };
 
             // Auto-scroll to drilldown panel when it opens

@@ -52,8 +52,8 @@ def get_connection():
     else:
         if not hasattr(_local, "conn") or _local.conn is None:
             db_path = get_warranty_db_path()
-            if not Path(db_path).exists():
-                bootstrap_warranty_db(db_path)
+            # Always bootstrap — uses CREATE TABLE IF NOT EXISTS so it's safe
+            bootstrap_warranty_db(db_path)
             _local.conn = sqlite3.connect(db_path, check_same_thread=False)
             _local.conn.row_factory = sqlite3.Row
         return _local.conn
@@ -280,7 +280,6 @@ def find_similar_images(
                   AND width > 0 AND height > 0
                   AND (CAST(width AS {_float}) / height) <= 5.0
                   AND (CAST(height AS {_float}) / width) <= 5.0
-                  AND height >= 200 AND width >= 200
             """), (exclude_claim_id,))
         else:
             cursor.execute(f"""
@@ -290,7 +289,6 @@ def find_similar_images(
                 WHERE width > 0 AND height > 0
                   AND (CAST(width AS {_float}) / height) <= 5.0
                   AND (CAST(height AS {_float}) / width) <= 5.0
-                  AND height >= 200 AND width >= 200
             """)
 
         matches = []
@@ -339,7 +337,6 @@ def find_exact_image(file_hash: str, exclude_claim_id: Optional[str] = None) -> 
                   AND width > 0 AND height > 0
                   AND (CAST(width AS {_float}) / height) <= 5.0
                   AND (CAST(height AS {_float}) / width) <= 5.0
-                  AND height >= 200 AND width >= 200
             """), (file_hash, exclude_claim_id))
         else:
             cursor.execute(_sql(f"""
@@ -349,7 +346,6 @@ def find_exact_image(file_hash: str, exclude_claim_id: Optional[str] = None) -> 
                   AND width > 0 AND height > 0
                   AND (CAST(width AS {_float}) / height) <= 5.0
                   AND (CAST(height AS {_float}) / width) <= 5.0
-                  AND height >= 200 AND width >= 200
             """), (file_hash,))
 
         row = cursor.fetchone()
