@@ -185,13 +185,15 @@ async def analyze_warranty_bulk(
     fail_count = 0
 
     for file in files:
-        if not file.filename.lower().endswith(".pdf"):
+        # Strip folder prefix from filename (folder uploads send paths like "folder/file.pdf")
+        safe_name = os.path.basename(file.filename) if file.filename else file.filename
+        if not safe_name or not safe_name.lower().endswith(".pdf"):
             results.append({"filename": file.filename, "status": "error", "detail": "Not a PDF file"})
             fail_count += 1
             continue
 
         temp_dir = tempfile.mkdtemp()
-        temp_path = os.path.join(temp_dir, file.filename)
+        temp_path = os.path.join(temp_dir, safe_name)
         try:
             with open(temp_path, "wb") as f:
                 content = await file.read()

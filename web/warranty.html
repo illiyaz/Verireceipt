@@ -258,7 +258,10 @@
                 if (!bulkFiles.length) return;
                 setBulkUploading(true); setBulkResults(null);
                 const formData = new FormData();
-                bulkFiles.forEach(f => formData.append('files', f));
+                bulkFiles.forEach(f => {
+                    const baseName = f.name.includes('/') ? f.name.split('/').pop() : f.name;
+                    formData.append('files', f, baseName);
+                });
                 try {
                     const resp = await fetch(`${API_BASE_URL}/warranty/analyze/bulk`, {
                         method: 'POST', headers: authHeaders(), body: formData,
