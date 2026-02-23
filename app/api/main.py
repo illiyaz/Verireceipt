@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
@@ -26,6 +26,8 @@ from app.repository.receipt_store import get_receipt_store
 from app.pipelines.ensemble import get_ensemble
 from app.api.feedback import router as feedback_router
 from app.api.warranty_routes import router as warranty_router
+from app.auth.routes import router as auth_router, admin_router
+from app.auth.sso import router as sso_router
 from app.utils.audit_formatter import format_audit_for_human_review
 
 # PDF to image conversion
@@ -72,6 +74,20 @@ app.include_router(feedback_router)
 
 # Include warranty claims router
 app.include_router(warranty_router)
+
+# Include auth routers
+app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(sso_router)
+
+# Initialize auth database on startup
+@app.on_event("startup")
+async def startup_init_auth():
+    try:
+        from app.auth.db import init_auth_db
+        init_auth_db()
+    except Exception as e:
+        logger.warning(f"Auth DB init warning: {e}")
 
 # Mount static files for web UI
 web_dir = Path(__file__).parent.parent.parent / "web"
@@ -271,14 +287,17 @@ def health_check():
 
 @app.get("/", tags=["meta"])
 def root():
-    """Root endpoint with API information."""
-    return {
-        "service": "VeriReceipt API",
-        "version": "0.1.0",
-        "description": "AI-Powered Fake Receipt Detection Engine",
-        "docs": "/docs",
-        "health": "/health",
-    }
+    """Redirect to login page."""
+    return RedirectResponse(url="/login")
+
+
+@app.get("/login", tags=["meta"])
+def login_page():
+    """Serve the login / warranty claims homepage."""
+    login_file = Path(__file__).parent.parent.parent / "web" / "warranty.html"
+    if login_file.exists():
+        return FileResponse(str(login_file), media_type="text/html")
+    return RedirectResponse(url="/web/warranty.html")
 
 
 @app.post("/analyze", response_model=AnalyzeResponse, tags=["analysis"])

@@ -69,6 +69,8 @@ def bootstrap_warranty_db(db_path: str = None) -> str:
             -- Metadata
             pdf_path TEXT,
             raw_text TEXT,
+            uploaded_by TEXT,
+            uploaded_by_username TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT
         )
@@ -79,6 +81,16 @@ def bootstrap_warranty_db(db_path: str = None) -> str:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_claims_brand ON warranty_claims(brand)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_claims_status ON warranty_claims(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_claims_date ON warranty_claims(claim_date)")
+    
+    # Migration: add uploaded_by columns if table already exists without them
+    try:
+        cursor.execute("ALTER TABLE warranty_claims ADD COLUMN uploaded_by TEXT")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE warranty_claims ADD COLUMN uploaded_by_username TEXT")
+    except Exception:
+        pass
     
     # =========================================================================
     # Image fingerprints for duplicate detection
@@ -349,6 +361,8 @@ def bootstrap_warranty_db_pg(conn) -> None:
             is_suspicious INTEGER DEFAULT 0,
             pdf_path TEXT,
             raw_text TEXT,
+            uploaded_by TEXT,
+            uploaded_by_username TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT
         )
@@ -358,6 +372,15 @@ def bootstrap_warranty_db_pg(conn) -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_claims_brand ON warranty_claims(brand)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_claims_status ON warranty_claims(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_claims_date ON warranty_claims(claim_date)")
+
+    # Migration: add uploaded_by columns if table already exists without them
+    for col in ("uploaded_by", "uploaded_by_username"):
+        try:
+            cursor.execute(f"SAVEPOINT sp_add_{col}")
+            cursor.execute(f"ALTER TABLE warranty_claims ADD COLUMN {col} TEXT")
+            cursor.execute(f"RELEASE SAVEPOINT sp_add_{col}")
+        except Exception:
+            cursor.execute(f"ROLLBACK TO SAVEPOINT sp_add_{col}")
 
     # =========================================================================
     # Image fingerprints for duplicate detection

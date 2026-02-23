@@ -46,17 +46,22 @@ class WarrantyAnalysisPipeline:
         self.duplicate_detector = DuplicateDetector()
         self.signal_detector = WarrantyFraudSignalDetector()
     
-    def analyze(self, pdf_path: str, dealer_id: Optional[str] = None) -> ClaimAnalysisResult:
+    def analyze(self, pdf_path: str, dealer_id: Optional[str] = None,
+                uploaded_by: Optional[str] = None, uploaded_by_username: Optional[str] = None) -> ClaimAnalysisResult:
         """
         Analyze a warranty claim PDF.
         
         Args:
             pdf_path: Path to the warranty claim PDF
             dealer_id: Optional dealer ID for dealer-level checks
+            uploaded_by: Optional user ID who uploaded the claim
+            uploaded_by_username: Optional username who uploaded the claim
             
         Returns:
             ClaimAnalysisResult with complete analysis
         """
+        self._uploaded_by = uploaded_by
+        self._uploaded_by_username = uploaded_by_username
         start_time = time.time()
         
         # Stage 1: Extract data from PDF
@@ -390,7 +395,9 @@ class WarrantyAnalysisPipeline:
             "warnings": result.warnings,
             "is_suspicious": result.is_suspicious,
             "pdf_path": pdf_path,
-            "raw_text": result.claim.raw_text
+            "raw_text": result.claim.raw_text,
+            "uploaded_by": getattr(self, '_uploaded_by', None),
+            "uploaded_by_username": getattr(self, '_uploaded_by_username', None),
         }
         
         save_claim(claim_data)
@@ -414,7 +421,9 @@ class WarrantyAnalysisPipeline:
 
 def analyze_warranty_claim(
     pdf_path: str,
-    dealer_id: Optional[str] = None
+    dealer_id: Optional[str] = None,
+    uploaded_by: Optional[str] = None,
+    uploaded_by_username: Optional[str] = None,
 ) -> ClaimAnalysisResult:
     """
     Convenience function to analyze a warranty claim.
@@ -422,9 +431,11 @@ def analyze_warranty_claim(
     Args:
         pdf_path: Path to the warranty claim PDF
         dealer_id: Optional dealer ID
+        uploaded_by: Optional user ID who uploaded the claim
+        uploaded_by_username: Optional username who uploaded the claim
         
     Returns:
         ClaimAnalysisResult with complete analysis
     """
     pipeline = WarrantyAnalysisPipeline()
-    return pipeline.analyze(pdf_path, dealer_id)
+    return pipeline.analyze(pdf_path, dealer_id, uploaded_by, uploaded_by_username)

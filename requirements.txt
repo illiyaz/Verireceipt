@@ -1,2 +1,6 @@
 pillow-heif>=0.13.0  # For HEIF/HEIC image support (iPhone photos)
 easyocr>=1.7.0  # Better OCR accuracy (~85-90% vs Tesseract's 60-70%)
+python-jose[cryptography]>=3.3.0  # JWT token handling
+passlib[bcrypt]>=1.7.4  # Password hashing
+bcrypt>=4.0.0  # Bcrypt backend for passlib
+psycopg2-binary>=2.9.0  # PostgreSQL driver

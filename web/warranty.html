@@ -126,6 +126,149 @@
             const [rcFilterModel, setRcFilterModel] = useState('');
             const [rcFilterIssue, setRcFilterIssue] = useState('');
             const fileInputRef = useRef(null);
+            const bulkInputRef = useRef(null);
+
+            // ==================== Auth State ====================
+            const [authToken, setAuthToken] = useState(localStorage.getItem('vr_token') || null);
+            const [authUser, setAuthUser] = useState(() => {
+                try { return JSON.parse(localStorage.getItem('vr_user')); } catch { return null; }
+            });
+            const [showLogin, setShowLogin] = useState(false);
+            const [loginForm, setLoginForm] = useState({ username: '', password: '' });
+            const [registerForm, setRegisterForm] = useState({ username: '', email: '', password: '', full_name: '', phone: '' });
+            const [authMode, setAuthMode] = useState('login'); // login | register
+            const [authError, setAuthError] = useState(null);
+            const [authLoading, setAuthLoading] = useState(false);
+            // Admin state
+            const [adminUsers, setAdminUsers] = useState(null);
+            const [adminRoles, setAdminRoles] = useState(null);
+            const [adminLogs, setAdminLogs] = useState(null);
+            const [adminLoading, setAdminLoading] = useState(false);
+            const [adminSubTab, setAdminSubTab] = useState('users');
+            const [editUserModal, setEditUserModal] = useState(null);
+            const [newUserModal, setNewUserModal] = useState(false);
+            const [newRoleModal, setNewRoleModal] = useState(false);
+            // Bulk upload state
+            const [bulkFiles, setBulkFiles] = useState([]);
+            const [bulkUploading, setBulkUploading] = useState(false);
+            const [bulkResults, setBulkResults] = useState(null);
+            const [bulkUploadMode, setBulkUploadMode] = useState('files'); // 'files' | 'folder'
+
+            const authHeaders = () => authToken ? { 'Authorization': `Bearer ${authToken}` } : {};
+
+            // Extract human-readable error from FastAPI responses (detail can be string or array of validation objects)
+            const extractError = (data) => {
+                if (!data) return 'Unknown error';
+                const d = data.detail;
+                if (!d) return data.message || JSON.stringify(data);
+                if (typeof d === 'string') return d;
+                if (Array.isArray(d)) return d.map(e => e.msg || JSON.stringify(e)).join('; ');
+                return JSON.stringify(d);
+            };
+
+            const doLogin = async () => {
+                setAuthLoading(true); setAuthError(null);
+                try {
+                    const resp = await fetch(`${API_BASE_URL}/auth/login`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(loginForm),
+                    });
+                    const data = await resp.json();
+                    if (!resp.ok) throw new Error(extractError(data));
+                    localStorage.setItem('vr_token', data.access_token);
+                    localStorage.setItem('vr_user', JSON.stringify(data.user));
+                    setAuthToken(data.access_token); setAuthUser(data.user);
+                    setShowLogin(false); setLoginForm({ username: '', password: '' });
+                } catch (e) { setAuthError(e.message); }
+                setAuthLoading(false);
+            };
+
+            const doRegister = async () => {
+                setAuthLoading(true); setAuthError(null);
+                try {
+                    const resp = await fetch(`${API_BASE_URL}/auth/register`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(registerForm),
+                    });
+                    const data = await resp.json();
+                    if (!resp.ok) throw new Error(extractError(data));
+                    setAuthMode('login'); setAuthError(null);
+                    setLoginForm({ username: registerForm.username, password: registerForm.password });
+                    alert('Registration successful! Please log in.');
+                } catch (e) { setAuthError(e.message); }
+                setAuthLoading(false);
+            };
+
+            const doLogout = () => {
+                localStorage.removeItem('vr_token'); localStorage.removeItem('vr_user');
+                setAuthToken(null); setAuthUser(null);
+                if (activeTab === 'admin') setActiveTab('analyze');
+            };
+
+            const isAdmin = authUser?.permissions?.includes('admin:full');
+
+            const loadAdminData = async () => {
+                setAdminLoading(true);
+                try {
+                    const h = authHeaders();
+                    const [u, r, l] = await Promise.all([
+                        fetch(`${API_BASE_URL}/admin/users`, { headers: h }).then(r => r.ok ? r.json() : null),
+                        fetch(`${API_BASE_URL}/admin/roles`, { headers: h }).then(r => r.ok ? r.json() : null),
+                        fetch(`${API_BASE_URL}/admin/audit-logs?limit=50`, { headers: h }).then(r => r.ok ? r.json() : null),
+                    ]);
+                    setAdminUsers(u); setAdminRoles(r); setAdminLogs(l);
+                } catch (e) { console.error('Admin load failed:', e); }
+                setAdminLoading(false);
+            };
+
+            const adminCreateUser = async (form) => {
+                try {
+                    const resp = await fetch(`${API_BASE_URL}/admin/users?role_id=${form.role_id || 'role_analyst'}`, {
+                        method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                        body: JSON.stringify(form),
+                    });
+                    if (!resp.ok) { const d = await resp.json(); throw new Error(extractError(d)); }
+                    setNewUserModal(false); loadAdminData();
+                } catch (e) { alert(e.message); }
+            };
+
+            const adminUpdateUser = async (userId, updates) => {
+                try {
+                    const resp = await fetch(`${API_BASE_URL}/admin/users/${userId}`, {
+                        method: 'PUT', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                        body: JSON.stringify(updates),
+                    });
+                    if (!resp.ok) { const d = await resp.json(); throw new Error(extractError(d)); }
+                    setEditUserModal(null); loadAdminData();
+                } catch (e) { alert(e.message); }
+            };
+
+            const adminDeleteUser = async (userId, username) => {
+                if (!confirm(`Delete user "${username}"?`)) return;
+                try {
+                    const resp = await fetch(`${API_BASE_URL}/admin/users/${userId}`, {
+                        method: 'DELETE', headers: authHeaders(),
+                    });
+                    if (!resp.ok) { const d = await resp.json(); throw new Error(extractError(d)); }
+                    loadAdminData();
+                } catch (e) { alert(e.message); }
+            };
+
+            const doBulkUpload = async () => {
+                if (!bulkFiles.length) return;
+                setBulkUploading(true); setBulkResults(null);
+                const formData = new FormData();
+                bulkFiles.forEach(f => formData.append('files', f));
+                try {
+                    const resp = await fetch(`${API_BASE_URL}/warranty/analyze/bulk`, {
+                        method: 'POST', headers: authHeaders(), body: formData,
+                    });
+                    const data = await resp.json();
+                    if (!resp.ok) throw new Error(extractError(data));
+                    setBulkResults(data); setBulkFiles([]);
+                } catch (e) { alert(e.message); }
+                setBulkUploading(false);
+            };
 
             const loadDuplicateAudit = async (claimId) => {
                 try {
@@ -231,7 +374,7 @@
                 if (dashOverview) loadRootCauses(rcFilterBrand, rcFilterModel, rcFilterIssue);
             }, [rcFilterBrand, rcFilterModel, rcFilterIssue]);
 
-            const openDrilldown = async (type, value, title) => {
+            const openDrilldown = async (type, value, title, extraFilters) => {
                 setDrilldown({ type, value, title });
                 setDrillLoading(true);
                 setDrillClaims(null);
@@ -243,6 +386,11 @@
                     if (type === 'triage') params.set('triage', value);
                     if (type === 'suspicious') params.set('suspicious_only', 'true');
                     if (type === 'duplicates') params.set('duplicates_only', 'true');
+                    // Apply extra filters (e.g. brand/model from root cause chart)
+                    if (extraFilters) {
+                        if (extraFilters.brand) params.set('brand', extraFilters.brand);
+                        if (extraFilters.model) params.set('model', extraFilters.model);
+                    }
                     const resp = await fetch(`${API_BASE_URL}/warranty/dashboard/claims?${params}`);
                     setDrillClaims(await resp.json());
                 } catch (e) { console.error(e); }
@@ -252,6 +400,7 @@
             const switchTab = (tab) => {
                 setActiveTab(tab);
                 if (tab === 'dashboard') loadDashboard();
+                if (tab === 'admin') loadAdminData();
             };
 
             // Auto-scroll to drilldown panel when it opens
@@ -386,6 +535,134 @@
                 }
             };
 
+            // ==================== LOGIN GATE (Homepage) ====================
+            if (!authUser) {
+                return (
+                    <div className="min-h-screen flex flex-col">
+                        {/* Hero header */}
+                        <div className="gradient-bg text-white py-4 px-6 flex items-center justify-between">
+                            <div className="flex items-center space-x-3">
+                                <i className="fas fa-shield-alt text-2xl"></i>
+                                <span className="text-xl font-bold">VeriReceipt</span>
+                            </div>
+                            <span className="text-purple-200 text-sm hidden sm:inline">Warranty Claims &middot; AI Fraud Detection</span>
+                        </div>
+
+                        <div className="flex-1 flex items-center justify-center bg-gradient-to-br from-slate-50 to-indigo-50 px-4">
+                            <div className="w-full max-w-5xl grid grid-cols-1 md:grid-cols-2 gap-0 bg-white rounded-3xl card-shadow overflow-hidden">
+                                {/* Left side — branding */}
+                                <div className="gradient-bg p-10 flex flex-col justify-center text-white hidden md:flex">
+                                    <div className="mb-8">
+                                        <i className="fas fa-shield-alt text-6xl mb-4 block opacity-90"></i>
+                                        <h1 className="text-4xl font-bold mb-3">VeriReceipt</h1>
+                                        <p className="text-purple-200 text-lg leading-relaxed">AI-powered warranty claim analysis and fraud detection platform.</p>
+                                    </div>
+                                    <div className="space-y-4 text-purple-100 text-sm">
+                                        <div className="flex items-start space-x-3">
+                                            <i className="fas fa-brain text-lg mt-0.5 text-purple-300"></i>
+                                            <div><span className="font-semibold text-white">ML Fraud Detection</span><br/>Advanced risk scoring with explainable AI signals</div>
+                                        </div>
+                                        <div className="flex items-start space-x-3">
+                                            <i className="fas fa-file-upload text-lg mt-0.5 text-purple-300"></i>
+                                            <div><span className="font-semibold text-white">Bulk Processing</span><br/>Upload and analyze multiple claims simultaneously</div>
+                                        </div>
+                                        <div className="flex items-start space-x-3">
+                                            <i className="fas fa-chart-line text-lg mt-0.5 text-purple-300"></i>
+                                            <div><span className="font-semibold text-white">Real-time Dashboard</span><br/>Root-cause analytics with interactive drill-downs</div>
+                                        </div>
+                                        <div className="flex items-start space-x-3">
+                                            <i className="fas fa-user-shield text-lg mt-0.5 text-purple-300"></i>
+                                            <div><span className="font-semibold text-white">Role-based Access</span><br/>Secure RBAC with full audit trail</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Right side — login / register form */}
+                                <div className="p-8 sm:p-10 flex flex-col justify-center">
+                                    <div className="text-center mb-6 md:hidden">
+                                        <i className="fas fa-shield-alt text-4xl text-indigo-600 mb-2"></i>
+                                    </div>
+                                    <h2 className="text-2xl font-bold text-gray-800 mb-1">{authMode === 'login' ? 'Welcome back' : 'Create an account'}</h2>
+                                    <p className="text-sm text-gray-500 mb-6">{authMode === 'login' ? 'Sign in to access the warranty claims platform' : 'Register to get started with VeriReceipt'}</p>
+
+                                    {authError && <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm"><i className="fas fa-exclamation-circle mr-2"></i>{authError}</div>}
+
+                                    {authMode === 'login' ? (
+                                        <div className="space-y-4">
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                                                <input type="text" placeholder="Enter your username" value={loginForm.username}
+                                                    onChange={e => setLoginForm({...loginForm, username: e.target.value})}
+                                                    onKeyDown={e => e.key === 'Enter' && doLogin()}
+                                                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                                                <input type="password" placeholder="Enter your password" value={loginForm.password}
+                                                    onChange={e => setLoginForm({...loginForm, password: e.target.value})}
+                                                    onKeyDown={e => e.key === 'Enter' && doLogin()}
+                                                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition" />
+                                            </div>
+                                            <button onClick={doLogin} disabled={authLoading}
+                                                className="w-full py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition shadow-md hover:shadow-lg disabled:opacity-50">
+                                                {authLoading ? <span><i className="fas fa-spinner fa-spin mr-2"></i>Signing in...</span> : <span><i className="fas fa-sign-in-alt mr-2"></i>Sign In</span>}
+                                            </button>
+                                            <p className="text-center text-sm text-gray-500 pt-2">
+                                                Don't have an account?{' '}
+                                                <button onClick={() => { setAuthMode('register'); setAuthError(null); }} className="text-indigo-600 font-medium hover:underline">Register</button>
+                                            </p>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-1">Username <span className="text-red-400">*</span></label>
+                                                    <input type="text" placeholder="Choose a username" value={registerForm.username}
+                                                        onChange={e => setRegisterForm({...registerForm, username: e.target.value})}
+                                                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+                                                    <input type="text" placeholder="Your full name" value={registerForm.full_name}
+                                                        onChange={e => setRegisterForm({...registerForm, full_name: e.target.value})}
+                                                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition" />
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Email <span className="text-red-400">*</span></label>
+                                                <input type="email" placeholder="you@company.com" value={registerForm.email}
+                                                    onChange={e => setRegisterForm({...registerForm, email: e.target.value})}
+                                                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Password <span className="text-red-400">*</span> <span className="text-xs text-gray-400">(min 6 characters)</span></label>
+                                                <input type="password" placeholder="Create a password" value={registerForm.password}
+                                                    onChange={e => setRegisterForm({...registerForm, password: e.target.value})}
+                                                    onKeyDown={e => e.key === 'Enter' && doRegister()}
+                                                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition" />
+                                            </div>
+                                            <button onClick={doRegister} disabled={authLoading}
+                                                className="w-full py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition shadow-md hover:shadow-lg disabled:opacity-50">
+                                                {authLoading ? <span><i className="fas fa-spinner fa-spin mr-2"></i>Creating account...</span> : <span><i className="fas fa-user-plus mr-2"></i>Create Account</span>}
+                                            </button>
+                                            <p className="text-center text-sm text-gray-500 pt-2">
+                                                Already have an account?{' '}
+                                                <button onClick={() => { setAuthMode('login'); setAuthError(null); }} className="text-indigo-600 font-medium hover:underline">Sign In</button>
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        <footer className="bg-gray-800 text-gray-400 py-4 text-center text-sm">
+                            <i className="fas fa-shield-alt mr-1"></i> VeriReceipt &mdash; ML-Powered Warranty Fraud Detection
+                        </footer>
+                    </div>
+                );
+            }
+
+            // ==================== AUTHENTICATED APP ====================
             return (
                 <div className="min-h-screen">
                     {/* Header */}
@@ -406,6 +683,15 @@
                                     <a href="/web/stats.html" className="px-3 py-1.5 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg transition text-white text-sm">
                                         <i className="fas fa-chart-bar mr-1"></i>Analytics
                                     </a>
+                                    <div className="flex items-center space-x-2">
+                                        <span className="text-sm text-purple-200">
+                                            <i className="fas fa-user-circle mr-1"></i>{authUser.username}
+                                            <span className="text-xs opacity-70 ml-1">({authUser.role_name || authUser.role_id})</span>
+                                        </span>
+                                        <button onClick={doLogout} className="px-3 py-1.5 bg-red-500 bg-opacity-80 hover:bg-opacity-100 rounded-lg transition text-white text-sm">
+                                            <i className="fas fa-sign-out-alt mr-1"></i>Logout
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                             {/* Tabs */}
@@ -418,6 +704,16 @@
                                     className={`px-5 py-2.5 text-sm transition rounded-t-lg ${activeTab === 'dashboard' ? 'bg-white text-indigo-700 font-semibold' : 'text-white hover:bg-white hover:bg-opacity-10'}`}>
                                     <i className="fas fa-tachometer-alt mr-2"></i>Dashboard
                                 </button>
+                                <button onClick={() => switchTab('bulk')}
+                                    className={`px-5 py-2.5 text-sm transition rounded-t-lg ${activeTab === 'bulk' ? 'bg-white text-indigo-700 font-semibold' : 'text-white hover:bg-white hover:bg-opacity-10'}`}>
+                                    <i className="fas fa-file-upload mr-2"></i>Bulk Upload
+                                </button>
+                                {isAdmin && (
+                                    <button onClick={() => switchTab('admin')}
+                                        className={`px-5 py-2.5 text-sm transition rounded-t-lg ${activeTab === 'admin' ? 'bg-white text-indigo-700 font-semibold' : 'text-white hover:bg-white hover:bg-opacity-10'}`}>
+                                        <i className="fas fa-cog mr-2"></i>Admin
+                                    </button>
+                                )}
                             </div>
                         </div>
                     </header>
@@ -962,7 +1258,7 @@
                                                     ]
                                                 },
                                                 options:{responsive:true, indexAxis:'y',
-                                                    onClick:(e,els)=>{ if(els.length) openDrilldown('issue', dashRootCauses.root_causes[els[0].index].issue_description, 'Issue: '+dashRootCauses.root_causes[els[0].index].issue_description); },
+                                                    onClick:(e,els)=>{ if(els.length) openDrilldown('issue', dashRootCauses.root_causes[els[0].index].issue_description, 'Issue: '+dashRootCauses.root_causes[els[0].index].issue_description, {brand: rcFilterBrand, model: rcFilterModel}); },
                                                     plugins:{legend:{position:'top'}, title:{display:true, text:'Claims by Root Cause' + (rcFilterBrand ? ` — ${rcFilterBrand}` : '') + (rcFilterModel ? ` / ${rcFilterModel}` : '') + (rcFilterIssue ? ` / ${rcFilterIssue}` : '') + ' (click to drill down)'}},
                                                     scales:{x:{beginAtZero:true}}}
                                             }} height={Math.max(200, (dashRootCauses.root_causes.length||5)*28)} />
@@ -1269,6 +1565,252 @@
                         </div>
                     )}
 
+                    {/* ===================== BULK UPLOAD TAB ===================== */}
+                    {activeTab === 'bulk' && authUser && (
+                    <main className="max-w-4xl mx-auto py-8 px-4">
+                        <div className="bg-white rounded-2xl card-shadow p-6">
+                            <h2 className="text-xl font-bold text-gray-800 mb-4">
+                                <i className="fas fa-file-upload mr-2 text-blue-600"></i>
+                                Bulk Upload Warranty Claims
+                            </h2>
+                            <p className="text-sm text-gray-500 mb-4">Upload multiple warranty claim PDFs or an entire folder (max 50 files per batch).</p>
+
+                            {/* Upload mode toggle */}
+                            <div className="flex items-center space-x-3 mb-4">
+                                <span className="text-sm font-medium text-gray-600">Mode:</span>
+                                <button onClick={() => { setBulkFiles([]); setBulkUploadMode('files'); }}
+                                    className={`px-3 py-1.5 rounded-lg text-sm transition ${bulkUploadMode === 'files' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                                    <i className="fas fa-file-pdf mr-1"></i>Select Files
+                                </button>
+                                <button onClick={() => { setBulkFiles([]); setBulkUploadMode('folder'); }}
+                                    className={`px-3 py-1.5 rounded-lg text-sm transition ${bulkUploadMode === 'folder' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                                    <i className="fas fa-folder-open mr-1"></i>Select Folder
+                                </button>
+                            </div>
+
+                            <div className="dropzone rounded-xl p-8 text-center cursor-pointer mb-4"
+                                onClick={() => bulkInputRef.current?.click()}
+                                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                onDrop={async (e) => {
+                                    e.preventDefault(); e.stopPropagation();
+                                    const items = e.dataTransfer.items;
+                                    const allFiles = [];
+                                    // Recursively read folder entries via webkitGetAsEntry
+                                    const readEntry = (entry) => new Promise((resolve) => {
+                                        if (entry.isFile) {
+                                            entry.file(f => { if (f.name.toLowerCase().endsWith('.pdf')) allFiles.push(f); resolve(); });
+                                        } else if (entry.isDirectory) {
+                                            const reader = entry.createReader();
+                                            reader.readEntries(async entries => {
+                                                for (const sub of entries) await readEntry(sub);
+                                                resolve();
+                                            });
+                                        } else { resolve(); }
+                                    });
+                                    if (items) {
+                                        const entries = [];
+                                        for (let i = 0; i < items.length; i++) {
+                                            const entry = items[i].webkitGetAsEntry && items[i].webkitGetAsEntry();
+                                            if (entry) entries.push(entry);
+                                        }
+                                        for (const entry of entries) await readEntry(entry);
+                                    }
+                                    if (allFiles.length === 0) {
+                                        // Fallback: plain files from dataTransfer.files
+                                        const plain = Array.from(e.dataTransfer.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+                                        setBulkFiles(plain);
+                                    } else {
+                                        setBulkFiles(allFiles);
+                                    }
+                                }}>
+                                {bulkUploadMode === 'folder' ? (
+                                    <input type="file" ref={bulkInputRef} className="hidden" accept=".pdf" multiple webkitdirectory=""
+                                        onChange={(e) => {
+                                            const pdfs = Array.from(e.target.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+                                            setBulkFiles(pdfs);
+                                        }} />
+                                ) : (
+                                    <input type="file" ref={bulkInputRef} className="hidden" accept=".pdf" multiple
+                                        onChange={(e) => setBulkFiles(Array.from(e.target.files))} />
+                                )}
+                                {bulkFiles.length > 0 ? (
+                                    <div>
+                                        <i className="fas fa-file-pdf text-4xl text-red-500 mb-2"></i>
+                                        <p className="font-medium text-gray-700">{bulkFiles.length} PDF file(s) selected</p>
+                                        <p className="text-xs text-gray-500 mt-1 max-h-20 overflow-auto">{bulkFiles.map(f => f.name).join(', ')}</p>
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <i className={`fas ${bulkUploadMode === 'folder' ? 'fa-folder-open' : 'fa-cloud-upload-alt'} text-4xl text-gray-400 mb-2`}></i>
+                                        <p className="text-gray-600">
+                                            {bulkUploadMode === 'folder'
+                                                ? 'Drag & drop a folder here or click to select a folder'
+                                                : 'Drag & drop PDFs (or a folder) here, or click to browse'}
+                                        </p>
+                                        <p className="text-xs text-gray-400 mt-1">Only .pdf files will be processed</p>
+                                    </div>
+                                )}
+                            </div>
+
+                            <button onClick={doBulkUpload} disabled={!bulkFiles.length || bulkUploading}
+                                className={`w-full py-3 rounded-xl text-white font-semibold transition ${!bulkFiles.length || bulkUploading ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                                {bulkUploading ? <span><i className="fas fa-spinner fa-spin mr-2"></i>Processing {bulkFiles.length} files...</span> : <span><i className="fas fa-rocket mr-2"></i>Analyze All ({bulkFiles.length})</span>}
+                            </button>
+
+                            {bulkResults && (
+                                <div className="mt-6">
+                                    <div className="flex items-center space-x-4 mb-4">
+                                        <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium"><i className="fas fa-check mr-1"></i>{bulkResults.success} succeeded</span>
+                                        {bulkResults.failed > 0 && <span className="px-3 py-1 bg-red-100 text-red-700 rounded-full text-sm font-medium"><i className="fas fa-times mr-1"></i>{bulkResults.failed} failed</span>}
+                                        {bulkResults.results?.some(r => r.duplicates_found > 0) && (
+                                            <span className="px-3 py-1 bg-yellow-100 text-yellow-700 rounded-full text-sm font-medium">
+                                                <i className="fas fa-clone mr-1"></i>
+                                                {bulkResults.results.filter(r => r.duplicates_found > 0).length} with duplicates
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="overflow-x-auto">
+                                    <table className="w-full text-sm">
+                                        <thead><tr className="border-b text-left text-gray-500"><th className="py-2">File</th><th>Status</th><th>Claim ID</th><th>Risk</th><th>Triage</th><th>Duplicates</th></tr></thead>
+                                        <tbody>
+                                            {bulkResults.results?.map((r, i) => (
+                                                <tr key={i} className={`border-b hover:bg-gray-50 ${r.duplicates_found > 0 ? 'bg-yellow-50' : ''}`}>
+                                                    <td className="py-2 font-mono text-xs">{r.filename}</td>
+                                                    <td>{r.status === 'success' ? <span className="text-green-600"><i className="fas fa-check-circle"></i></span> : <span className="text-red-600" title={r.detail}><i className="fas fa-times-circle"></i></span>}</td>
+                                                    <td>{r.claim_id ? <ClaimLink claimId={r.claim_id} short={true} /> : '-'}</td>
+                                                    <td>{r.risk_score != null ? `${(r.risk_score*100).toFixed(0)}%` : '-'}</td>
+                                                    <td>{r.triage_class ? <span className={`text-xs px-2 py-0.5 rounded-full text-white ${getTriageBadgeClass(r.triage_class)}`}>{r.triage_class}</span> : '-'}</td>
+                                                    <td>{r.duplicates_found > 0 ? (
+                                                        <span className="inline-flex items-center px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">
+                                                            <i className="fas fa-exclamation-triangle mr-1"></i>{r.duplicates_found} duplicate(s)
+                                                        </span>
+                                                    ) : <span className="text-gray-400 text-xs">None</span>}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </main>
+                    )}
+
+                    {/* ===================== ADMIN TAB ===================== */}
+                    {activeTab === 'admin' && isAdmin && (
+                    <main className="max-w-7xl mx-auto py-8 px-4">
+                        <div className="bg-white rounded-2xl card-shadow p-6">
+                            <h2 className="text-xl font-bold text-gray-800 mb-4">
+                                <i className="fas fa-cog mr-2 text-blue-600"></i>Admin Panel
+                            </h2>
+
+                            {/* Admin Sub-tabs */}
+                            <div className="flex space-x-1 mb-6 border-b">
+                                {['users','roles','audit'].map(t => (
+                                    <button key={t} onClick={() => setAdminSubTab(t)}
+                                        className={`px-4 py-2 text-sm capitalize transition ${adminSubTab === t ? 'tab-active' : 'tab-inactive'}`}>
+                                        <i className={`fas ${t==='users'?'fa-users':t==='roles'?'fa-user-tag':'fa-history'} mr-1`}></i>{t}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {adminLoading && <div className="text-center py-8"><div className="spinner mx-auto"></div></div>}
+
+                            {/* ---- Users ---- */}
+                            {adminSubTab === 'users' && !adminLoading && (
+                                <div>
+                                    <div className="flex justify-between items-center mb-4">
+                                        <span className="text-sm text-gray-500">{adminUsers?.total || 0} users</span>
+                                        <button onClick={() => setNewUserModal(true)} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
+                                            <i className="fas fa-plus mr-1"></i>Add User
+                                        </button>
+                                    </div>
+                                    <table className="w-full text-sm">
+                                        <thead><tr className="border-b text-left text-gray-500"><th className="py-2">Username</th><th>Email</th><th>Name</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
+                                        <tbody>
+                                            {adminUsers?.users?.map(u => (
+                                                <tr key={u.id} className="border-b hover:bg-gray-50">
+                                                    <td className="py-2 font-medium">{u.username}</td>
+                                                    <td className="text-gray-600">{u.email}</td>
+                                                    <td>{u.full_name || '-'}</td>
+                                                    <td><span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs">{u.role_name || u.role_id}</span></td>
+                                                    <td>{u.is_active ? <span className="text-green-600"><i className="fas fa-check-circle"></i></span> : <span className="text-red-600"><i className="fas fa-times-circle"></i></span>}</td>
+                                                    <td className="text-xs text-gray-500">{u.last_login ? new Date(u.last_login).toLocaleString() : 'Never'}</td>
+                                                    <td className="space-x-2">
+                                                        <button onClick={() => setEditUserModal(u)} className="text-blue-600 hover:text-blue-800 text-xs"><i className="fas fa-edit"></i></button>
+                                                        <button onClick={() => adminDeleteUser(u.id, u.username)} className="text-red-600 hover:text-red-800 text-xs"><i className="fas fa-trash"></i></button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+
+                            {/* ---- Roles ---- */}
+                            {adminSubTab === 'roles' && !adminLoading && (
+                                <div>
+                                    <table className="w-full text-sm">
+                                        <thead><tr className="border-b text-left text-gray-500"><th className="py-2">Role</th><th>Description</th><th>Permissions</th><th>Type</th></tr></thead>
+                                        <tbody>
+                                            {adminRoles?.roles?.map(r => (
+                                                <tr key={r.id} className="border-b hover:bg-gray-50">
+                                                    <td className="py-2 font-medium">{r.name}</td>
+                                                    <td className="text-gray-600">{r.description}</td>
+                                                    <td><div className="flex flex-wrap gap-1">{r.permissions?.map((p,i) => <span key={i} className="px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{p}</span>)}</div></td>
+                                                    <td>{r.is_system ? <span className="text-xs text-gray-400">System</span> : <span className="text-xs text-blue-600">Custom</span>}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+
+                            {/* ---- Audit Logs ---- */}
+                            {adminSubTab === 'audit' && !adminLoading && (
+                                <div>
+                                    <p className="text-sm text-gray-500 mb-3">{adminLogs?.total || 0} total events (showing latest 50)</p>
+                                    <table className="w-full text-sm">
+                                        <thead><tr className="border-b text-left text-gray-500"><th className="py-2">Time</th><th>User</th><th>Action</th><th>Resource</th><th>Details</th><th>IP</th></tr></thead>
+                                        <tbody>
+                                            {adminLogs?.logs?.map(l => (
+                                                <tr key={l.id} className="border-b hover:bg-gray-50">
+                                                    <td className="py-2 text-xs text-gray-500 whitespace-nowrap">{new Date(l.created_at).toLocaleString()}</td>
+                                                    <td className="font-medium">{l.username}</td>
+                                                    <td><span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">{l.action}</span></td>
+                                                    <td className="text-xs text-gray-500">{l.resource_type ? `${l.resource_type}/${l.resource_id||''}` : '-'}</td>
+                                                    <td className="text-xs text-gray-500 max-w-xs truncate">{l.details || '-'}</td>
+                                                    <td className="text-xs text-gray-400">{l.ip_address || '-'}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </main>
+                    )}
+
+                    {/* ===================== NEW USER MODAL ===================== */}
+                    {newUserModal && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setNewUserModal(false)}>
+                            <div className="bg-white rounded-2xl p-6 w-full max-w-md card-shadow" onClick={e => e.stopPropagation()}>
+                                <h3 className="text-lg font-bold mb-4"><i className="fas fa-user-plus mr-2"></i>Create User</h3>
+                                <NewUserForm roles={adminRoles?.roles || []} onSubmit={adminCreateUser} onCancel={() => setNewUserModal(false)} />
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ===================== EDIT USER MODAL ===================== */}
+                    {editUserModal && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setEditUserModal(null)}>
+                            <div className="bg-white rounded-2xl p-6 w-full max-w-md card-shadow" onClick={e => e.stopPropagation()}>
+                                <h3 className="text-lg font-bold mb-4"><i className="fas fa-edit mr-2"></i>Edit User: {editUserModal.username}</h3>
+                                <EditUserForm user={editUserModal} roles={adminRoles?.roles || []} onSubmit={(updates) => adminUpdateUser(editUserModal.id, updates)} onCancel={() => setEditUserModal(null)} />
+                            </div>
+                        </div>
+                    )}
+
                     {/* Footer */}
                     <footer className="bg-gray-800 text-white py-6 mt-8">
                         <div className="max-w-7xl mx-auto px-4 text-center">
@@ -1293,6 +1835,61 @@
                 return () => { if (chartRef.current) chartRef.current.destroy(); };
             }, [config]);
             return <canvas ref={ref} id={id} height={height}></canvas>;
+        }
+
+        /* NewUserForm — admin create user form */
+        function NewUserForm({ roles, onSubmit, onCancel }) {
+            const [f, setF] = React.useState({ username: '', email: '', password: '', full_name: '', phone: '', role_id: 'role_analyst' });
+            return (
+                <div className="space-y-3">
+                    <input type="text" placeholder="Username *" value={f.username} onChange={e => setF({...f, username: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" />
+                    <input type="email" placeholder="Email *" value={f.email} onChange={e => setF({...f, email: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" />
+                    <input type="text" placeholder="Full Name" value={f.full_name} onChange={e => setF({...f, full_name: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" />
+                    <input type="text" placeholder="Phone" value={f.phone} onChange={e => setF({...f, phone: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" />
+                    <input type="password" placeholder="Password *" value={f.password} onChange={e => setF({...f, password: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" />
+                    <select value={f.role_id} onChange={e => setF({...f, role_id: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500">
+                        {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                    </select>
+                    <div className="flex space-x-3 pt-2">
+                        <button onClick={() => onSubmit(f)} className="flex-1 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Create</button>
+                        <button onClick={onCancel} className="flex-1 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-300">Cancel</button>
+                    </div>
+                </div>
+            );
+        }
+
+        /* EditUserForm — admin edit user form */
+        function EditUserForm({ user, roles, onSubmit, onCancel }) {
+            const [f, setF] = React.useState({ email: user.email || '', full_name: user.full_name || '', phone: user.phone || '', role_id: user.role_id || 'role_analyst', is_active: user.is_active });
+            return (
+                <div className="space-y-3">
+                    <div className="text-sm text-gray-500">Username: <span className="font-medium text-gray-800">{user.username}</span></div>
+                    <input type="email" placeholder="Email" value={f.email} onChange={e => setF({...f, email: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" />
+                    <input type="text" placeholder="Full Name" value={f.full_name} onChange={e => setF({...f, full_name: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" />
+                    <input type="text" placeholder="Phone" value={f.phone} onChange={e => setF({...f, phone: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" />
+                    <select value={f.role_id} onChange={e => setF({...f, role_id: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500">
+                        {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                    </select>
+                    <label className="flex items-center space-x-2 text-sm">
+                        <input type="checkbox" checked={f.is_active} onChange={e => setF({...f, is_active: e.target.checked})} className="rounded" />
+                        <span>Active</span>
+                    </label>
+                    <div className="flex space-x-3 pt-2">
+                        <button onClick={() => onSubmit(f)} className="flex-1 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Save</button>
+                        <button onClick={onCancel} className="flex-1 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-300">Cancel</button>
+                    </div>
+                </div>
+            );
         }
 
         ReactDOM.render(<App />, document.getElementById('root'));

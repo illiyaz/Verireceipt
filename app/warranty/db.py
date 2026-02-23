@@ -113,6 +113,8 @@ def save_claim(claim_data: Dict[str, Any]) -> str:
             1 if claim_data.get("is_suspicious") else 0,
             claim_data.get("pdf_path"),
             claim_data.get("raw_text"),
+            claim_data.get("uploaded_by"),
+            claim_data.get("uploaded_by_username"),
             now,
             now
         )
@@ -123,12 +125,12 @@ def save_claim(claim_data: Dict[str, Any]) -> str:
          parts_cost, labor_cost, tax, total_amount,
          status, rejection_reason,
          risk_score, triage_class, fraud_signals, warnings, is_suspicious,
-         pdf_path, raw_text, created_at, updated_at)"""
+         pdf_path, raw_text, uploaded_by, uploaded_by_username, created_at, updated_at)"""
 
         if USE_POSTGRES:
             cursor.execute(f"""
                 INSERT INTO warranty_claims {_columns}
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (id) DO UPDATE SET
                     customer_name=EXCLUDED.customer_name, dealer_id=EXCLUDED.dealer_id,
                     dealer_name=EXCLUDED.dealer_name, vin=EXCLUDED.vin, brand=EXCLUDED.brand,
@@ -140,12 +142,13 @@ def save_claim(claim_data: Dict[str, Any]) -> str:
                     risk_score=EXCLUDED.risk_score, triage_class=EXCLUDED.triage_class,
                     fraud_signals=EXCLUDED.fraud_signals, warnings=EXCLUDED.warnings,
                     is_suspicious=EXCLUDED.is_suspicious, pdf_path=EXCLUDED.pdf_path,
-                    raw_text=EXCLUDED.raw_text, updated_at=EXCLUDED.updated_at
+                    raw_text=EXCLUDED.raw_text, uploaded_by=EXCLUDED.uploaded_by,
+                    uploaded_by_username=EXCLUDED.uploaded_by_username, updated_at=EXCLUDED.updated_at
             """, params)
         else:
             cursor.execute(f"""
                 INSERT OR REPLACE INTO warranty_claims {_columns}
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, params)
 
         conn.commit()

@@ -12,11 +12,15 @@ import os
 import tempfile
 import shutil
 import traceback
+import asyncio
 from pathlib import Path
-from typing import Optional
-from fastapi import APIRouter, File, UploadFile, Form, HTTPException
+from typing import Optional, List
+from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Depends, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+from ..auth.dependencies import get_optional_user, get_current_user
+from ..auth import db as auth_db
 
 # Persistent storage for uploaded warranty PDFs
 WARRANTY_PDF_DIR = Path(os.getenv("WARRANTY_PDF_DIR", "data/warranty_pdfs"))
@@ -67,7 +71,9 @@ class AnalyzeResponse(BaseModel):
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_warranty(
     file: UploadFile = File(...),
-    dealer_id: Optional[str] = Form(None)
+    dealer_id: Optional[str] = Form(None),
+    request: Request = None,
+    current_user: Optional[dict] = Depends(get_optional_user),
 ):
     """
     Analyze a warranty claim PDF for fraud detection.
@@ -100,8 +106,13 @@ async def analyze_warranty(
         if effective_dealer_id == "":
             effective_dealer_id = None
         
-        # Run analysis pipeline
-        result = analyze_warranty_claim(temp_path, dealer_id=effective_dealer_id)
+        # Run analysis pipeline with user tracking
+        uploaded_by = current_user["id"] if current_user else None
+        uploaded_by_username = current_user["username"] if current_user else None
+        result = analyze_warranty_claim(
+            temp_path, dealer_id=effective_dealer_id,
+            uploaded_by=uploaded_by, uploaded_by_username=uploaded_by_username,
+        )
         
         # Persist the PDF so auditors can view it later
         try:
@@ -147,6 +158,87 @@ async def analyze_warranty(
     finally:
         # Cleanup temp files
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@router.post("/analyze/bulk")
+async def analyze_warranty_bulk(
+    files: List[UploadFile] = File(...),
+    dealer_id: Optional[str] = Form(None),
+    request: Request = None,
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """
+    Bulk upload and analyze multiple warranty claim PDFs.
+    Returns results for each file including successes and failures.
+    """
+    if len(files) > 50:
+        raise HTTPException(status_code=400, detail="Maximum 50 files per batch")
+
+    uploaded_by = current_user["id"] if current_user else None
+    uploaded_by_username = current_user["username"] if current_user else None
+    effective_dealer_id = dealer_id.strip() if dealer_id else None
+    if effective_dealer_id == "":
+        effective_dealer_id = None
+
+    results = []
+    success_count = 0
+    fail_count = 0
+
+    for file in files:
+        if not file.filename.lower().endswith(".pdf"):
+            results.append({"filename": file.filename, "status": "error", "detail": "Not a PDF file"})
+            fail_count += 1
+            continue
+
+        temp_dir = tempfile.mkdtemp()
+        temp_path = os.path.join(temp_dir, file.filename)
+        try:
+            with open(temp_path, "wb") as f:
+                content = await file.read()
+                f.write(content)
+
+            result = analyze_warranty_claim(
+                temp_path, dealer_id=effective_dealer_id,
+                uploaded_by=uploaded_by, uploaded_by_username=uploaded_by_username,
+            )
+
+            # Persist PDF
+            try:
+                persist_path = WARRANTY_PDF_DIR / f"{result.claim_id}.pdf"
+                shutil.copy2(temp_path, str(persist_path))
+            except Exception:
+                pass
+
+            results.append({
+                "filename": file.filename,
+                "status": "success",
+                "claim_id": result.claim_id,
+                "risk_score": result.risk_score,
+                "triage_class": result.triage_class.value,
+                "duplicates_found": len(result.duplicates_found),
+            })
+            success_count += 1
+        except Exception as e:
+            results.append({"filename": file.filename, "status": "error", "detail": str(e)})
+            fail_count += 1
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    # Audit log
+    if current_user:
+        auth_db.log_audit(
+            current_user["id"], current_user["username"], "bulk_upload",
+            resource_type="warranty_claims",
+            details=f"Bulk uploaded {len(files)} files: {success_count} success, {fail_count} failed",
+            ip_address=request.headers.get("x-forwarded-for", request.client.host) if request else None,
+        )
+
+    return {
+        "total": len(files),
+        "success": success_count,
+        "failed": fail_count,
+        "results": results,
+    }
 
 
 @router.get("/claim/{claim_id}")
@@ -474,6 +566,7 @@ async def dashboard_trends():
 async def dashboard_claims_list(
     issue: Optional[str] = None,
     brand: Optional[str] = None,
+    model: Optional[str] = None,
     dealer_id: Optional[str] = None,
     triage: Optional[str] = None,
     suspicious_only: bool = False,
@@ -481,7 +574,7 @@ async def dashboard_claims_list(
     limit: int = 50,
     offset: int = 0,
 ):
-    """Drill-down: list claims filtered by issue, brand, dealer, triage, or duplicates."""
+    """Drill-down: list claims filtered by issue, brand, model, dealer, triage, or duplicates."""
     from ..warranty.db import get_connection, release_connection, _get_cursor, _sql
     
     conn = get_connection()
@@ -497,6 +590,9 @@ async def dashboard_claims_list(
         if brand:
             conditions.append("brand = ?")
             params.append(brand)
+        if model:
+            conditions.append("model = ?")
+            params.append(model)
         if dealer_id:
             conditions.append("dealer_id = ?")
             params.append(dealer_id)
