@@ -274,7 +274,7 @@ async def get_claim_pdf(claim_id: str):
     return FileResponse(
         path=str(pdf_file),
         media_type="application/pdf",
-        filename=f"{claim_id}.pdf",
+        headers={"Content-Disposition": f"inline; filename=\"{claim_id}.pdf\""},
     )
 
 
